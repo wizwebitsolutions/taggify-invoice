@@ -1,0 +1,352 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap">
+  <style>
+    :root{
+      --bg: oklch(15% 0.006 255);
+      --sidebar: oklch(13% 0.006 255);
+      --surface: oklch(19% 0.007 255);
+      --surface-2: oklch(22% 0.008 255);
+      --surface-hover: oklch(25% 0.009 255);
+      --border: oklch(100% 0 0 / 0.08);
+      --border-strong: oklch(100% 0 0 / 0.16);
+      --text: oklch(97% 0.003 255);
+      --text-muted: oklch(72% 0.01 255);
+      --text-faint: oklch(50% 0.01 255);
+      --accent: oklch(78% 0.14 164);
+      --accent-soft: oklch(78% 0.14 164 / 0.14);
+      --accent-2: oklch(78% 0.14 70);
+      --accent-2-soft: oklch(78% 0.14 70 / 0.14);
+      --blue: oklch(75% 0.13 230);
+      --blue-soft: oklch(75% 0.13 230 / 0.14);
+      --rose: oklch(70% 0.16 15);
+      --rose-soft: oklch(70% 0.16 15 / 0.14);
+      --slate: oklch(65% 0.01 255);
+      --slate-soft: oklch(65% 0.01 255 / 0.14);
+      --radius-lg: 20px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+      --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6);
+      --font-ui: 'Manrope', system-ui, -apple-system, sans-serif;
+      --font-display: 'Instrument Serif', Georgia, serif;
+    }
+    *{box-sizing:border-box;}
+    html,body{margin:0;height:100%;}
+    body{background:var(--bg);color:var(--text);font-family:var(--font-ui);}
+    .app{width:1440px;height:1040px;display:flex;overflow:hidden;}
+    .icon{width:18px;height:18px;flex-shrink:0;}
+
+    /* Sidebar */
+    .sidebar{width:260px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:24px 16px;gap:32px;}
+    .wordmark{display:flex;align-items:center;gap:10px;padding:0 8px;}
+    .wordmark-mark{width:28px;height:28px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:oklch(18% 0.02 164);font-weight:800;font-size:0.875rem;}
+    .wordmark-text{font-weight:700;font-size:1rem;letter-spacing:-0.01em;}
+    .nav-group{display:flex;flex-direction:column;gap:2px;}
+    .nav-label{font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint);padding:0 12px;margin-bottom:8px;}
+    .nav-item{display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;border-radius:10px;font-size:0.875rem;font-weight:500;color:var(--text-muted);}
+    .nav-item .icon{color:var(--text-faint);}
+    .nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600;}
+    .nav-item.active .icon{color:var(--accent);}
+    .sidebar-spacer{flex:1;}
+    .user-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;border:1px solid var(--border);}
+    .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent-2-soft);color:var(--accent-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.8125rem;flex-shrink:0;}
+    .user-meta{flex:1;min-width:0;}
+    .user-name{font-size:0.8125rem;font-weight:600;}
+    .user-role{font-size:0.75rem;color:var(--text-faint);}
+
+    /* Main */
+    .main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;}
+    .topbar{height:72px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--border);}
+    .search{display:flex;align-items:center;gap:10px;height:40px;width:340px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:0 16px;color:var(--text-faint);font-size:0.875rem;}
+    .topbar-right{display:flex;align-items:center;gap:16px;}
+    .bell-wrap{position:relative;width:38px;height:38px;border-radius:10px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;}
+    .bell-dot{position:absolute;top:8px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--accent-2);border:2px solid var(--sidebar);}
+    .btn-primary{height:40px;padding:0 18px;border:none;border-radius:var(--radius-md);background:var(--accent);color:oklch(18% 0.02 164);font-family:var(--font-ui);font-weight:700;font-size:0.875rem;display:flex;align-items:center;gap:8px;box-shadow:0 10px 24px -8px oklch(78% 0.14 164 / 0.4);}
+
+    .content{flex:1;overflow:hidden;padding:32px;display:flex;flex-direction:column;gap:28px;}
+    .page-head p.eyebrow{font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint);margin:0 0 6px;}
+    .page-head h1{font-size:1.625rem;font-weight:700;margin:0 0 6px;}
+    .page-head p.sub{font-size:0.9375rem;color:var(--text-muted);margin:0;}
+
+    .kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;}
+    .kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;display:flex;flex-direction:column;gap:14px;box-shadow:var(--shadow-card);}
+    .kpi-card.attn{border-color:oklch(78% 0.14 70 / 0.35);background:linear-gradient(180deg, oklch(78% 0.14 70 / 0.08), transparent 60%), var(--surface);}
+    .kpi-top{display:flex;align-items:center;justify-content:space-between;}
+    .kpi-icon{width:34px;height:34px;border-radius:9px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;}
+    .kpi-icon .icon{color:var(--text-muted);width:16px;height:16px;}
+    .kpi-card.attn .kpi-icon{background:var(--accent-2-soft);}
+    .kpi-card.attn .kpi-icon .icon{color:var(--accent-2);}
+    .kpi-label{font-size:0.75rem;color:var(--text-faint);font-weight:600;}
+    .kpi-number{font-weight:800;font-size:1.625rem;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;}
+
+    .toolbar{display:flex;align-items:center;gap:10px;}
+    .chip{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:999px;background:var(--surface);border:1px solid var(--border);font-size:0.8125rem;color:var(--text-muted);}
+    .chip .icon{width:14px;height:14px;color:var(--text-faint);}
+    .toolbar-spacer{flex:1;}
+    .btn-secondary{height:38px;padding:0 16px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:0.8125rem;font-weight:600;font-family:var(--font-ui);display:flex;align-items:center;gap:8px;}
+
+    .work-area{flex:1;display:flex;gap:20px;min-height:0;}
+    .table-panel{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-card);}
+    .table-head-row{display:grid;grid-template-columns:28px 2.4fr 1.2fr 1fr 1fr 1.3fr 1fr 24px;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);}
+    .th{font-size:0.6875rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint);}
+    .row-body{display:flex;flex-direction:column;overflow:hidden auto;}
+    .trow{display:grid;grid-template-columns:28px 2.4fr 1.2fr 1fr 1fr 1.3fr 1fr 24px;gap:12px;padding:14px 20px;align-items:center;border-bottom:1px solid var(--border);}
+    .trow.selected{background:var(--surface-2);}
+    .checkbox{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--border-strong);display:flex;align-items:center;justify-content:center;}
+    .checkbox.checked{background:var(--accent);border-color:var(--accent);position:relative;}
+    .post-cell{display:flex;align-items:center;gap:12px;min-width:0;}
+    .thumb{width:40px;height:40px;border-radius:9px;background:linear-gradient(135deg, oklch(78% 0.14 164 / 0.3), oklch(78% 0.14 70 / 0.25));flex-shrink:0;}
+    .post-meta{min-width:0;}
+    .post-title{font-size:0.875rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .post-sub{font-size:0.75rem;color:var(--text-faint);margin-top:2px;}
+    .cell-text{font-size:0.8438rem;color:var(--text-muted);}
+    .cell-cost{font-size:0.875rem;font-weight:700;font-variant-numeric:tabular-nums;}
+    .pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:0.6875rem;font-weight:700;}
+    .engagement{display:flex;align-items:center;gap:10px;font-size:0.75rem;color:var(--text-faint);}
+    .engagement span{display:flex;align-items:center;gap:4px;}
+    .engagement .icon{width:13px;height:13px;}
+
+    .detail-panel{width:320px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;display:flex;flex-direction:column;gap:22px;box-shadow:var(--shadow-card);}
+    .detail-thumb{width:100%;height:140px;border-radius:14px;background:linear-gradient(135deg, oklch(78% 0.14 164 / 0.35), oklch(78% 0.14 70 / 0.3));}
+    .detail-title{font-size:1rem;font-weight:700;margin:0;}
+    .detail-sub{font-size:0.8125rem;color:var(--text-faint);margin-top:4px;}
+    .detail-cost-row{display:flex;align-items:center;justify-content:space-between;padding-top:12px;border-top:1px solid var(--border);}
+    .detail-cost-label{font-size:0.75rem;color:var(--text-faint);}
+    .detail-cost-value{font-size:1.125rem;font-weight:800;font-variant-numeric:tabular-nums;}
+    .steps{display:flex;flex-direction:column;}
+    .step{display:flex;gap:14px;}
+    .step-rail{display:flex;flex-direction:column;align-items:center;}
+    .step-dot{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .step-dot.done{background:var(--accent-soft);color:var(--accent);}
+    .step-dot.current{background:var(--accent-2-soft);color:var(--accent-2);}
+    .step-dot.pending{background:var(--surface-2);color:var(--text-faint);border:1px solid var(--border-strong);}
+    .step-line{width:1.5px;flex:1;background:var(--border-strong);margin:4px 0;}
+    .step-body{padding-bottom:24px;min-width:0;}
+    .step:last-child .step-body{padding-bottom:0;}
+    .step-title{font-size:0.8438rem;font-weight:600;}
+    .step-title.muted{color:var(--text-faint);font-weight:500;}
+    .step-time{font-size:0.75rem;color:var(--text-faint);margin-top:2px;}
+  </style>
+</helmet>
+
+<div class="app">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="wordmark"><div class="wordmark-mark">T</div><div class="wordmark-text">Taggify</div></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Overview</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Dashboard</div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Work</div>
+      <div class="nav-item active"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h6M9 16h6"/><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 4v-1a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v1"/></svg>My Works</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Campaigns</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5-4 4-3-3-4 4"/></svg>Assets</div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Finance</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Invoices</div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Admin</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="8.5" r="2.6"/><path d="M15.5 13a5.4 5.4 0 0 1 6 6.4"/></svg>Team</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>Job runs</div>
+    </div>
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="user-card">
+      <div class="avatar" style="background:var(--accent-soft);color:var(--accent);">DC</div>
+      <div class="user-meta"><div class="user-name">Demo Creator</div><div class="user-role">Creator</div></div>
+      <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <div class="search">
+        <svg class="icon" style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        Search links, campaigns, pages…
+      </div>
+      <div class="topbar-right">
+        <div class="bell-wrap">
+          <svg class="icon" style="color:var(--text-muted);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+          <div class="bell-dot"></div>
+        </div>
+        <button class="btn-primary">
+          <svg class="icon" style="width:15px;height:15px;color:oklch(18% 0.02 164);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          Submit link
+        </button>
+        <div class="avatar" style="background:var(--accent-soft);color:var(--accent);">DC</div>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <p class="eyebrow">Overview</p>
+        <h1>My Works</h1>
+        <p class="sub">Every submitted link, tracked from post to payout.</p>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-top"><div class="kpi-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg></div></div>
+          <div class="kpi-label">Links added</div>
+          <div class="kpi-number">2,634</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-top"><div class="kpi-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.5"/></svg></div></div>
+          <div class="kpi-label">Pending screenshots</div>
+          <div class="kpi-number">2,518</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-top"><div class="kpi-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></div></div>
+          <div class="kpi-label">Links approved</div>
+          <div class="kpi-number">2,601</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-top"><div class="kpi-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></div></div>
+          <div class="kpi-label">Links invoiced</div>
+          <div class="kpi-number">2,009</div>
+        </div>
+        <div class="kpi-card attn">
+          <div class="kpi-top"><div class="kpi-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.5" fill="currentColor"/></svg></div></div>
+          <div class="kpi-label">Uninvoiced links</div>
+          <div class="kpi-number">625</div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="chip"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Filter results</div>
+        <div class="chip">All statuses<svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="chip">Last 30 days<svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="chip">All pages<svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="toolbar-spacer"></div>
+        <button class="btn-secondary">Bulk invoice · 3 selected</button>
+      </div>
+
+      <div class="work-area">
+        <div class="table-panel">
+          <div class="table-head-row">
+            <div></div>
+            <div class="th">Post</div>
+            <div class="th">Page</div>
+            <div class="th">Format</div>
+            <div class="th">Cost</div>
+            <div class="th">Engagement</div>
+            <div class="th">Status</div>
+            <div></div>
+          </div>
+          <div class="row-body">
+            <div class="trow selected">
+              <div class="checkbox checked"><svg style="width:11px;height:11px;color:oklch(18% 0.02 164);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div>
+              <div class="post-cell"><div class="thumb"></div><div class="post-meta"><div class="post-title">Demo Brand × Launch Campaign</div><div class="post-sub">instagram.com/p/abc123</div></div></div>
+              <div class="cell-text">@demo.page</div>
+              <div class="cell-text">Reel</div>
+              <div class="cell-cost">₹12,500</div>
+              <div class="engagement"><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.5-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12c-2.3 4.5-9.3 9-9.3 9Z"/></svg>18.0K</span><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>97</span></div>
+              <div><span class="pill" style="background:var(--blue-soft);color:var(--blue);">Insights pending</span></div>
+              <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="trow">
+              <div class="checkbox"></div>
+              <div class="post-cell"><div class="thumb"></div><div class="post-meta"><div class="post-title">Northfield Running Co. × Derby Series</div><div class="post-sub">instagram.com/p/xk291</div></div></div>
+              <div class="cell-text">@demo.page</div>
+              <div class="cell-text">Story</div>
+              <div class="cell-cost">₹10,000</div>
+              <div class="engagement"><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.5-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12c-2.3 4.5-9.3 9-9.3 9Z"/></svg>1.3K</span><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>27</span></div>
+              <div><span class="pill" style="background:var(--accent-soft);color:var(--accent);">Approved</span></div>
+              <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="trow">
+              <div class="checkbox"></div>
+              <div class="post-cell"><div class="thumb"></div><div class="post-meta"><div class="post-title">Solmate Coffee × Launch Week</div><div class="post-sub">instagram.com/p/qm771</div></div></div>
+              <div class="cell-text">@demo.page</div>
+              <div class="cell-text">Carousel</div>
+              <div class="cell-cost">₹12,500</div>
+              <div class="engagement"><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.5-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12c-2.3 4.5-9.3 9-9.3 9Z"/></svg>18.0K</span><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>97</span></div>
+              <div><span class="pill" style="background:var(--accent-2-soft);color:var(--accent-2);">Invoiced</span></div>
+              <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="trow">
+              <div class="checkbox"></div>
+              <div class="post-cell"><div class="thumb"></div><div class="post-meta"><div class="post-title">Byteloop AI × Creator Spotlight</div><div class="post-sub">instagram.com/p/vv430</div></div></div>
+              <div class="cell-text">@demo.page</div>
+              <div class="cell-text">Reel</div>
+              <div class="cell-cost">₹12,500</div>
+              <div class="engagement"><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.5-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12c-2.3 4.5-9.3 9-9.3 9Z"/></svg>772</span><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>33</span></div>
+              <div><span class="pill" style="background:var(--rose-soft);color:var(--rose);">Rejected</span></div>
+              <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+            <div class="trow">
+              <div class="checkbox"></div>
+              <div class="post-cell"><div class="thumb"></div><div class="post-meta"><div class="post-title">Verdant Skincare × Retreat Campaign</div><div class="post-sub">instagram.com/p/rr812</div></div></div>
+              <div class="cell-text">@demo.page</div>
+              <div class="cell-text">Collab</div>
+              <div class="cell-cost">₹14,000</div>
+              <div class="engagement"><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.5-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12c-2.3 4.5-9.3 9-9.3 9Z"/></svg>4.2K</span><span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>58</span></div>
+              <div><span class="pill" style="background:var(--slate-soft);color:var(--slate);">Submitted</span></div>
+              <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-panel">
+          <div class="detail-thumb"></div>
+          <div>
+            <p class="detail-title">Demo Brand × Launch Campaign</p>
+            <p class="detail-sub">@demo.page · Reel · instagram.com/p/abc123</p>
+          </div>
+          <div class="detail-cost-row">
+            <span class="detail-cost-label">Rate-card cost</span>
+            <span class="detail-cost-value">₹12,500</span>
+          </div>
+
+          <div class="steps">
+            <div class="step">
+              <div class="step-rail">
+                <div class="step-dot done"><svg style="width:11px;height:11px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div>
+                <div class="step-line"></div>
+              </div>
+              <div class="step-body"><div class="step-title">Submitted</div><div class="step-time">Aug 21, 10:42 AM</div></div>
+            </div>
+            <div class="step">
+              <div class="step-rail">
+                <div class="step-dot done"><svg style="width:11px;height:11px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div>
+                <div class="step-line"></div>
+              </div>
+              <div class="step-body"><div class="step-title">Screenshot approved</div><div class="step-time">Aug 21, 2:15 PM</div></div>
+            </div>
+            <div class="step">
+              <div class="step-rail">
+                <div class="step-dot current"><svg style="width:11px;height:11px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg></div>
+                <div class="step-line"></div>
+              </div>
+              <div class="step-body"><div class="step-title">Insights pending</div><div class="step-time">Awaiting metrics refresh</div></div>
+            </div>
+            <div class="step">
+              <div class="step-rail"><div class="step-dot pending"></div></div>
+              <div class="step-body"><div class="step-title muted">Invoiced</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

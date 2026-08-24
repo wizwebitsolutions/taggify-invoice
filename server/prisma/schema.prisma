@@ -1,0 +1,257 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CREATOR
+  TEAM_MEMBER
+  ADMIN
+  FINANCE
+}
+
+enum LinkStatus {
+  SUBMITTED
+  PENDING_SCREENSHOT_REVIEW
+  SCREENSHOT_REJECTED
+  SCREENSHOT_APPROVED
+  INSIGHTS_PENDING
+  INSIGHTS_APPROVED
+  INVOICED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  RAISED
+  APPROVED
+  PAID
+}
+
+enum GstStatus {
+  PENDING
+  SCHEDULED
+  COMPLETED
+}
+
+model User {
+  id               String   @id @default(cuid())
+  phoneNumber      String   @unique
+  passwordHash     String
+  role             Role
+  name             String?
+  whatsappVerified Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  memberships      TeamMembership[] @relation("MemberUser")
+  refreshTokens    RefreshToken[]
+  assets           Asset[]
+  invoices         Invoice[]
+  notifications    Notification[]
+  submittedLinks   Link[]           @relation("SubmittedByUser")
+  statusEvents     LinkStatusEvent[]
+}
+
+model TeamMembership {
+  id          String   @id @default(cuid())
+  userId      String // the team member (User.role = TEAM_MEMBER)
+  creatorId   String // the owning creator's User.id
+  canSeeMoney Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user User @relation("MemberUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, creatorId])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Asset {
+  id             String   @id @default(cuid())
+  ownerId        String
+  platform       String   @default("instagram")
+  handle         String
+  followers      Int      @default(0)
+  approvalStatus String   @default("pending") // pending | approved | rejected
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  owner     User              @relation(fields: [ownerId], references: [id])
+  rateCards RateCard[]
+  links     Link[]
+  snapshots AccountSnapshot[]
+
+  @@unique([ownerId, platform, handle])
+}
+
+model RateCard {
+  id            String   @id @default(cuid())
+  assetId       String
+  format        String // reel | story | carousel | collaboration | video
+  amount        Decimal  @db.Decimal(12, 2)
+  effectiveFrom DateTime @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, format])
+}
+
+model Campaign {
+  id        String   @id @default(cuid())
+  brandName String
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  links Link[]
+}
+
+model Link {
+  id            String     @id @default(cuid())
+  campaignId    String
+  assetId       String
+  submittedById String
+  url           String
+  cost          Decimal    @db.Decimal(12, 2)
+  customRate    Boolean    @default(false)
+  status        LinkStatus @default(SUBMITTED)
+  postedAt      DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  campaign      Campaign          @relation(fields: [campaignId], references: [id])
+  asset         Asset             @relation(fields: [assetId], references: [id])
+  submittedBy   User              @relation("SubmittedByUser", fields: [submittedById], references: [id])
+  screenshot    Screenshot?
+  postSnapshots PostSnapshot[]
+  invoiceItem   InvoiceItem?
+  statusEvents  LinkStatusEvent[]
+
+  @@index([status])
+  @@index([assetId])
+  @@index([campaignId])
+}
+
+model LinkStatusEvent {
+  id        String     @id @default(cuid())
+  linkId    String
+  status    LinkStatus
+  actedById String?
+  note      String?
+  createdAt DateTime   @default(now())
+
+  link     Link  @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  actedBy  User? @relation(fields: [actedById], references: [id])
+
+  @@index([linkId])
+}
+
+model Screenshot {
+  id           String   @id @default(cuid())
+  linkId       String   @unique
+  r2Key        String
+  reviewedById String?
+  approved     Boolean?
+  createdAt    DateTime @default(now())
+
+  link Link @relation(fields: [linkId], references: [id], onDelete: Cascade)
+}
+
+model PostSnapshot {
+  id             String   @id @default(cuid())
+  linkId         String
+  likeCount      Int
+  commentsCount  Int
+  videoViews     Int
+  videoPlayCount Int
+  saves          Int
+  shares         Int
+  reposts        Int
+  source         String   @default("apify")
+  capturedAt     DateTime @default(now())
+
+  link Link @relation(fields: [linkId], references: [id], onDelete: Cascade)
+
+  @@index([linkId])
+}
+
+model AccountSnapshot {
+  id         String   @id @default(cuid())
+  assetId    String
+  followers  Int
+  mediaCount Int
+  source     String   @default("apify")
+  capturedAt DateTime @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  creatorId     String
+  invoiceNumber String        @unique
+  amount        Decimal       @db.Decimal(12, 2)
+  status        InvoiceStatus @default(DRAFT)
+  gstStatus     GstStatus     @default(PENDING)
+  dueDate       DateTime?
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  creator User          @relation(fields: [creatorId], references: [id])
+  items   InvoiceItem[]
+
+  @@index([creatorId])
+  @@index([status])
+}
+
+model InvoiceItem {
+  id        String  @id @default(cuid())
+  invoiceId String
+  linkId    String  @unique
+  amount    Decimal @db.Decimal(12, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  link    Link    @relation(fields: [linkId], references: [id])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  payload   Json
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model JobRun {
+  id         String    @id @default(cuid())
+  jobName    String
+  status     String // running | success | failed
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  error      String?
+
+  @@index([jobName, startedAt])
+}

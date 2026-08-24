@@ -1,0 +1,180 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap">
+  <style>
+    :root{
+      --bg: oklch(15% 0.006 255);
+      --surface: oklch(19% 0.007 255);
+      --surface-2: oklch(22% 0.008 255);
+      --surface-hover: oklch(25% 0.009 255);
+      --border: oklch(100% 0 0 / 0.08);
+      --border-strong: oklch(100% 0 0 / 0.16);
+      --text: oklch(97% 0.003 255);
+      --text-muted: oklch(72% 0.01 255);
+      --text-faint: oklch(50% 0.01 255);
+      --accent: oklch(78% 0.14 164);
+      --accent-soft: oklch(78% 0.14 164 / 0.14);
+      --accent-2: oklch(78% 0.14 70);
+      --accent-2-soft: oklch(78% 0.14 70 / 0.14);
+      --blue: oklch(75% 0.13 230);
+      --blue-soft: oklch(75% 0.13 230 / 0.14);
+      --rose: oklch(70% 0.16 15);
+      --rose-soft: oklch(70% 0.16 15 / 0.14);
+      --slate: oklch(65% 0.01 255);
+      --slate-soft: oklch(65% 0.01 255 / 0.14);
+      --radius-lg: 20px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+      --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6);
+      --font-ui: 'Manrope', system-ui, -apple-system, sans-serif;
+      --font-display: 'Instrument Serif', Georgia, serif;
+    }
+    *{box-sizing:border-box;}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-ui);}
+    a{color:var(--accent);text-decoration:none;}
+    a:hover{color:var(--accent-2);}
+    .page{width:1240px;padding:56px;display:flex;flex-direction:column;gap:56px;}
+    .eyebrow{font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint);margin:0 0 8px;}
+    .section-title{font-size:1.375rem;font-weight:600;margin:0 0 20px;}
+    .row{display:flex;gap:16px;flex-wrap:wrap;}
+    .swatch{width:148px;display:flex;flex-direction:column;gap:10px;}
+    .swatch-fill{height:88px;border-radius:var(--radius-md);border:1px solid var(--border);}
+    .swatch-label{font-size:0.8125rem;font-weight:600;}
+    .swatch-value{font-size:0.75rem;color:var(--text-faint);font-family:'SF Mono',Menlo,monospace;}
+    .type-row{display:flex;align-items:baseline;gap:24px;padding:16px 0;border-bottom:1px solid var(--border);}
+    .type-row:last-child{border-bottom:none;}
+    .type-meta{width:220px;flex-shrink:0;font-size:0.75rem;color:var(--text-faint);font-family:'SF Mono',Menlo,monospace;}
+    .space-row{display:flex;align-items:center;gap:16px;}
+    .space-bar{height:16px;background:var(--accent);border-radius:4px;}
+    .space-label{width:56px;font-size:0.8125rem;color:var(--text-muted);font-family:'SF Mono',Menlo,monospace;}
+    .card-sample{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-card);width:220px;}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:var(--font-ui);font-weight:700;border:none;cursor:default;transition:background .15s ease;}
+    .btn-lg{height:48px;padding:0 24px;font-size:0.9375rem;border-radius:var(--radius-md);}
+    .btn-md{height:40px;padding:0 18px;font-size:0.875rem;border-radius:var(--radius-md);}
+    .btn-primary{background:var(--accent);color:oklch(18% 0.02 164);box-shadow:0 8px 20px -6px oklch(78% 0.14 164 / 0.4);}
+    .btn-secondary{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);}
+    .btn-ghost{background:transparent;color:var(--text-muted);border:1px solid var(--border);}
+    .btn-danger{background:var(--rose-soft);color:var(--rose);}
+    .field{display:flex;flex-direction:column;gap:8px;width:260px;}
+    .field-label{font-size:0.8125rem;font-weight:600;color:var(--text-muted);}
+    .input{height:44px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:0 14px;font-size:0.9375rem;color:var(--text);font-family:var(--font-ui);display:flex;align-items:center;}
+    .input-error{border-color:var(--rose);}
+    .helper-error{font-size:0.75rem;color:var(--rose);}
+    .pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:0.6875rem;font-weight:700;}
+    .icon{width:14px;height:14px;flex-shrink:0;}
+    .kpi-number{font-family:var(--font-ui);font-weight:800;font-size:2.125rem;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;}
+    .display-sample{font-family:var(--font-display);font-style:italic;font-size:3rem;line-height:1.1;}
+  </style>
+</helmet>
+
+<div class="page">
+
+  <div>
+    <p class="eyebrow">Design System</p>
+    <h1 style="font-size:1.75rem;font-weight:700;margin:0;">Taggify — Foundations</h1>
+    <p style="color:var(--text-muted);font-size:0.9375rem;margin:8px 0 0;max-width:640px;">Dark-first, editorial-fintech system for the creator/campaign operations platform. One signature accent (emerald), a warm gold counterpart, and a harmonious status palette derived from the same lightness/chroma family.</p>
+  </div>
+
+  <div>
+    <h2 class="section-title">Color</h2>
+    <div class="row">
+      <div class="swatch"><div class="swatch-fill" style="background:var(--bg);"></div><div class="swatch-label">Canvas / bg</div><div class="swatch-value">oklch(15% .006 255)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--surface);"></div><div class="swatch-label">Surface</div><div class="swatch-value">oklch(19% .007 255)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--surface-2);"></div><div class="swatch-label">Surface 2</div><div class="swatch-value">oklch(22% .008 255)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--text);"></div><div class="swatch-label">Text</div><div class="swatch-value">oklch(97% .003 255)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--text-muted);"></div><div class="swatch-label">Text muted</div><div class="swatch-value">oklch(72% .01 255)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--accent);"></div><div class="swatch-label">Accent — emerald</div><div class="swatch-value">oklch(78% .14 164)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--accent-2);"></div><div class="swatch-label">Accent 2 — gold</div><div class="swatch-value">oklch(78% .14 70)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--blue);"></div><div class="swatch-label">In review — blue</div><div class="swatch-value">oklch(75% .13 230)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--rose);"></div><div class="swatch-label">Overdue — rose</div><div class="swatch-value">oklch(70% .16 15)</div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:var(--slate);"></div><div class="swatch-label">Neutral — slate</div><div class="swatch-value">oklch(65% .01 255)</div></div>
+    </div>
+  </div>
+
+  <div>
+    <h2 class="section-title">Typography</h2>
+    <div class="type-row"><div class="type-meta">Display · Instrument Serif italic · 48px</div><div class="display-sample">Tracked end to end.</div></div>
+    <div class="type-row"><div class="type-meta">H1 · Manrope 700 · 28px</div><div style="font-size:1.75rem;font-weight:700;">My Works overview</div></div>
+    <div class="type-row"><div class="type-meta">H2 · Manrope 600 · 22px</div><div style="font-size:1.375rem;font-weight:600;">Sector allocation</div></div>
+    <div class="type-row"><div class="type-meta">H3 · Manrope 600 · 17px</div><div style="font-size:1.0625rem;font-weight:600;">Recent invoices</div></div>
+    <div class="type-row"><div class="type-meta">KPI number · Manrope 800 · 34px · tabular</div><div class="kpi-number">₹8,11,250</div></div>
+    <div class="type-row"><div class="type-meta">Body · Manrope 400 · 15px</div><div style="font-size:0.9375rem;color:var(--text-muted);">Every submitted link, tracked from post to payout.</div></div>
+    <div class="type-row"><div class="type-meta">Small / label · Manrope 500 · 13px</div><div style="font-size:0.8125rem;color:var(--text-muted);">Campaign · Demo Brand Launch</div></div>
+    <div class="type-row"><div class="type-meta">Micro / eyebrow · Manrope 700 · 11px · caps</div><div class="eyebrow" style="margin:0;">Status</div></div>
+  </div>
+
+  <div>
+    <h2 class="section-title">Spacing scale (4px base)</h2>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div class="space-row"><div class="space-label">4</div><div class="space-bar" style="width:4px;"></div></div>
+      <div class="space-row"><div class="space-label">8</div><div class="space-bar" style="width:8px;"></div></div>
+      <div class="space-row"><div class="space-label">12</div><div class="space-bar" style="width:12px;"></div></div>
+      <div class="space-row"><div class="space-label">16</div><div class="space-bar" style="width:16px;"></div></div>
+      <div class="space-row"><div class="space-label">20</div><div class="space-bar" style="width:20px;"></div></div>
+      <div class="space-row"><div class="space-label">24</div><div class="space-bar" style="width:24px;"></div></div>
+      <div class="space-row"><div class="space-label">32</div><div class="space-bar" style="width:32px;"></div></div>
+      <div class="space-row"><div class="space-label">40</div><div class="space-bar" style="width:40px;"></div></div>
+      <div class="space-row"><div class="space-label">48</div><div class="space-bar" style="width:48px;"></div></div>
+      <div class="space-row"><div class="space-label">64</div><div class="space-bar" style="width:64px;"></div></div>
+    </div>
+  </div>
+
+  <div>
+    <h2 class="section-title">Buttons</h2>
+    <div class="row" style="align-items:center;">
+      <button class="btn btn-lg btn-primary">Sign in</button>
+      <button class="btn btn-md btn-primary">Raise invoice</button>
+      <button class="btn btn-md btn-secondary">Filter by page</button>
+      <button class="btn btn-md btn-ghost">Cancel</button>
+      <button class="btn btn-md btn-danger">Reject screenshot</button>
+    </div>
+  </div>
+
+  <div>
+    <h2 class="section-title">Inputs</h2>
+    <div class="row">
+      <div class="field">
+        <div class="field-label">Phone number</div>
+        <div class="input">+91 98765 43210</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Post URL</div>
+        <div class="input input-error">instagram.com/p/broken</div>
+        <div class="helper-error">This link couldn't be verified — check the URL.</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <h2 class="section-title">Status chips</h2>
+    <div class="row">
+      <span class="pill" style="background:var(--slate-soft);color:var(--slate);">Submitted</span>
+      <span class="pill" style="background:var(--accent-2-soft);color:var(--accent-2);">Pending review</span>
+      <span class="pill" style="background:var(--rose-soft);color:var(--rose);">Rejected</span>
+      <span class="pill" style="background:var(--blue-soft);color:var(--blue);">Insights pending</span>
+      <span class="pill" style="background:var(--accent-soft);color:var(--accent);">Approved</span>
+      <span class="pill" style="background:var(--accent-2-soft);color:var(--accent-2);">Invoiced</span>
+      <span class="pill" style="background:var(--accent-soft);color:var(--accent);">Paid</span>
+      <span class="pill" style="background:var(--rose-soft);color:var(--rose);">Overdue · 12d</span>
+    </div>
+  </div>
+
+  <div>
+    <h2 class="section-title">Elevation</h2>
+    <div class="row">
+      <div class="card-sample"><div style="font-size:0.8125rem;color:var(--text-faint);">Card surface</div><div class="kpi-number" style="margin-top:8px;font-size:1.5rem;">₹12,500</div></div>
+      <div class="card-sample" style="background:var(--surface-2);border-color:var(--border-strong);"><div style="font-size:0.8125rem;color:var(--text-faint);">Surface 2 (nested)</div><div class="kpi-number" style="margin-top:8px;font-size:1.5rem;">625</div></div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

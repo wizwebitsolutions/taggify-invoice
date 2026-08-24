@@ -1,0 +1,270 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap">
+  <style>
+    :root{
+      --bg: oklch(15% 0.006 255);
+      --sidebar: oklch(13% 0.006 255);
+      --surface: oklch(19% 0.007 255);
+      --surface-2: oklch(22% 0.008 255);
+      --border: oklch(100% 0 0 / 0.08);
+      --border-strong: oklch(100% 0 0 / 0.16);
+      --text: oklch(97% 0.003 255);
+      --text-muted: oklch(72% 0.01 255);
+      --text-faint: oklch(50% 0.01 255);
+      --accent: oklch(78% 0.14 164);
+      --accent-soft: oklch(78% 0.14 164 / 0.14);
+      --accent-2: oklch(78% 0.14 70);
+      --accent-2-soft: oklch(78% 0.14 70 / 0.14);
+      --blue: oklch(75% 0.13 230);
+      --blue-soft: oklch(75% 0.13 230 / 0.14);
+      --rose: oklch(70% 0.16 15);
+      --rose-soft: oklch(70% 0.16 15 / 0.14);
+      --slate: oklch(65% 0.01 255);
+      --slate-soft: oklch(65% 0.01 255 / 0.14);
+      --radius-lg: 20px;
+      --radius-md: 12px;
+      --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6);
+      --font-ui: 'Manrope', system-ui, -apple-system, sans-serif;
+      --font-display: 'Instrument Serif', Georgia, serif;
+    }
+    *{box-sizing:border-box;}
+    html,body{margin:0;height:100%;}
+    body{background:var(--bg);color:var(--text);font-family:var(--font-ui);}
+    .app{width:1440px;height:1000px;display:flex;overflow:hidden;}
+    .icon{width:18px;height:18px;flex-shrink:0;}
+
+    .sidebar{width:260px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:24px 16px;gap:32px;}
+    .wordmark{display:flex;align-items:center;gap:10px;padding:0 8px;}
+    .wordmark-mark{width:28px;height:28px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:oklch(18% 0.02 164);font-weight:800;font-size:0.875rem;}
+    .wordmark-text{font-weight:700;font-size:1rem;letter-spacing:-0.01em;}
+    .nav-group{display:flex;flex-direction:column;gap:2px;}
+    .nav-label{font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint);padding:0 12px;margin-bottom:8px;}
+    .nav-item{display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;border-radius:10px;font-size:0.875rem;font-weight:500;color:var(--text-muted);}
+    .nav-item .icon{color:var(--text-faint);}
+    .nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600;}
+    .nav-item.active .icon{color:var(--accent);}
+    .sidebar-spacer{flex:1;}
+    .user-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;border:1px solid var(--border);}
+    .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent-2-soft);color:var(--accent-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.8125rem;flex-shrink:0;}
+    .user-meta{flex:1;min-width:0;}
+    .user-name{font-size:0.8125rem;font-weight:600;}
+    .user-role{font-size:0.75rem;color:var(--text-faint);}
+
+    .main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;}
+    .topbar{height:72px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--border);}
+    .search{display:flex;align-items:center;gap:10px;height:40px;width:340px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:0 16px;color:var(--text-faint);font-size:0.875rem;}
+    .topbar-right{display:flex;align-items:center;gap:16px;}
+    .bell-wrap{position:relative;width:38px;height:38px;border-radius:10px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;}
+    .bell-dot{position:absolute;top:8px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--accent-2);border:2px solid var(--sidebar);}
+
+    .content{flex:1;overflow:hidden;padding:32px;display:flex;flex-direction:column;gap:28px;}
+    .page-head p.eyebrow{font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint);margin:0 0 6px;}
+    .page-head h1{font-size:1.625rem;font-weight:700;margin:0 0 6px;}
+    .page-head p.sub{font-size:0.9375rem;color:var(--text-muted);margin:0;}
+
+    .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+    .kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:22px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow-card);}
+    .kpi-card.attn{border-color:oklch(70% 0.16 15 / 0.35);background:linear-gradient(180deg, oklch(70% 0.16 15 / 0.08), transparent 60%), var(--surface);}
+    .kpi-label{font-size:0.75rem;color:var(--text-faint);font-weight:600;}
+    .kpi-number{font-weight:800;font-size:1.875rem;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;}
+    .kpi-foot{font-size:0.8125rem;color:var(--text-faint);}
+    .kpi-card.attn .kpi-number{color:var(--rose);}
+
+    .toolbar{display:flex;align-items:center;gap:10px;}
+    .chip{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:999px;background:var(--surface);border:1px solid var(--border);font-size:0.8125rem;color:var(--text-muted);}
+    .toolbar-spacer{flex:1;}
+    .btn-secondary{height:38px;padding:0 16px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:0.8125rem;font-weight:600;font-family:var(--font-ui);display:flex;align-items:center;gap:8px;}
+
+    .work-area{flex:1;display:flex;gap:20px;min-height:0;}
+    .table-panel{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-card);}
+    .table-head-row{display:grid;grid-template-columns:1.2fr 1.4fr 1fr 1.1fr 1.1fr 1.3fr 1fr;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);}
+    .th{font-size:0.6875rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint);}
+    .row-body{display:flex;flex-direction:column;overflow:hidden auto;}
+    .trow{display:grid;grid-template-columns:1.2fr 1.4fr 1fr 1.1fr 1.1fr 1.3fr 1fr;gap:12px;padding:16px 20px;align-items:center;border-bottom:1px solid var(--border);}
+    .trow.selected{background:var(--surface-2);}
+    .cell-mono{font-size:0.8125rem;font-family:'SF Mono',Menlo,monospace;color:var(--text-muted);}
+    .cell-text{font-size:0.8438rem;color:var(--text-muted);}
+    .cell-cost{font-size:0.9375rem;font-weight:700;font-variant-numeric:tabular-nums;}
+    .pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:0.6875rem;font-weight:700;}
+    .aging{font-size:0.75rem;color:var(--text-faint);}
+    .aging.overdue{color:var(--rose);font-weight:700;}
+    .btn-row{height:32px;padding:0 14px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:0.75rem;font-weight:700;font-family:var(--font-ui);border:none;}
+
+    .detail-panel{width:340px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;display:flex;flex-direction:column;gap:20px;box-shadow:var(--shadow-card);}
+    .detail-head{display:flex;align-items:center;justify-content:space-between;}
+    .detail-num{font-family:'SF Mono',Menlo,monospace;font-size:0.75rem;color:var(--text-faint);}
+    .detail-amount{font-size:1.875rem;font-weight:800;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;}
+    .pill-row{display:flex;gap:8px;}
+    .divider{height:1px;background:var(--border);}
+    .line-items{display:flex;flex-direction:column;gap:12px;}
+    .line-item{display:flex;align-items:center;gap:10px;}
+    .li-thumb{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg, oklch(78% 0.14 164 / 0.3), oklch(78% 0.14 70 / 0.25));flex-shrink:0;}
+    .li-title{font-size:0.8125rem;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .li-amount{font-size:0.8125rem;font-weight:700;font-variant-numeric:tabular-nums;}
+    .total-row{display:flex;align-items:center;justify-content:space-between;padding-top:14px;border-top:1px solid var(--border);}
+    .total-label{font-size:0.8125rem;color:var(--text-faint);}
+    .total-value{font-size:1.125rem;font-weight:800;font-variant-numeric:tabular-nums;}
+    .btn-primary-full{height:44px;border:none;border-radius:var(--radius-md);background:var(--accent);color:oklch(18% 0.02 164);font-family:var(--font-ui);font-weight:700;font-size:0.875rem;box-shadow:0 10px 24px -8px oklch(78% 0.14 164 / 0.4);}
+    .btn-secondary-full{height:44px;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-family:var(--font-ui);font-weight:600;font-size:0.875rem;}
+  </style>
+</helmet>
+
+<div class="app">
+
+  <div class="sidebar">
+    <div class="wordmark"><div class="wordmark-mark">T</div><div class="wordmark-text">Taggify</div></div>
+    <div class="nav-group">
+      <div class="nav-label">Overview</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Dashboard</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Work</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h6M9 16h6"/><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 4v-1a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v1"/></svg>My Works</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Campaigns</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5-4 4-3-3-4 4"/></svg>Assets</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Finance</div>
+      <div class="nav-item active"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Invoices</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Admin</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="8.5" r="2.6"/><path d="M15.5 13a5.4 5.4 0 0 1 6 6.4"/></svg>Team</div>
+      <div class="nav-item"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>Job runs</div>
+    </div>
+    <div class="sidebar-spacer"></div>
+    <div class="user-card">
+      <div class="avatar" style="background:var(--blue-soft);color:var(--blue);">FU</div>
+      <div class="user-meta"><div class="user-name">Finance User</div><div class="user-role">Finance</div></div>
+      <svg class="icon" style="width:14px;height:14px;color:var(--text-faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="search"><svg class="icon" style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Search invoice number, creator…</div>
+      <div class="topbar-right">
+        <div class="bell-wrap"><svg class="icon" style="color:var(--text-muted);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><div class="bell-dot"></div></div>
+        <div class="avatar" style="background:var(--blue-soft);color:var(--blue);">FU</div>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <p class="eyebrow">Finance</p>
+        <h1>Invoices</h1>
+        <p class="sub">Raised, paid, and GST status — tracked independently, settled manually.</p>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Total raised</div>
+          <div class="kpi-number">₹41,64,770</div>
+          <div class="kpi-foot">16 invoices this quarter</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Pending payment</div>
+          <div class="kpi-number">₹8,11,250</div>
+          <div class="kpi-foot">1 invoice awaiting settlement</div>
+        </div>
+        <div class="kpi-card attn">
+          <div class="kpi-label">Overdue</div>
+          <div class="kpi-number">₹2,53,520</div>
+          <div class="kpi-foot">1 invoice past due date</div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="chip">All statuses<svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="chip">GST — any<svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="toolbar-spacer"></div>
+        <button class="btn-secondary"><svg class="icon" style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0l-4-4m4 4l4-4M4 21h16"/></svg>Export CSV</button>
+      </div>
+
+      <div class="work-area">
+        <div class="table-panel">
+          <div class="table-head-row">
+            <div class="th">Invoice</div>
+            <div class="th">Creator</div>
+            <div class="th">Amount</div>
+            <div class="th">Status</div>
+            <div class="th">GST status</div>
+            <div class="th">Due</div>
+            <div class="th">Action</div>
+          </div>
+          <div class="row-body">
+            <div class="trow selected">
+              <div class="cell-mono">INV-260714-8811</div>
+              <div class="cell-text">Demo Creator</div>
+              <div class="cell-cost">₹8,11,250</div>
+              <div><span class="pill" style="background:var(--blue-soft);color:var(--blue);">Raised</span></div>
+              <div><span class="pill" style="background:var(--accent-2-soft);color:var(--accent-2);">Scheduled</span></div>
+              <div class="aging">Due Sep 8</div>
+              <div><button class="btn-row">Mark paid</button></div>
+            </div>
+            <div class="trow">
+              <div class="cell-mono">INV-260704-1755</div>
+              <div class="cell-text">Nightowl Media</div>
+              <div class="cell-cost">₹25,53,520</div>
+              <div><span class="pill" style="background:var(--accent-soft);color:var(--accent);">Paid</span></div>
+              <div><span class="pill" style="background:var(--accent-soft);color:var(--accent);">Completed</span></div>
+              <div class="aging">Settled Jul 12</div>
+              <div><span class="cell-text">—</span></div>
+            </div>
+            <div class="trow">
+              <div class="cell-mono">INV-260621-4402</div>
+              <div class="cell-text">Wanderloop Studio</div>
+              <div class="cell-cost">₹2,53,520</div>
+              <div><span class="pill" style="background:var(--blue-soft);color:var(--blue);">Raised</span></div>
+              <div><span class="pill" style="background:var(--slate-soft);color:var(--slate);">Pending</span></div>
+              <div class="aging overdue">Overdue · 12d</div>
+              <div><button class="btn-row">Mark paid</button></div>
+            </div>
+            <div class="trow">
+              <div class="cell-mono">INV-260610-9930</div>
+              <div class="cell-text">Daily Bulletin Co.</div>
+              <div class="cell-cost">₹6,42,000</div>
+              <div><span class="pill" style="background:var(--accent-soft);color:var(--accent);">Paid</span></div>
+              <div><span class="pill" style="background:var(--accent-soft);color:var(--accent);">Completed</span></div>
+              <div class="aging">Settled Jun 18</div>
+              <div><span class="cell-text">—</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-panel">
+          <div class="detail-head">
+            <div>
+              <div class="detail-num">INV-260714-8811</div>
+              <div class="detail-amount">₹8,11,250</div>
+            </div>
+          </div>
+          <div class="pill-row">
+            <span class="pill" style="background:var(--blue-soft);color:var(--blue);">Raised</span>
+            <span class="pill" style="background:var(--accent-2-soft);color:var(--accent-2);">GST scheduled · Sep 15</span>
+          </div>
+          <div class="divider"></div>
+          <div class="line-items">
+            <div class="line-item"><div class="li-thumb"></div><div class="li-title">Demo Brand × Launch Campaign</div><div class="li-amount">₹12,500</div></div>
+            <div class="line-item"><div class="li-thumb"></div><div class="li-title">Solmate Coffee × Launch Week</div><div class="li-amount">₹12,500</div></div>
+            <div class="line-item"><div class="li-thumb"></div><div class="li-title">+ 64 more approved links</div><div class="li-amount">₹7,86,250</div></div>
+          </div>
+          <div class="total-row"><span class="total-label">Total</span><span class="total-value">₹8,11,250</span></div>
+          <button class="btn-primary-full">Mark as paid</button>
+          <button class="btn-secondary-full">Update GST status</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

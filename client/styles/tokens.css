@@ -1,0 +1,52 @@
+/**
+ * Design tokens — the ONLY place a literal color/spacing/radius/shadow
+ * value is ever typed. Every other file (tailwind.config.ts, every
+ * component) reads these via var(--token-name) or a Tailwind utility
+ * that maps to one. Change a value here and it propagates everywhere.
+ * Source: frontend.md §2–3.
+ */
+:root {
+  /* Surfaces */
+  --bg: oklch(15% 0.006 255);
+  --sidebar: oklch(13% 0.006 255);
+  --surface: oklch(19% 0.007 255);
+  --surface-2: oklch(22% 0.008 255);
+  --surface-hover: oklch(25% 0.009 255);
+
+  /* Borders */
+  --border: oklch(100% 0 0 / 0.08);
+  --border-strong: oklch(100% 0 0 / 0.16);
+
+  /* Text */
+  --text: oklch(97% 0.003 255);
+  --text-muted: oklch(72% 0.01 255);
+  --text-faint: oklch(50% 0.01 255);
+
+  /* Accent family — same lightness/chroma, hue varies */
+  --accent: oklch(78% 0.14 164);
+  --accent-ink: oklch(18% 0.02 164); /* text painted on top of --accent */
+  --accent-soft: oklch(78% 0.14 164 / 0.14);
+  --accent-2: oklch(78% 0.14 70);
+  --accent-2-soft: oklch(78% 0.14 70 / 0.14);
+
+  /* Status */
+  --blue: oklch(75% 0.13 230);
+  --blue-soft: oklch(75% 0.13 230 / 0.14);
+  --rose: oklch(70% 0.16 15);
+  --rose-soft: oklch(70% 0.16 15 / 0.14);
+  --slate: oklch(65% 0.01 255);
+  --slate-soft: oklch(65% 0.01 255 / 0.14);
+
+  /* Radius */
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  /* Elevation */
+  --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6);
+  --shadow-accent-glow: 0 10px 24px -8px oklch(78% 0.14 164 / 0.4);
+
+  /* Fonts — variable names populated by next/font in lib/fonts.ts */
+  --font-ui: var(--font-manrope), system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-instrument-serif), Georgia, serif;
+}

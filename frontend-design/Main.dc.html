@@ -1,0 +1,134 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap">
+  <style>
+    :root{
+      --bg: oklch(15% 0.006 255);
+      --surface: oklch(19% 0.007 255);
+      --surface-2: oklch(22% 0.008 255);
+      --border: oklch(100% 0 0 / 0.08);
+      --border-strong: oklch(100% 0 0 / 0.16);
+      --text: oklch(97% 0.003 255);
+      --text-muted: oklch(72% 0.01 255);
+      --text-faint: oklch(50% 0.01 255);
+      --accent: oklch(78% 0.14 164);
+      --accent-2: oklch(78% 0.14 70);
+      --radius-lg: 20px;
+      --radius-md: 12px;
+      --font-ui: 'Manrope', system-ui, -apple-system, sans-serif;
+      --font-display: 'Instrument Serif', Georgia, serif;
+    }
+    *{box-sizing:border-box;}
+    html,body{margin:0;height:100%;}
+    body{background:var(--bg);color:var(--text);font-family:var(--font-ui);}
+    a{color:var(--accent);text-decoration:none;}
+    a:hover{color:var(--accent-2);}
+    .screen{width:1440px;height:900px;display:flex;overflow:hidden;}
+    .editorial{
+      width:56%;position:relative;padding:56px;display:flex;flex-direction:column;justify-content:space-between;
+      background:
+        radial-gradient(circle at 12% 8%, oklch(78% 0.14 164 / 0.20), transparent 42%),
+        radial-gradient(circle at 88% 92%, oklch(78% 0.14 70 / 0.14), transparent 46%),
+        var(--bg);
+      border-right:1px solid var(--border);
+    }
+    .wordmark{display:flex;align-items:center;gap:10px;}
+    .wordmark-mark{width:30px;height:30px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:oklch(18% 0.02 164);font-weight:800;font-size:0.9375rem;}
+    .wordmark-text{font-weight:700;font-size:1.0625rem;letter-spacing:-0.01em;}
+    .headline{font-family:var(--font-display);font-style:italic;font-size:3.25rem;line-height:1.08;letter-spacing:-0.01em;max-width:560px;}
+    .sub{font-size:1rem;color:var(--text-muted);max-width:420px;margin-top:20px;line-height:1.6;}
+    .footer-line{display:flex;align-items:center;gap:10px;font-size:0.8125rem;color:var(--text-faint);}
+    .dot{width:5px;height:5px;border-radius:50%;background:var(--text-faint);}
+    .form-side{width:44%;display:flex;align-items:center;justify-content:center;background:var(--bg);}
+    .card{width:380px;display:flex;flex-direction:column;gap:28px;}
+    .card-head h1{font-size:1.75rem;font-weight:700;margin:0 0 8px;}
+    .card-head p{font-size:0.9375rem;color:var(--text-muted);margin:0;}
+    .field{display:flex;flex-direction:column;gap:8px;}
+    .field-label{font-size:0.8125rem;font-weight:600;color:var(--text-muted);}
+    .phone-input{display:flex;align-items:center;height:48px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--radius-md);overflow:hidden;}
+    .phone-prefix{padding:0 14px;height:100%;display:flex;align-items:center;color:var(--text-muted);font-size:0.9375rem;border-right:1px solid var(--border-strong);background:oklch(24% 0.008 255);}
+    .phone-value{padding:0 14px;font-size:0.9375rem;color:var(--text);}
+    .pw-input{display:flex;align-items:center;justify-content:space-between;height:48px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:0 14px;}
+    .pw-value{font-size:0.9375rem;letter-spacing:3px;color:var(--text);}
+    .icon{width:18px;height:18px;color:var(--text-faint);flex-shrink:0;}
+    .row-between{display:flex;align-items:center;justify-content:space-between;}
+    .helper{font-size:0.8125rem;color:var(--text-faint);}
+    .btn-primary{height:48px;border:none;border-radius:var(--radius-md);background:var(--accent);color:oklch(18% 0.02 164);font-family:var(--font-ui);font-weight:700;font-size:0.9375rem;box-shadow:0 12px 28px -8px oklch(78% 0.14 164 / 0.45);display:flex;align-items:center;justify-content:center;gap:8px;}
+    .divider{height:1px;background:var(--border);}
+    .footnote{font-size:0.8125rem;color:var(--text-faint);text-align:center;}
+    .arc{stroke:oklch(78% 0.14 164 / 0.35);}
+    .arc2{stroke:oklch(78% 0.14 70 / 0.28);}
+  </style>
+</helmet>
+
+<div class="screen">
+  <div class="editorial">
+    <div class="wordmark">
+      <div class="wordmark-mark">T</div>
+      <div class="wordmark-text">Taggify</div>
+    </div>
+
+    <div>
+      <p class="headline">Track every post.<br>Get paid on time.</p>
+      <p class="sub">The operations layer for creator campaigns — link submission, screenshot approval, insight verification, and payout in one continuous thread.</p>
+    </div>
+
+    <div>
+      <svg width="420" height="160" viewBox="0 0 420 160" fill="none" style="margin-bottom:32px;">
+        <path class="arc" d="M0 130 C 90 40, 180 40, 270 90 S 400 140, 420 60" stroke-width="1.5"/>
+        <path class="arc2" d="M0 150 C 100 90, 200 90, 300 130 S 400 160, 420 110" stroke-width="1.5"/>
+        <circle cx="270" cy="90" r="4" fill="oklch(78% 0.14 164)"/>
+        <circle cx="300" cy="130" r="4" fill="oklch(78% 0.14 70)"/>
+      </svg>
+      <div class="footer-line">
+        <span>Links</span><span class="dot"></span><span>Screenshots</span><span class="dot"></span><span>Invoices</span><span class="dot"></span><span>Payouts</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-side">
+    <div class="card">
+      <div class="card-head">
+        <h1>Welcome back</h1>
+        <p>Sign in with the phone number on your account.</p>
+      </div>
+
+      <div class="field">
+        <div class="field-label">Phone number</div>
+        <div class="phone-input">
+          <div class="phone-prefix">+91</div>
+          <div class="phone-value">98765 43210</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="row-between">
+          <div class="field-label">Password</div>
+        </div>
+        <div class="pw-input">
+          <div class="pw-value">••••••••••</div>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+        <div class="helper">Password was issued by your account admin — <a href="#">contact them</a> if you've lost it.</div>
+      </div>
+
+      <button class="btn-primary">
+        Sign in
+        <svg class="icon" style="color:oklch(18% 0.02 164);width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+
+      <div class="divider"></div>
+      <p class="footnote">New creators are added by an admin — no self-signup.</p>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
