@@ -4,7 +4,8 @@ import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "@/lib/utils";
-import { SearchIcon, BellIcon, SunIcon, MoonIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
+import { SearchIcon, BellIcon, SunIcon, MoonIcon, LogoutIcon } from "@/components/icons";
 import { AVATAR_TONE, type SidebarUser } from "@/components/layout/sidebar";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
@@ -20,7 +21,7 @@ export function Topbar({
   hasUnread?: boolean; // kept for compatibility; real state now comes from the notifications feed
   children?: ReactNode;
 }) {
-  const { accessToken } = useAuth();
+  const { accessToken, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const token = accessToken;
@@ -121,6 +122,15 @@ export function Topbar({
         <div className={cn("flex h-8 w-8 items-center justify-center rounded-full text-[0.8125rem] font-bold", AVATAR_TONE[user.tone ?? "emerald"])}>
           {user.initials}
         </div>
+
+        {/* Present on every AppShell page (was previously duplicated —
+            inconsistently — on individual pages). Highlighted (danger
+            variant) since signing out is a deliberate, easy-to-miss-if-
+            subtle action. */}
+        <Button variant="danger" size="sm" onClick={logout}>
+          <LogoutIcon className="h-3.5 w-3.5" />
+          Log out
+        </Button>
       </div>
     </div>
   );

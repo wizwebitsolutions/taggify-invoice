@@ -19,6 +19,7 @@ export const rejectInvoiceSchema = z.object({
 
 export const listInvoicesQuerySchema = z.object({
   status: z.enum(["DRAFT", "RAISED", "APPROVED", "REJECTED", "PAID"]).optional(),
+  paymentStatus: z.enum(["PENDING", "COMPLETED", "CANCELLED"]).optional(),
   search: z.string().max(60).optional(), // matches Inv No, per creator.wldd.in's "Search by Invoice Number"
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),

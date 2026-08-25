@@ -8,9 +8,10 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Field, TextField } from "@/components/ui/form-field";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
+import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { PlusIcon, CampaignIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { campaigns as campaignsApi, ApiError } from "@/lib/api-client";
+import { campaigns as campaignsApi, assets as assetsApi, ApiError, type Campaign } from "@/lib/api-client";
 import { initialsOf, roleLabel } from "@/lib/format";
 
 export default function CampaignsPage() {
@@ -25,11 +26,14 @@ function CampaignsContent() {
   const { user, accessToken } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
+  const [uploadCampaign, setUploadCampaign] = useState<Campaign | null>(null);
   const token = accessToken!;
 
   const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
+  const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
   const items = campaignsQuery.data ?? [];
   const canCreate = user?.role === "ADMIN";
+  const canUploadLinks = user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
 
   return (
     <AppShell
@@ -79,6 +83,11 @@ function CampaignsContent() {
                     </span>
                   )}
                 </div>
+                {canUploadLinks && (
+                  <Button size="sm" variant="secondary" className="w-full" onClick={() => setUploadCampaign(c)}>
+                    Upload Links
+                  </Button>
+                )}
               </div>
             ))}
           </div>
@@ -92,6 +101,20 @@ function CampaignsContent() {
           onCreated={() => {
             setShowForm(false);
             queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+          }}
+        />
+      )}
+
+      {uploadCampaign && (
+        <UploadLinksModal
+          token={token}
+          campaigns={[uploadCampaign]}
+          initialCampaignId={uploadCampaign.id}
+          assets={assetsQuery.data ?? []}
+          onClose={() => setUploadCampaign(null)}
+          onCreated={() => {
+            setUploadCampaign(null);
+            queryClient.invalidateQueries({ queryKey: ["links"] });
           }}
         />
       )}

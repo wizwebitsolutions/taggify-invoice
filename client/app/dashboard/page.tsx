@@ -22,9 +22,17 @@ import {
   MessageIcon,
 } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
-import { Field, Select } from "@/components/ui/form-field";
+import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { useAuth } from "@/lib/auth-context";
-import { links as linksApi, campaigns as campaignsApi, assets as assetsApi, invoices as invoicesApi, ApiError, type Link } from "@/lib/api-client";
+import {
+  links as linksApi,
+  campaigns as campaignsApi,
+  assets as assetsApi,
+  invoices as invoicesApi,
+  screenshots as screenshotsApi,
+  ApiError,
+  type Link,
+} from "@/lib/api-client";
 import { money, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -47,9 +55,12 @@ export default function DashboardPage() {
 }
 
 function DashboardContent() {
-  const { user, accessToken, logout } = useAuth();
+  const { user, accessToken } = useAuth();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [assetFilter, setAssetFilter] = useState<string | undefined>(undefined);
+  const [fromFilter, setFromFilter] = useState("");
+  const [toFilter, setToFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
@@ -62,8 +73,15 @@ function DashboardContent() {
     queryFn: () => linksApi.list(token, { pageSize: 100 }),
   });
   const filteredLinksQuery = useQuery({
-    queryKey: ["links", statusFilter ?? "all"],
-    queryFn: () => linksApi.list(token, { status: statusFilter, pageSize: 100 }),
+    queryKey: ["links", statusFilter ?? "all", assetFilter ?? "all", fromFilter, toFilter],
+    queryFn: () =>
+      linksApi.list(token, {
+        status: statusFilter,
+        assetId: assetFilter,
+        from: fromFilter || undefined,
+        to: toFilter || undefined,
+        pageSize: 100,
+      }),
   });
   const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
@@ -117,15 +135,10 @@ function DashboardContent() {
       }
     >
       <div className="flex flex-col gap-7">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Overview</p>
-            <h1 className="mb-1.5 text-[1.625rem] font-bold">My Works</h1>
-            <p className="text-[0.9375rem] text-text-muted">Every submitted link, tracked from post to payout.</p>
-          </div>
-          <button onClick={logout} className="text-[0.8125rem] text-text-faint hover:text-text-muted">
-            Log out
-          </button>
+        <div>
+          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Overview</p>
+          <h1 className="mb-1.5 text-[1.625rem] font-bold">My Works</h1>
+          <p className="text-[0.9375rem] text-text-muted">Every submitted link, tracked from post to payout.</p>
         </div>
 
         <div className="grid grid-cols-5 gap-4">
@@ -133,10 +146,10 @@ function DashboardContent() {
           <KpiCard icon={CameraIcon} label="Pending screenshots" value={String(kpis.pendingScreenshots)} />
           <KpiCard icon={CheckCircleIcon} label="Links approved" value={String(kpis.approved)} />
           <KpiCard icon={InvoiceIcon} label="Links invoiced" value={String(kpis.invoiced)} />
-          <KpiCard icon={AlertIcon} label="Uninvoiced links" value={String(kpis.uninvoiced)} tone={kpis.uninvoiced > 0 ? "gold" : undefined} />
+          <KpiCard icon={AlertIcon} label="Uninvoiced links" value={String(kpis.uninvoiced)} tone={kpis.uninvoiced > 0 ? "indigo" : undefined} />
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <select
             value={statusFilter ?? ""}
             onChange={(e) => setStatusFilter(e.target.value || undefined)}
@@ -148,6 +161,38 @@ function DashboardContent() {
               </option>
             ))}
           </select>
+
+          <select
+            value={assetFilter ?? ""}
+            onChange={(e) => setAssetFilter(e.target.value || undefined)}
+            className="h-[38px] rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <option value="">All pages</option>
+            {(assetsQuery.data ?? []).map((a) => (
+              <option key={a.id} value={a.id}>
+                @{a.handle}
+              </option>
+            ))}
+          </select>
+
+          <div className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 h-[38px] text-[0.8125rem] text-text-faint">
+            <input
+              type="date"
+              value={fromFilter}
+              onChange={(e) => setFromFilter(e.target.value)}
+              aria-label="From date"
+              className="bg-transparent text-text-muted focus:outline-none"
+            />
+            <span>–</span>
+            <input
+              type="date"
+              value={toFilter}
+              onChange={(e) => setToFilter(e.target.value)}
+              aria-label="To date"
+              className="bg-transparent text-text-muted focus:outline-none"
+            />
+          </div>
+
           <div className="flex-1" />
           {canBulkInvoice && selectedIds.size > 0 && (
             <Button
@@ -255,6 +300,7 @@ function DashboardContent() {
               link={detailLink}
               token={token}
               isAdmin={user?.role === "ADMIN"}
+              canUploadScreenshot={canSubmitLink}
               onChanged={() => {
                 queryClient.invalidateQueries({ queryKey: ["links"] });
                 queryClient.invalidateQueries({ queryKey: ["linkTimeline", detailLink.id] });
@@ -265,7 +311,7 @@ function DashboardContent() {
       </div>
 
       {showSubmitForm && (
-        <SubmitLinkModal
+        <UploadLinksModal
           token={token}
           campaigns={campaignsQuery.data ?? []}
           assets={assetsQuery.data ?? []}
@@ -284,11 +330,13 @@ function LinkDetailPanel({
   link,
   token,
   isAdmin,
+  canUploadScreenshot,
   onChanged,
 }: {
   link: Link;
   token: string;
   isAdmin: boolean;
+  canUploadScreenshot: boolean;
   onChanged: () => void;
 }) {
   const timelineQuery = useQuery({
@@ -302,6 +350,30 @@ function LinkDetailPanel({
   });
   const approveInsightsMutation = useMutation({
     mutationFn: () => linksApi.approveInsights(token, link.id),
+    onSuccess: onChanged,
+  });
+
+  const uploadScreenshotMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const params = await screenshotsApi.requestUploadUrl(token, link.id);
+
+      // Direct-to-Cloudinary signed upload — only the fields that were part
+      // of the signature may be sent, or Cloudinary rejects it (server side,
+      // see cloudinaryClient.js).
+      const form = new FormData();
+      form.append("file", file);
+      form.append("api_key", params.apiKey);
+      form.append("timestamp", String(params.timestamp));
+      form.append("signature", params.signature);
+      form.append("public_id", params.publicId);
+
+      const uploadRes = await fetch(params.uploadUrl, { method: "POST", body: form });
+      if (!uploadRes.ok) {
+        throw new Error("Cloudinary rejected the upload — check the image and try again.");
+      }
+
+      return screenshotsApi.confirm(token, link.id, params.publicId);
+    },
     onSuccess: onChanged,
   });
 
@@ -329,6 +401,31 @@ function LinkDetailPanel({
         <StatusTimeline steps={steps.length > 0 ? steps : [{ title: STATUS_LABEL[link.status] ?? link.status, state: "current" }]} />
       )}
 
+      {canUploadScreenshot && (link.status === "SUBMITTED" || link.status === "SCREENSHOT_REJECTED") && (
+        <div className="flex flex-col gap-2 border-t border-border pt-4">
+          <label className="text-xs font-semibold text-text-faint">
+            {link.status === "SCREENSHOT_REJECTED" ? "Re-upload proof screenshot" : "Upload proof screenshot"}
+          </label>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={uploadScreenshotMutation.isPending}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) uploadScreenshotMutation.mutate(file);
+              e.target.value = "";
+            }}
+            className="text-[0.8125rem] text-text-faint file:mr-3 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-2 file:text-[0.8125rem] file:font-bold file:text-accent-ink"
+          />
+          {uploadScreenshotMutation.isPending && <p className="text-[0.8125rem] text-text-faint">Uploading…</p>}
+          {uploadScreenshotMutation.isError && (
+            <ErrorNotice
+              message={uploadScreenshotMutation.error instanceof ApiError ? uploadScreenshotMutation.error.message : "Couldn't upload the screenshot."}
+            />
+          )}
+        </div>
+      )}
+
       {isAdmin && link.status === "PENDING_SCREENSHOT_REVIEW" && (
         <div className="flex gap-2 border-t border-border pt-4">
           <Button size="sm" className="flex-1" onClick={() => reviewMutation.mutate(true)} disabled={reviewMutation.isPending}>
@@ -346,139 +443,6 @@ function LinkDetailPanel({
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Bulk link upload — paste any number of post URLs (one per line) and
- * submit them together in one request, matching creator.wldd.in's
- * "Upload Links" modal (a plain multi-line textarea + Submit, no toggle
- * between single/bulk since one URL is just the N=1 case of the same flow).
- */
-function SubmitLinkModal({
-  token,
-  campaigns,
-  assets,
-  onClose,
-  onCreated,
-}: {
-  token: string;
-  campaigns: { id: string; title: string }[];
-  assets: { id: string; handle: string; rateCards: { format: string }[] }[];
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
-  const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
-  const [urlsText, setUrlsText] = useState("");
-  const [format, setFormat] = useState(assets[0]?.rateCards[0]?.format ?? "reel");
-
-  const asset = assets.find((a) => a.id === assetId);
-  const urls = urlsText.split("\n").map((u) => u.trim()).filter(Boolean);
-
-  const bulkMutation = useMutation({
-    mutationFn: () => linksApi.bulkCreate(token, { campaignId, assetId, format, urls }),
-  });
-
-  const result = bulkMutation.data;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (result) {
-            onCreated();
-            return;
-          }
-          bulkMutation.mutate();
-        }}
-        className="flex w-full max-w-[460px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
-      >
-        <div>
-          <h2 className="text-lg font-bold">Upload links</h2>
-          <p className="mt-1 text-[0.8125rem] text-text-faint">Paste one or more post URLs — one per line.</p>
-        </div>
-
-        <Field label="Campaign">
-          <Select value={campaignId} onChange={setCampaignId}>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field label="Page">
-          <Select value={assetId} onChange={setAssetId}>
-            {assets.map((a) => (
-              <option key={a.id} value={a.id}>
-                @{a.handle}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field label="Format">
-          <Select value={format} onChange={setFormat}>
-            {(asset?.rateCards ?? []).map((rc) => (
-              <option key={rc.format} value={rc.format}>
-                {rc.format}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field label={`Post URLs${urls.length > 0 ? ` · ${urls.length}` : ""}`}>
-          <textarea
-            required
-            rows={5}
-            value={urlsText}
-            onChange={(e) => setUrlsText(e.target.value)}
-            placeholder={"https://instagram.com/reel/…\nhttps://instagram.com/reel/…"}
-            className="resize-none rounded-md border border-border-strong bg-surface-2 px-3.5 py-2.5 font-mono text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          />
-        </Field>
-
-        {result && (
-          <div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-3.5 py-2.5 text-[0.8125rem]">
-            <p className="font-semibold text-accent">{result.created.length} link{result.created.length === 1 ? "" : "s"} submitted.</p>
-            {result.skipped.length > 0 && (
-              <div className="flex flex-col gap-0.5 text-text-faint">
-                <p className="font-semibold text-rose">{result.skipped.length} skipped:</p>
-                {result.skipped.map((s) => (
-                  <p key={s.url} className="truncate">
-                    {s.url} — {s.reason}
-                  </p>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {bulkMutation.isError && (
-          <ErrorNotice message={bulkMutation.error instanceof ApiError ? bulkMutation.error.message : "Couldn't submit these links."} />
-        )}
-
-        <div className="flex gap-2.5">
-          <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
-            {result ? "Close" : "Cancel"}
-          </Button>
-          {!result && (
-            <Button type="submit" className="flex-1" disabled={bulkMutation.isPending || !campaignId || !assetId || urls.length === 0}>
-              {bulkMutation.isPending ? "Submitting…" : `Submit${urls.length > 1 ? ` ${urls.length} links` : " link"}`}
-            </Button>
-          )}
-          {result && (
-            <Button type="submit" className="flex-1">
-              Done
-            </Button>
-          )}
-        </div>
-      </form>
     </div>
   );
 }

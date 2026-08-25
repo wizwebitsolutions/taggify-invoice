@@ -93,6 +93,7 @@ export interface Asset {
   approvalStatus: string;
   createdAt: string;
   rateCards: RateCard[];
+  engagement: { avgLikes: number | null; avgComments: number | null; avgViews: number | null; sampleSize: number };
 }
 
 export interface Campaign {
@@ -244,9 +245,16 @@ export const campaigns = {
 
 // ── Links ───────────────────────────────────────────────────────────
 export const links = {
-  list: (token: string, params: { status?: string; page?: number; pageSize?: number } = {}) => {
+  list: (
+    token: string,
+    params: { status?: string; assetId?: string; campaignId?: string; from?: string; to?: string; page?: number; pageSize?: number } = {}
+  ) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set("status", params.status);
+    if (params.assetId) qs.set("assetId", params.assetId);
+    if (params.campaignId) qs.set("campaignId", params.campaignId);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
     qs.set("page", String(params.page ?? 1));
     qs.set("pageSize", String(params.pageSize ?? 100));
     return request<Paginated<Link>>(`/links?${qs}`, { token });
@@ -289,9 +297,10 @@ export const screenshots = {
 
 // ── Invoices ────────────────────────────────────────────────────────
 export const invoices = {
-  list: (token: string, params: { status?: string; search?: string; page?: number; pageSize?: number } = {}) => {
+  list: (token: string, params: { status?: string; paymentStatus?: string; search?: string; page?: number; pageSize?: number } = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set("status", params.status);
+    if (params.paymentStatus) qs.set("paymentStatus", params.paymentStatus);
     if (params.search) qs.set("search", params.search);
     qs.set("page", String(params.page ?? 1));
     qs.set("pageSize", String(params.pageSize ?? 100));

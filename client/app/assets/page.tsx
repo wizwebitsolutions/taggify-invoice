@@ -144,6 +144,18 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
       </div>
 
       <div className="border-t border-border pt-4">
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.06em] text-text-faint">Performance metrics</p>
+        <div className="grid grid-cols-3 gap-3">
+          <EngagementStat label="Avg. likes" value={asset.engagement.avgLikes} />
+          <EngagementStat label="Avg. comments" value={asset.engagement.avgComments} />
+          <EngagementStat label="Avg. views" value={asset.engagement.avgViews} />
+        </div>
+        {asset.engagement.sampleSize > 0 && (
+          <p className="mt-2 text-[0.6875rem] text-text-faint">Across {asset.engagement.sampleSize} scraped post{asset.engagement.sampleSize === 1 ? "" : "s"}</p>
+        )}
+      </div>
+
+      <div className="border-t border-border pt-4">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-bold uppercase tracking-[0.06em] text-text-faint">Rate card</p>
           {editable && !editing && (
@@ -214,6 +226,15 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function EngagementStat({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md bg-surface-2 px-2.5 py-2 text-center">
+      <span className="text-[0.9375rem] font-bold tabular-nums">{value === null ? "N/A" : value.toLocaleString()}</span>
+      <span className="text-[0.6875rem] text-text-faint">{label}</span>
     </div>
   );
 }

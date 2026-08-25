@@ -45,7 +45,7 @@ export default function LoginPage() {
         className="relative hidden w-[56%] flex-col justify-between overflow-hidden border-r border-border p-14 lg:flex"
         style={{
           background:
-            "radial-gradient(circle at 12% 8%, oklch(78% 0.14 164 / 0.20), transparent 42%), radial-gradient(circle at 88% 92%, oklch(78% 0.14 70 / 0.14), transparent 46%), var(--bg)",
+            "radial-gradient(circle at 12% 8%, color-mix(in oklch, var(--accent) 20%, transparent), transparent 42%), radial-gradient(circle at 88% 92%, color-mix(in oklch, var(--accent-2) 14%, transparent), transparent 46%), var(--bg)",
         }}
       >
         <div className="flex items-center gap-2.5">
@@ -71,16 +71,16 @@ export default function LoginPage() {
           <svg width="420" height="120" viewBox="0 0 420 160" fill="none" className="mb-8">
             <path
               d="M0 130 C 90 40, 180 40, 270 90 S 400 140, 420 60"
-              stroke="oklch(78% 0.14 164 / 0.35)"
+              style={{ stroke: "color-mix(in oklch, var(--accent) 35%, transparent)" }}
               strokeWidth="1.5"
             />
             <path
               d="M0 150 C 100 90, 200 90, 300 130 S 400 160, 420 110"
-              stroke="oklch(78% 0.14 70 / 0.28)"
+              style={{ stroke: "color-mix(in oklch, var(--accent-2) 28%, transparent)" }}
               strokeWidth="1.5"
             />
-            <circle cx="270" cy="90" r="4" fill="oklch(78% 0.14 164)" />
-            <circle cx="300" cy="130" r="4" fill="oklch(78% 0.14 70)" />
+            <circle cx="270" cy="90" r="4" style={{ fill: "var(--accent)" }} />
+            <circle cx="300" cy="130" r="4" style={{ fill: "var(--accent-2)" }} />
           </svg>
           <div className="flex items-center gap-2.5 text-[0.8125rem] text-text-faint">
             <span>Links</span>
@@ -107,7 +107,7 @@ export default function LoginPage() {
               Phone number
             </label>
             <div className="flex h-12 items-center overflow-hidden rounded-md border border-border-strong bg-surface-2 focus-within:ring-2 focus-within:ring-accent">
-              <span className="flex h-full items-center border-r border-border-strong bg-[oklch(24%_0.008_255)] px-3.5 text-[0.9375rem] text-text-muted">
+              <span className="flex h-full items-center border-r border-border-strong bg-surface-2 px-3.5 text-[0.9375rem] text-text-muted">
                 +91
               </span>
               <input

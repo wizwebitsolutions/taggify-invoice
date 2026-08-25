@@ -14,7 +14,7 @@ const statusPillVariants = cva(
     variants: {
       tone: {
         slate: "bg-slate-soft text-slate",
-        gold: "bg-accent-2-soft text-accent-2",
+        indigo: "bg-accent-2-soft text-accent-2",
         rose: "bg-rose-soft text-rose",
         blue: "bg-blue-soft text-blue",
         emerald: "bg-accent-soft text-accent",
@@ -45,19 +45,19 @@ export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | PaymentStatus 
 
 const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone }> = {
   SUBMITTED: { label: "Submitted", tone: "slate" },
-  PENDING_SCREENSHOT_REVIEW: { label: "Pending review", tone: "gold" },
+  PENDING_SCREENSHOT_REVIEW: { label: "Pending review", tone: "indigo" },
   SCREENSHOT_REJECTED: { label: "Rejected", tone: "rose" },
   SCREENSHOT_APPROVED: { label: "Approved", tone: "emerald" },
   INSIGHTS_PENDING: { label: "Insights pending", tone: "blue" },
   INSIGHTS_APPROVED: { label: "Insights approved", tone: "emerald" },
-  INVOICED: { label: "Invoiced", tone: "gold" },
+  INVOICED: { label: "Invoiced", tone: "indigo" },
   DRAFT: { label: "Draft", tone: "slate" },
   RAISED: { label: "Raised", tone: "blue" },
   APPROVED: { label: "Approved", tone: "emerald" },
   REJECTED: { label: "Rejected", tone: "rose" },
   PAID: { label: "Paid", tone: "emerald" },
   PENDING: { label: "Pending", tone: "slate" },
-  SCHEDULED: { label: "Scheduled", tone: "gold" },
+  SCHEDULED: { label: "Scheduled", tone: "indigo" },
   COMPLETED: { label: "Completed", tone: "emerald" },
   CANCELLED: { label: "Cancelled", tone: "rose" },
   OVERDUE: { label: "Overdue", tone: "rose" },

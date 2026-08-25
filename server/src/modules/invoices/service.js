@@ -64,6 +64,7 @@ export async function listInvoices(user, filters) {
   const where = {};
   if (!["ADMIN", "FINANCE"].includes(user.role)) where.creatorId = user.id;
   if (filters.status) where.status = filters.status;
+  if (filters.paymentStatus) where.paymentStatus = filters.paymentStatus;
   if (filters.search) where.invoiceNumber = { contains: filters.search, mode: "insensitive" };
 
   const [items, total] = await prisma.$transaction([

@@ -25,16 +25,24 @@ export default function InvoicesPage() {
 }
 
 function InvoicesContent() {
-  const { user, accessToken, logout } = useAuth();
+  const { user, accessToken } = useAuth();
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<Invoice["status"] | "">("");
+  const [paymentFilter, setPaymentFilter] = useState<Invoice["paymentStatus"] | "">("");
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const token = accessToken!;
 
   const invoicesQuery = useQuery({
-    queryKey: ["invoices", search],
-    queryFn: () => invoicesApi.list(token, { pageSize: 100, search: search || undefined }),
+    queryKey: ["invoices", search, statusFilter, paymentFilter],
+    queryFn: () =>
+      invoicesApi.list(token, {
+        pageSize: 100,
+        search: search || undefined,
+        status: statusFilter || undefined,
+        paymentStatus: paymentFilter || undefined,
+      }),
   });
 
   const items = invoicesQuery.data?.items ?? [];
@@ -90,15 +98,10 @@ function InvoicesContent() {
       searchPlaceholder="Search invoice number, creator…"
     >
       <div className="flex flex-col gap-7">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Finance</p>
-            <h1 className="mb-1.5 text-[1.625rem] font-bold">Invoices</h1>
-            <p className="text-[0.9375rem] text-text-muted">Raised, paid, and GST status — tracked independently, settled manually.</p>
-          </div>
-          <button onClick={logout} className="text-[0.8125rem] text-text-faint hover:text-text-muted">
-            Log out
-          </button>
+        <div>
+          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Finance</p>
+          <h1 className="mb-1.5 text-[1.625rem] font-bold">Invoices</h1>
+          <p className="text-[0.9375rem] text-text-muted">Raised, paid, and GST status — tracked independently, settled manually.</p>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
@@ -117,6 +120,31 @@ function InvoicesContent() {
               className="w-full bg-transparent text-text placeholder:text-text-faint focus:outline-none"
             />
           </div>
+
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as Invoice["status"] | "")}
+            className="h-9 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <option value="">Invoice status</option>
+            <option value="DRAFT">Draft</option>
+            <option value="RAISED">Raised</option>
+            <option value="APPROVED">Approved</option>
+            <option value="REJECTED">Rejected</option>
+            <option value="PAID">Paid</option>
+          </select>
+
+          <select
+            value={paymentFilter}
+            onChange={(e) => setPaymentFilter(e.target.value as Invoice["paymentStatus"] | "")}
+            className="h-9 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <option value="">Payment status</option>
+            <option value="PENDING">Pending</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="CANCELLED">Cancelled</option>
+          </select>
+
           <div className="flex-1" />
           <Button variant="secondary" size="sm" className="rounded-full">
             <DownloadIcon className="h-3.5 w-3.5" />

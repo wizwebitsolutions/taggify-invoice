@@ -14,13 +14,13 @@ export function KpiCard({
   value: string;
   foot?: string;
   /** Highlights the card as needing attention — omit for the neutral look. */
-  tone?: "gold" | "rose";
+  tone?: "indigo" | "rose";
 }) {
   return (
     <div
       className={cn(
         "flex flex-col gap-3.5 rounded-lg border border-border bg-surface p-5 shadow-card",
-        tone === "gold" && "border-accent-2/35 bg-gradient-to-b from-accent-2-soft to-transparent",
+        tone === "indigo" && "border-accent-2/35 bg-gradient-to-b from-accent-2-soft to-transparent",
         tone === "rose" && "border-rose/35 bg-gradient-to-b from-rose-soft to-transparent"
       )}
     >
@@ -28,10 +28,10 @@ export function KpiCard({
         <div
           className={cn(
             "flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-surface-2",
-            tone === "gold" && "bg-accent-2-soft"
+            tone === "indigo" && "bg-accent-2-soft"
           )}
         >
-          <Icon className={cn("h-4 w-4 text-text-muted", tone === "gold" && "text-accent-2")} />
+          <Icon className={cn("h-4 w-4 text-text-muted", tone === "indigo" && "text-accent-2")} />
         </div>
       )}
       <div>

@@ -128,7 +128,7 @@ function AddMemberModal({ token, onClose, onAdded }: { token: string; onClose: (
           <TextField required value={userId} onChange={setUserId} placeholder="Their account must already exist with role Team Member" />
         </Field>
         <label className="flex items-center gap-2.5 text-[0.8125rem] text-text-muted">
-          <input type="checkbox" checked={canSeeMoney} onChange={(e) => setCanSeeMoney(e.target.checked)} className="h-4 w-4 rounded accent-[oklch(78%_0.14_164)]" />
+          <input type="checkbox" checked={canSeeMoney} onChange={(e) => setCanSeeMoney(e.target.checked)} className="h-4 w-4 rounded accent-[var(--accent)]" />
           Can see invoices and payment amounts
         </label>
         {addMutation.isError && (
