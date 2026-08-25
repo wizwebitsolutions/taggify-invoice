@@ -9,7 +9,7 @@ router.use(requireAuth);
 
 router.post("/upload-url", validateBody(uploadUrlRequestSchema), async (req, res, next) => {
   try {
-    res.json(await screenshotsService.requestUploadUrl(req.params.linkId, req.body.contentType));
+    res.json(await screenshotsService.requestUploadUrl(req.params.linkId));
   } catch (err) {
     next(err);
   }
@@ -17,7 +17,7 @@ router.post("/upload-url", validateBody(uploadUrlRequestSchema), async (req, res
 
 router.post("/", validateBody(confirmUploadSchema), async (req, res, next) => {
   try {
-    res.status(201).json(await screenshotsService.confirmUpload(req.params.linkId, req.body.r2Key));
+    res.status(201).json(await screenshotsService.confirmUpload(req.params.linkId, req.body.publicId));
   } catch (err) {
     next(err);
   }

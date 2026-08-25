@@ -165,7 +165,7 @@ model LinkStatusEvent {
 model Screenshot {
   id           String   @id @default(cuid())
   linkId       String   @unique
-  r2Key        String
+  publicId     String   // Cloudinary public_id
   reviewedById String?
   approved     Boolean?
   createdAt    DateTime @default(now())

@@ -5,7 +5,7 @@ Design only — nothing implemented yet. Backend scope only (no frontend design 
 ## 0. Constraints recap
 - Auth: phone number + **auto-generated password** (no OTP)
 - No Redis / no BullMQ — `node-cron` + DB-backed job state instead
-- Screenshots/assets → **Cloudflare R2**
+- Screenshots/assets → **Cloudinary**
 - Instagram data → **Apify actor** (scrape), not Meta Graph API
 - Payments are **manual** (admin/finance marks an invoice as paid) — no payment gateway
 - Roles: **Creator**, **Team Member** (limited), **Admin/Ops**, **Finance**
@@ -36,7 +36,7 @@ Design only — nothing implemented yet. Backend scope only (no frontend design 
              ┌────────────┘             └────────────┐
              ▼                                        ▼
    ┌───────────────────┐                   ┌────────────────────┐
-   │   PostgreSQL       │                   │  Cloudflare R2      │
+   │   PostgreSQL       │                   │  Cloudinary          │
    │ (Prisma ORM)        │                   │ (screenshots/assets) │
    └───────────────────┘                   └────────────────────┘
              ▲
@@ -62,7 +62,7 @@ Design only — nothing implemented yet. Backend scope only (no frontend design 
 |---|---|
 | **API Server** | Single Node.js service (modular monolith) exposing REST endpoints for auth, campaigns, works/links, screenshots, invoices, assets/rate cards, notifications, admin. |
 | **PostgreSQL** | System of record — users, roles, campaigns, links/posts, screenshots metadata, invoices, payments, rate cards, notifications, job run log. |
-| **Cloudflare R2** | Object storage for screenshot uploads and any post-proof assets. API server issues pre-signed PUT URLs; client uploads directly to R2. |
+| **Cloudinary** | Object storage for screenshot uploads and any post-proof assets. API server issues signed upload params; client uploads directly to Cloudinary. |
 | **node-cron scheduler** | Runs inside the API process (or a small dedicated worker process sharing the same codebase) on fixed intervals: re-scrape Instagram metrics for active links, sweep for overdue invoices, send digest notifications. |
 | **Apify client** | Wrapper module around `apify-client` SDK calling two actors — profile scraper and post/reel scraper — following the pattern reviewed in the reference repo. |
 | **Notification module** | Writes in-app notification rows; optionally pushes via WhatsApp/SMS provider (future, not required day 1). |
@@ -76,7 +76,7 @@ Scale observed (thousands of links/invoices, not millions) doesn't justify servi
 ```
 Creator submits post link
    → API creates Link (status: submitted)
-   → Creator uploads screenshot to R2 (pre-signed URL)
+   → Creator uploads screenshot to Cloudinary (signed upload)
    → API stores screenshot reference, status: pending_screenshot_review
    → Admin approves screenshot → status: screenshot_approved
    → node-cron / on-demand job calls Apify to fetch post metrics
@@ -248,7 +248,7 @@ model LinkStatusEvent {
 model Screenshot {
   id         String   @id @default(cuid())
   linkId     String   @unique
-  r2Key      String   // object key in Cloudflare R2
+  publicId   String   // Cloudinary public_id
   reviewedById String?
   approved   Boolean?
   createdAt  DateTime @default(now())
@@ -341,14 +341,14 @@ server/
       assets/         # social profile registry, rate cards
       campaigns/       # campaign CRUD (admin)
       links/           # link submission, status transitions, timeline
-      screenshots/     # pre-signed R2 upload URL issuance, review endpoints
+      screenshots/     # Cloudinary signed upload issuance, review endpoints
       invoices/        # invoice generation (bulk), status/GST updates, manual "mark paid"
       notifications/   # in-app notification CRUD
       scraping/        # Apify provider wrapper (profile + post actors), scheduled refresh job
       jobs/            # node-cron job registrations + JobRun logging
       admin/           # RBAC-gated cross-cutting admin endpoints
     lib/
-      r2Client.js       # Cloudflare R2 (S3-compatible) client, pre-signed URL helper
+      cloudinaryClient.js # Cloudinary client, signed upload helper
       apifyClient.js     # ApifyInstagramProvider (profile + post scraping)
       auth/
         passwordGenerator.js  # secure random password generation
@@ -375,7 +375,7 @@ server/
 | `POST /campaigns` | Admin | create campaign |
 | `POST /links` | Creator/Team Member | submit a post link |
 | `GET /links` | Creator/Admin | filterable "My Works" grid |
-| `POST /links/:id/screenshot-upload-url` | Creator | get pre-signed R2 PUT URL |
+| `POST /links/:id/screenshot-upload-url` | Creator | get signed Cloudinary upload params |
 | `POST /links/:id/screenshot` | Creator | confirm upload, attach key |
 | `POST /links/:id/review-screenshot` | Admin | approve/reject |
 | `POST /links/:id/refresh-metrics` | Admin (or cron) | trigger Apify post scrape |
@@ -395,11 +395,11 @@ server/
 5. Login: verify phone + password via bcrypt compare → issue short-lived JWT access token (~15 min) + longer-lived refresh token (~7-30 days), refresh token hashed and stored in `RefreshToken` table for revocation support without Redis.
 6. `requireAuth` middleware verifies JWT signature + expiry on each request; `requireRole` middleware checks `User.role` (and `TeamMembership.canSeeMoney` where relevant) before allowing money-related routes.
 
-### 2.5 Screenshot upload flow (Cloudflare R2)
+### 2.5 Screenshot upload flow (Cloudinary)
 1. Client calls `POST /links/:id/screenshot-upload-url`.
-2. Server generates an object key (e.g. `screenshots/{linkId}/{uuid}.jpg`) and returns an R2 pre-signed PUT URL (short TTL).
-3. Client uploads the file directly to R2 (bypasses API server for the binary).
-4. Client calls `POST /links/:id/screenshot` to confirm; server verifies the object exists (HEAD request) and creates the `Screenshot` row, transitions `Link.status` to `PENDING_SCREENSHOT_REVIEW`.
+2. Server generates a `public_id` (e.g. `screenshots/{linkId}/{uuid}`) and returns signed upload params (`timestamp`, `signature`, `apiKey`, short-lived) for Cloudinary's upload API.
+3. Client uploads the file directly to Cloudinary (bypasses API server for the binary).
+4. Client calls `POST /links/:id/screenshot` to confirm; server verifies the object exists (`cloudinary.api.resource`) and creates the `Screenshot` row, transitions `Link.status` to `PENDING_SCREENSHOT_REVIEW`.
 5. Admin review endpoint sets `approved` true/false, writes a `LinkStatusEvent`, and (if approved) triggers the Apify metrics refresh for that link.
 
 ### 2.6 Instagram scraping flow (Apify)
@@ -430,7 +430,7 @@ server/
 ### 2.10 Security considerations
 - All money-mutating and role-management endpoints gated by `requireRole`.
 - Rate limiting on `/auth/login` (`express-rate-limit`, in-memory or DB-counter since no Redis) to blunt brute-force against auto-generated passwords.
-- R2 pre-signed URLs short-lived and scoped to a single object key.
+- Cloudinary signed upload params short-lived and scoped to a single `public_id`.
 - Auto-generated passwords never logged; delivered once and never re-displayed (only reset, not "forgot password → show again").
 - Refresh tokens stored hashed, revocable per-user (logout, or admin-forced revoke on role change).
 

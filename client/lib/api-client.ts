@@ -110,7 +110,7 @@ export interface Link {
   createdAt: string;
   campaign?: Campaign;
   asset?: Asset;
-  screenshot?: { id: string; r2Key: string; approved: boolean | null } | null;
+  screenshot?: { id: string; publicId: string; approved: boolean | null } | null;
   postSnapshots?: PostSnapshot[];
 }
 
@@ -225,18 +225,19 @@ export const links = {
 };
 
 // ── Screenshots ─────────────────────────────────────────────────────
+// Cloudinary signed direct upload: get signed params, PUT the file straight
+// to Cloudinary from the browser, then confirm with the API.
 export const screenshots = {
-  requestUploadUrl: (token: string, linkId: string, contentType = "image/jpeg") =>
-    request<{ uploadUrl: string; r2Key: string }>(`/links/${linkId}/screenshot/upload-url`, {
+  requestUploadUrl: (token: string, linkId: string) =>
+    request<{ uploadUrl: string; apiKey: string; timestamp: number; signature: string; publicId: string }>(
+      `/links/${linkId}/screenshot/upload-url`,
+      { method: "POST", token }
+    ),
+  confirm: (token: string, linkId: string, publicId: string) =>
+    request<{ id: string; publicId: string; url: string | null }>(`/links/${linkId}/screenshot`, {
       method: "POST",
       token,
-      body: { contentType },
-    }),
-  confirm: (token: string, linkId: string, r2Key: string) =>
-    request<{ id: string; r2Key: string; url: string | null }>(`/links/${linkId}/screenshot`, {
-      method: "POST",
-      token,
-      body: { r2Key },
+      body: { publicId },
     }),
 };
 
@@ -255,6 +256,27 @@ export const invoices = {
     request<Invoice>(`/invoices/${invoiceId}/mark-paid`, { method: "POST", token }),
   updateGstStatus: (token: string, invoiceId: string, gstStatus: Invoice["gstStatus"]) =>
     request<Invoice>(`/invoices/${invoiceId}/gst-status`, { method: "PUT", token, body: { gstStatus } }),
+  // Binary response (not JSON) — fetched with the auth header, then handed
+  // to the browser as a download via an object URL (a plain <a href> can't
+  // carry the Authorization header the API requires).
+  downloadPdf: async (token: string, invoiceId: string, invoiceNumber?: string) => {
+    const res = await fetch(`${API_URL}/invoices/${invoiceId}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data?.error?.code ?? "UNKNOWN", data?.error?.message ?? res.statusText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${invoiceNumber ?? invoiceId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // ── Notifications ───────────────────────────────────────────────────

@@ -28,16 +28,12 @@ services:
         value: 15m
       - key: JWT_REFRESH_EXPIRES_IN
         value: 30d
-      # Cloudflare R2 (S3-compatible) — fill in after creating a bucket
-      - key: R2_ACCOUNT_ID
+      # Cloudinary — fill in from your Cloudinary dashboard
+      - key: CLOUDINARY_CLOUD_NAME
         sync: false
-      - key: R2_ACCESS_KEY_ID
+      - key: CLOUDINARY_API_KEY
         sync: false
-      - key: R2_SECRET_ACCESS_KEY
-        sync: false
-      - key: R2_BUCKET_NAME
-        value: invoice-taggify-screenshots
-      - key: R2_PUBLIC_BASE_URL
+      - key: CLOUDINARY_API_SECRET
         sync: false
       # Apify — fill in with your token
       - key: APIFY_TOKEN

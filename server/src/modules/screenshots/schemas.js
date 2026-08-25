@@ -1,9 +1,7 @@
 import { z } from "zod";
 
-export const uploadUrlRequestSchema = z.object({
-  contentType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
-});
+export const uploadUrlRequestSchema = z.object({}).default({});
 
 export const confirmUploadSchema = z.object({
-  r2Key: z.string().min(1),
+  publicId: z.string().min(1),
 });

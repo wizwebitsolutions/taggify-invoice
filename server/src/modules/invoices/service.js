@@ -110,3 +110,30 @@ export async function updateGstStatus(invoiceId, gstStatus) {
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
   return prisma.invoice.update({ where: { id: invoiceId }, data: { gstStatus } });
 }
+
+/**
+ * Fetches one invoice with everything the PDF needs (creator, and each
+ * item's link → asset/campaign). Same visibility rule as listInvoices:
+ * ADMIN/FINANCE see any invoice, everyone else only their own.
+ */
+export async function getInvoiceDetail(invoiceId, user) {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: {
+      creator: true,
+      items: { include: { link: { include: { asset: true, campaign: true } } } },
+    },
+  });
+  if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+  if (!["ADMIN", "FINANCE"].includes(user.role) && invoice.creatorId !== user.id) {
+    throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+  }
+
+  const now = Date.now();
+  const overdueDays =
+    invoice.status !== "PAID" && invoice.dueDate && invoice.dueDate.getTime() < now
+      ? Math.floor((now - invoice.dueDate.getTime()) / (24 * 60 * 60 * 1000))
+      : 0;
+
+  return { ...invoice, overdueDays };
+}

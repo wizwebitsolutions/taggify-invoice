@@ -103,7 +103,7 @@ async function main() {
         where: { linkId: link.id },
         create: {
           linkId: link.id,
-          r2Key: `screenshots/${link.id}/seed.jpg`,
+          publicId: `screenshots/${link.id}/seed`,
           approved: l.status === "SCREENSHOT_REJECTED" ? false : true,
           reviewedById: admin.id,
         },

@@ -60,6 +60,9 @@ function InvoicesContent() {
     mutationFn: ({ id, gstStatus }: { id: string; gstStatus: Invoice["gstStatus"] }) => invoicesApi.updateGstStatus(token, id, gstStatus),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
   });
+  const downloadMutation = useMutation({
+    mutationFn: (inv: Invoice) => invoicesApi.downloadPdf(token, inv.id, inv.invoiceNumber),
+  });
 
   const NEXT_GST: Record<Invoice["gstStatus"], Invoice["gstStatus"]> = {
     PENDING: "SCHEDULED",
@@ -141,8 +144,8 @@ function InvoicesContent() {
                       <div className={cn("text-xs", isOverdue ? "font-bold text-rose" : "text-text-faint")}>
                         {isPaid ? (inv.paidAt ? `Settled ${new Date(inv.paidAt).toLocaleDateString()}` : "Settled") : isOverdue ? `Overdue · ${inv.overdueDays}d` : inv.dueDate ? `Due ${new Date(inv.dueDate).toLocaleDateString()}` : "—"}
                       </div>
-                      <div onClick={(e) => e.stopPropagation()}>
-                        {canManage && !isPaid ? (
+                      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2">
+                        {canManage && !isPaid && (
                           <Button
                             size="sm"
                             className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100"
@@ -151,9 +154,15 @@ function InvoicesContent() {
                           >
                             Mark paid
                           </Button>
-                        ) : (
-                          <span className="text-[0.8438rem] text-text-muted">—</span>
                         )}
+                        <button
+                          title="Download PDF"
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted disabled:opacity-50"
+                          onClick={() => downloadMutation.mutate(inv)}
+                          disabled={downloadMutation.isPending}
+                        >
+                          <DownloadIcon className="h-3.5 w-3.5" />
+                        </button>
                       </div>
                     </div>
                   );
@@ -186,6 +195,17 @@ function InvoicesContent() {
                 <span className="text-[1.125rem] font-extrabold tabular-nums">{money(selected.amount)}</span>
               </div>
 
+              <Button
+                variant="secondary"
+                size="lg"
+                className="w-full"
+                onClick={() => downloadMutation.mutate(selected)}
+                disabled={downloadMutation.isPending}
+              >
+                <DownloadIcon className="h-3.5 w-3.5" />
+                {downloadMutation.isPending ? "Preparing PDF…" : "Download PDF"}
+              </Button>
+
               {canManage && selected.status !== "PAID" && (
                 <Button size="lg" className="w-full" onClick={() => markPaidMutation.mutate(selected.id)} disabled={markPaidMutation.isPending}>
                   {markPaidMutation.isPending ? "Marking paid…" : "Mark as paid"}
@@ -203,14 +223,16 @@ function InvoicesContent() {
                 </Button>
               )}
 
-              {(markPaidMutation.isError || gstMutation.isError) && (
+              {(markPaidMutation.isError || gstMutation.isError || downloadMutation.isError) && (
                 <ErrorNotice
                   message={
                     markPaidMutation.error instanceof ApiError
                       ? markPaidMutation.error.message
                       : gstMutation.error instanceof ApiError
                         ? gstMutation.error.message
-                        : "Something went wrong."
+                        : downloadMutation.error instanceof ApiError
+                          ? downloadMutation.error.message
+                          : "Something went wrong."
                   }
                 />
               )}

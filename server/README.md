@@ -1,6 +1,6 @@
 # invoice-taggify — backend
 
-Implementation of the backend described in `../system design.md`. Node.js + Express + Prisma/PostgreSQL, Cloudflare R2 for screenshots, Apify for Instagram scraping, node-cron for scheduled jobs (no Redis/BullMQ), manual invoice payment (no payment gateway).
+Implementation of the backend described in `../system design.md`. Node.js + Express + Prisma/PostgreSQL, Cloudinary for screenshots, Apify for Instagram scraping, node-cron for scheduled jobs (no Redis/BullMQ), manual invoice payment (no payment gateway).
 
 ## Setup
 
@@ -9,7 +9,7 @@ Implementation of the backend described in `../system design.md`. Node.js + Expr
 docker compose up -d          # local Postgres
 
 cd server
-cp .env.example .env          # fill in DATABASE_URL, JWT secrets, R2 + Apify creds
+cp .env.example .env          # fill in DATABASE_URL, JWT secrets, Cloudinary + Apify creds
 npm install
 npm run db:migrate            # creates tables from prisma/schema.prisma
 npm run db:seed               # creates an ADMIN, FINANCE and demo CREATOR + asset + rate card
@@ -32,7 +32,7 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
 - `assets` — social profile registry + rate cards
 - `campaigns` — brand campaigns
 - `links` — post link submission, status machine, timeline
-- `screenshots` — R2 pre-signed upload flow, mounted at `/links/:linkId/screenshot`
+- `screenshots` — Cloudinary signed upload flow, mounted at `/links/:linkId/screenshot`
 - `invoices` — bulk invoice generation, manual mark-paid, GST status
 - `notifications` — in-app notification rows (polled, no pub/sub)
 - `scraping` — Apify Instagram provider wrapper

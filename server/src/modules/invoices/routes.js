@@ -4,6 +4,7 @@ import { requireRole } from "../../middleware/requireRole.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { bulkInvoiceSchema, gstStatusSchema, listInvoicesQuerySchema } from "./schemas.js";
 import * as invoicesService from "./service.js";
+import { buildInvoicePdf } from "../../lib/invoicePdf.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -35,6 +36,21 @@ router.post("/:id/mark-paid", requireRole("FINANCE", "ADMIN"), async (req, res, 
 router.put("/:id/gst-status", requireRole("FINANCE", "ADMIN"), validateBody(gstStatusSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.updateGstStatus(req.params.id, req.body.gstStatus));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Downloadable PDF — same visibility rule as GET /invoices (own invoices,
+// or any invoice for ADMIN/FINANCE), enforced in getInvoiceDetail.
+router.get("/:id/pdf", async (req, res, next) => {
+  try {
+    const invoice = await invoicesService.getInvoiceDetail(req.params.id, req.user);
+    const pdf = await buildInvoicePdf(invoice);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${invoice.invoiceNumber}.pdf"`);
+    res.setHeader("Content-Length", pdf.length);
+    res.send(pdf);
   } catch (err) {
     next(err);
   }
