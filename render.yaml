@@ -1,0 +1,60 @@
+# Render Blueprint — deploys the Express/Prisma API + a managed Postgres.
+# Deploy: Render dashboard → New → Blueprint → select this repo (deepak007-star/taggify-invoice).
+# Render reads this file, provisions everything below, and asks you to fill in
+# the vars marked `sync: false` (secrets it can't generate itself).
+services:
+  - type: web
+    name: invoice-taggify-server
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    rootDir: server
+    buildCommand: npm install && npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: invoice-taggify-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+      # Cloudflare R2 (S3-compatible) — fill in after creating a bucket
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: invoice-taggify-screenshots
+      - key: R2_PUBLIC_BASE_URL
+        sync: false
+      # Apify — fill in with your token
+      - key: APIFY_TOKEN
+        sync: false
+      - key: APIFY_IG_ACTOR_ID
+        value: apify~instagram-scraper
+      - key: APIFY_REEL_ACTOR_ID
+        value: data-slayer/instagram-post-details
+      # Cron
+      - key: ENABLE_CRON
+        value: "true"
+      - key: INSTAGRAM_RESCRAPE_CRON
+        value: "0 */6 * * *"
+      - key: INVOICE_AGING_SWEEP_CRON
+        value: "0 9 * * *"
+
+databases:
+  - name: invoice-taggify-db
+    plan: free
+    region: oregon
