@@ -13,14 +13,20 @@ import { cn } from "@/lib/utils";
  * frontend.md §3.
  */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap font-ui font-bold transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap font-ui font-bold transition-[filter,box-shadow,background-color,transform] duration-200 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg active:scale-[0.98]",
   {
     variants: {
       variant: {
-        primary: "bg-accent text-accent-ink shadow-accent-glow hover:brightness-110",
-        secondary: "bg-surface-2 text-text border border-border-strong hover:bg-surface-hover",
+        // Glass: translucent accent fill (--btn-primary-bg) + backdrop
+        // blur + a layered glow (outer glow + inset top sheen, both from
+        // styles/tokens.css) that intensifies on hover.
+        primary:
+          "bg-[var(--btn-primary-bg)] backdrop-blur-glass text-accent-ink border border-[var(--btn-primary-border)] shadow-glow hover:shadow-glow-hover hover:brightness-110",
+        secondary:
+          "bg-[var(--btn-secondary-bg)] backdrop-blur-glass text-text border border-border-strong hover:bg-surface-hover",
         ghost: "bg-transparent text-text-muted border border-border hover:bg-surface hover:text-text",
-        danger: "bg-rose-soft text-rose hover:brightness-110",
+        danger:
+          "bg-[var(--btn-danger-bg)] backdrop-blur-glass text-rose border border-[var(--btn-danger-border)] shadow-glow-rose hover:shadow-glow-rose-hover hover:brightness-110",
       },
       size: {
         sm: "h-8 rounded-full px-3 text-xs [&_svg]:size-3.5",

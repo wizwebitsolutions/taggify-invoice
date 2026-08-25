@@ -55,6 +55,12 @@ function renderInvoice(doc, invoice) {
   if (invoice.status !== "PAID" && invoice.overdueDays > 0) {
     drawPill(doc, right - 90, pillY + 44, 90, `Overdue ${invoice.overdueDays}d`, "#e11d48");
   }
+  if (invoice.status === "REJECTED" && invoice.remarks) {
+    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#e11d48").text(`Rejected: ${invoice.remarks}`, right - 200, pillY + 44, {
+      width: 200,
+      align: "right",
+    });
+  }
 
   doc.moveTo(left, 135).lineTo(right, 135).strokeColor("#e5e5e5").lineWidth(1).stroke();
 
@@ -82,8 +88,26 @@ function renderInvoice(doc, invoice) {
       width: contentWidth / 2,
     });
 
+  // ── Billing profile (PAN/GSTIN/bank) ────────────────────────────
+  // Only rendered once the creator has an admin-approved BillingProfile
+  // (creator.wldd.in's "Bill To" block) — omitted entirely otherwise so an
+  // unregistered creator's invoice doesn't show blank tax fields.
+  let billingY = infoY + 44;
+  if (invoice.billingProfile) {
+    const bp = invoice.billingProfile;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#888888").text("BILLING PROFILE", left, billingY);
+    doc.font("Helvetica").fontSize(9).fillColor("#555555").text(
+      `${bp.name}  ·  PAN ${bp.pan}${bp.gstin ? `  ·  GSTIN ${bp.gstin}` : ""}`,
+      left,
+      billingY + 13,
+      { width: contentWidth }
+    );
+    doc.text(`A/C ${bp.bankAccountNumber}  ·  IFSC ${bp.ifscCode}`, left, billingY + 26);
+    billingY += 44;
+  }
+
   // ── Line items table ───────────────────────────────────────────
-  let y = infoY + 60;
+  let y = Math.max(infoY + 60, billingY);
   const cols = [
     { key: "page", label: "Page / Format", width: contentWidth * 0.32 },
     { key: "campaign", label: "Campaign", width: contentWidth * 0.28 },
@@ -171,7 +195,10 @@ function drawPill(doc, x, y, width, label, color) {
 }
 
 function statusColor(status) {
-  return { DRAFT: "#888888", RAISED: "#2563eb", APPROVED: "#7c3aed", PAID: "#16a34a" }[status] ?? "#555555";
+  return (
+    { DRAFT: "#888888", RAISED: "#2563eb", APPROVED: "#7c3aed", REJECTED: "#e11d48", PAID: "#16a34a" }[status] ??
+    "#555555"
+  );
 }
 function gstColor(status) {
   return { PENDING: "#d97706", SCHEDULED: "#2563eb", COMPLETED: "#16a34a" }[status] ?? "#555555";

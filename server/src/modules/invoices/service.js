@@ -1,6 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { notify } from "../notifications/service.js";
+import { getApprovedForUser } from "../billing/service.js";
 import { nanoid } from "nanoid";
 
 /**
@@ -63,6 +64,7 @@ export async function listInvoices(user, filters) {
   const where = {};
   if (!["ADMIN", "FINANCE"].includes(user.role)) where.creatorId = user.id;
   if (filters.status) where.status = filters.status;
+  if (filters.search) where.invoiceNumber = { contains: filters.search, mode: "insensitive" };
 
   const [items, total] = await prisma.$transaction([
     prisma.invoice.findMany({
@@ -98,7 +100,7 @@ export async function markPaid(invoiceId, financeUser) {
 
   const updated = await prisma.invoice.update({
     where: { id: invoiceId },
-    data: { status: "PAID", paidAt: new Date() },
+    data: { status: "PAID", paymentStatus: "COMPLETED", paidAt: new Date() },
   });
 
   await notify(invoice.creatorId, "invoice_paid", { invoiceId, markedById: financeUser.id });
@@ -109,6 +111,54 @@ export async function updateGstStatus(invoiceId, gstStatus) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
   return prisma.invoice.update({ where: { id: invoiceId }, data: { gstStatus } });
+}
+
+export async function updatePaymentStatus(invoiceId, paymentStatus) {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+  return prisma.invoice.update({ where: { id: invoiceId }, data: { paymentStatus } });
+}
+
+/**
+ * Reject an invoice with a reason (creator.wldd.in shows this happening
+ * regularly — "duplicate links", "cost difference", "date mismatch").
+ * The links that were rolled into it go back to INSIGHTS_APPROVED so
+ * they're eligible to be re-invoiced once the issue is fixed.
+ */
+export async function rejectInvoice(invoiceId, admin, { remarks }) {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { items: true } });
+  if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+  if (invoice.status === "PAID") {
+    throw new ApiError(409, "ALREADY_PAID", "A paid invoice can't be rejected");
+  }
+  if (invoice.status === "REJECTED") {
+    throw new ApiError(409, "ALREADY_REJECTED", "Invoice is already rejected");
+  }
+
+  const linkIds = invoice.items.map((i) => i.linkId);
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.invoice.update({
+      where: { id: invoiceId },
+      data: { status: "REJECTED", paymentStatus: "CANCELLED", remarks },
+    });
+    await tx.link.updateMany({ where: { id: { in: linkIds } }, data: { status: "INSIGHTS_APPROVED" } });
+    for (const linkId of linkIds) {
+      await tx.linkStatusEvent.create({
+        data: { linkId, status: "INSIGHTS_APPROVED", actedById: admin.id, note: `Invoice rejected: ${remarks}` },
+      });
+    }
+    return result;
+  });
+
+  await notify(invoice.creatorId, "invoice_rejected", { invoiceId, remarks });
+  return updated;
+}
+
+/** Plain list of post URLs on an invoice — creator.wldd.in's "Download Links" action, separate from the PDF. */
+export async function getInvoiceLinksList(invoiceId, user) {
+  const invoice = await getInvoiceDetail(invoiceId, user);
+  return invoice.items.map((item) => item.link?.url).filter(Boolean);
 }
 
 /**
@@ -135,5 +185,9 @@ export async function getInvoiceDetail(invoiceId, user) {
       ? Math.floor((now - invoice.dueDate.getTime()) / (24 * 60 * 60 * 1000))
       : 0;
 
-  return { ...invoice, overdueDays };
+  // Approved billing profile (PAN/GSTIN/bank details) powers the PDF's "Bill To"
+  // block, if the creator has registered and been approved for one.
+  const billingProfile = await getApprovedForUser(invoice.creatorId);
+
+  return { ...invoice, overdueDays, billingProfile };
 }

@@ -11,6 +11,7 @@ import campaignsRoutes from "./modules/campaigns/routes.js";
 import linksRoutes from "./modules/links/routes.js";
 import screenshotsRoutes from "./modules/screenshots/routes.js";
 import invoicesRoutes from "./modules/invoices/routes.js";
+import billingRoutes from "./modules/billing/routes.js";
 import notificationsRoutes from "./modules/notifications/routes.js";
 import adminRoutes from "./modules/admin/routes.js";
 import { startCronJobs } from "./modules/jobs/index.js";
@@ -33,6 +34,7 @@ app.use("/links", linksRoutes);
 // nested under /links/:linkId/screenshot — issuing upload URLs and confirming uploads
 app.use("/links/:linkId/screenshot", screenshotsRoutes);
 app.use("/invoices", invoicesRoutes);
+app.use("/billing-profiles", billingRoutes);
 app.use("/notifications", notificationsRoutes);
 app.use("/admin", adminRoutes);
 

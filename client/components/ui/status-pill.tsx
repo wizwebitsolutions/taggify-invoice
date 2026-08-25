@@ -38,9 +38,10 @@ export type LinkStatus =
   | "INSIGHTS_APPROVED"
   | "INVOICED";
 
-export type InvoiceStatus = "DRAFT" | "RAISED" | "APPROVED" | "PAID";
+export type InvoiceStatus = "DRAFT" | "RAISED" | "APPROVED" | "REJECTED" | "PAID";
 export type GstStatus = "PENDING" | "SCHEDULED" | "COMPLETED";
-export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | "OVERDUE";
+export type PaymentStatus = "PENDING" | "COMPLETED" | "CANCELLED";
+export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | PaymentStatus | "OVERDUE";
 
 const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone }> = {
   SUBMITTED: { label: "Submitted", tone: "slate" },
@@ -53,10 +54,12 @@ const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone }> = {
   DRAFT: { label: "Draft", tone: "slate" },
   RAISED: { label: "Raised", tone: "blue" },
   APPROVED: { label: "Approved", tone: "emerald" },
+  REJECTED: { label: "Rejected", tone: "rose" },
   PAID: { label: "Paid", tone: "emerald" },
   PENDING: { label: "Pending", tone: "slate" },
   SCHEDULED: { label: "Scheduled", tone: "gold" },
   COMPLETED: { label: "Completed", tone: "emerald" },
+  CANCELLED: { label: "Cancelled", tone: "rose" },
   OVERDUE: { label: "Overdue", tone: "rose" },
 };
 

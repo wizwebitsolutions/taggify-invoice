@@ -7,6 +7,11 @@ export async function createLink(user, { campaignId, assetId, url, format, custo
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
   if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
 
+  return createOneLink(user, asset, { campaignId, assetId, url, format, customAmount });
+}
+
+/** Shared by createLink and bulkCreateLink — asset is passed in so the bulk path fetches it once, not per URL. */
+async function createOneLink(user, asset, { campaignId, assetId, url, format, customAmount }) {
   // Non-admin callers get the asset's rate-card price; only an admin caller
   // may pass customAmount to override it for a negotiated deal.
   let cost;
@@ -28,6 +33,38 @@ export async function createLink(user, { campaignId, assetId, url, format, custo
 
   await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: user.id } });
   return link;
+}
+
+/**
+ * Bulk link upload (creator.wldd.in's "Upload Links" modal): one
+ * campaign/asset/format, many URLs submitted together. Each URL is
+ * created independently — one bad/duplicate URL doesn't fail the batch,
+ * it's just reported back alongside the ones that succeeded.
+ */
+export async function bulkCreateLink(user, { campaignId, assetId, format, urls }) {
+  const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
+  if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
+
+  // De-dupe the pasted list itself (creators commonly paste the same link twice).
+  const uniqueUrls = [...new Set(urls.map((u) => u.trim()).filter(Boolean))];
+
+  const created = [];
+  const skipped = [];
+  for (const url of uniqueUrls) {
+    try {
+      const existing = await prisma.link.findFirst({ where: { url, assetId } });
+      if (existing) {
+        skipped.push({ url, reason: "Already submitted for this page" });
+        continue;
+      }
+      const link = await createOneLink(user, asset, { campaignId, assetId, url, format });
+      created.push(link);
+    } catch (err) {
+      skipped.push({ url, reason: err instanceof ApiError ? err.message : "Couldn't submit this link" });
+    }
+  }
+
+  return { created, skipped, totalSubmitted: uniqueUrls.length };
 }
 
 export async function listLinks(user, filters) {

@@ -22,3 +22,10 @@ export async function markRead(userId, notificationId) {
     data: { readAt: new Date() },
   });
 }
+
+export async function markAllRead(userId) {
+  return prisma.notification.updateMany({
+    where: { userId, readAt: null },
+    data: { readAt: new Date() },
+  });
+}

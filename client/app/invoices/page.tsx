@@ -8,7 +8,8 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { StatusPill } from "@/components/ui/status-pill";
-import { DownloadIcon } from "@/components/icons";
+import { Field, TextField } from "@/components/ui/form-field";
+import { DownloadIcon, SearchIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { useAuth } from "@/lib/auth-context";
 import { invoices as invoicesApi, ApiError, type Invoice } from "@/lib/api-client";
@@ -27,11 +28,13 @@ function InvoicesContent() {
   const { user, accessToken, logout } = useAuth();
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
   const token = accessToken!;
 
   const invoicesQuery = useQuery({
-    queryKey: ["invoices"],
-    queryFn: () => invoicesApi.list(token, { pageSize: 100 }),
+    queryKey: ["invoices", search],
+    queryFn: () => invoicesApi.list(token, { pageSize: 100, search: search || undefined }),
   });
 
   const items = invoicesQuery.data?.items ?? [];
@@ -62,6 +65,16 @@ function InvoicesContent() {
   });
   const downloadMutation = useMutation({
     mutationFn: (inv: Invoice) => invoicesApi.downloadPdf(token, inv.id, inv.invoiceNumber),
+  });
+  const downloadLinksMutation = useMutation({
+    mutationFn: (inv: Invoice) => invoicesApi.downloadLinks(token, inv.id, inv.invoiceNumber),
+  });
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, remarks }: { id: string; remarks: string }) => invoicesApi.reject(token, id, remarks),
+    onSuccess: () => {
+      setRejectingId(null);
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+    },
   });
 
   const NEXT_GST: Record<Invoice["gstStatus"], Invoice["gstStatus"]> = {
@@ -95,6 +108,15 @@ function InvoicesContent() {
         </div>
 
         <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-64 items-center gap-2 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-faint">
+            <SearchIcon className="h-3.5 w-3.5 shrink-0" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search invoice number…"
+              className="w-full bg-transparent text-text placeholder:text-text-faint focus:outline-none"
+            />
+          </div>
           <div className="flex-1" />
           <Button variant="secondary" size="sm" className="rounded-full">
             <DownloadIcon className="h-3.5 w-3.5" />
@@ -104,11 +126,12 @@ function InvoicesContent() {
 
         <div className="flex min-h-0 flex-1 gap-5">
           <div className="flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card">
-            <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)] gap-3 border-b border-border px-5 py-3.5">
+            <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.1fr)] gap-3 border-b border-border px-5 py-3.5">
               <Th>Invoice</Th>
               <Th>Creator</Th>
               <Th>Amount</Th>
               <Th>Status</Th>
+              <Th>Payment</Th>
               <Th>GST status</Th>
               <Th>Due</Th>
               <Th>Action</Th>
@@ -128,15 +151,23 @@ function InvoicesContent() {
                       key={inv.id}
                       onClick={() => setSelectedId(inv.id)}
                       className={cn(
-                        "grid cursor-pointer grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)] items-center gap-3 border-b border-border px-5 py-4 hover:bg-surface-2",
+                        "grid cursor-pointer grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.1fr)] items-center gap-3 border-b border-border px-5 py-4 hover:bg-surface-2",
                         (inv.id === selectedId || (!selectedId && inv.id === items[0]?.id)) && "bg-surface-2"
                       )}
                     >
                       <div className="truncate font-mono text-[0.8125rem] text-text-muted">{inv.invoiceNumber}</div>
                       <div className="truncate text-[0.8438rem] text-text-muted">Creator</div>
                       <div className="text-[0.9375rem] font-bold tabular-nums">{money(inv.amount)}</div>
-                      <div>
+                      <div className="flex flex-col gap-1">
                         <StatusPill status={inv.status} />
+                        {inv.status === "REJECTED" && inv.remarks && (
+                          <span className="truncate text-[0.6875rem] text-rose" title={inv.remarks}>
+                            {inv.remarks}
+                          </span>
+                        )}
+                      </div>
+                      <div>
+                        <StatusPill status={inv.paymentStatus} />
                       </div>
                       <div>
                         <StatusPill status={inv.gstStatus} />
@@ -144,8 +175,8 @@ function InvoicesContent() {
                       <div className={cn("text-xs", isOverdue ? "font-bold text-rose" : "text-text-faint")}>
                         {isPaid ? (inv.paidAt ? `Settled ${new Date(inv.paidAt).toLocaleDateString()}` : "Settled") : isOverdue ? `Overdue · ${inv.overdueDays}d` : inv.dueDate ? `Due ${new Date(inv.dueDate).toLocaleDateString()}` : "—"}
                       </div>
-                      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2">
-                        {canManage && !isPaid && (
+                      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5">
+                        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
                           <Button
                             size="sm"
                             className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100"
@@ -155,6 +186,23 @@ function InvoicesContent() {
                             Mark paid
                           </Button>
                         )}
+                        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
+                          <button
+                            title="Reject invoice"
+                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-rose-soft hover:text-rose"
+                            onClick={() => setRejectingId(inv.id)}
+                          >
+                            ✕
+                          </button>
+                        )}
+                        <button
+                          title="Download links"
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted disabled:opacity-50"
+                          onClick={() => downloadLinksMutation.mutate(inv)}
+                          disabled={downloadLinksMutation.isPending}
+                        >
+                          <SearchIcon className="h-3.5 w-3.5" />
+                        </button>
                         <button
                           title="Download PDF"
                           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted disabled:opacity-50"
@@ -179,8 +227,12 @@ function InvoicesContent() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <StatusPill status={selected.status} />
+                <StatusPill status={selected.paymentStatus} />
                 <StatusPill status={selected.gstStatus} />
               </div>
+              {selected.status === "REJECTED" && selected.remarks && (
+                <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] text-rose">{selected.remarks}</p>
+              )}
               <div className="h-px bg-border" />
               <div className="flex flex-col gap-3">
                 {(selected.items ?? []).slice(0, 4).map((item) => (
@@ -205,10 +257,25 @@ function InvoicesContent() {
                 <DownloadIcon className="h-3.5 w-3.5" />
                 {downloadMutation.isPending ? "Preparing PDF…" : "Download PDF"}
               </Button>
+              <Button
+                variant="secondary"
+                size="lg"
+                className="w-full"
+                onClick={() => downloadLinksMutation.mutate(selected)}
+                disabled={downloadLinksMutation.isPending}
+              >
+                <SearchIcon className="h-3.5 w-3.5" />
+                {downloadLinksMutation.isPending ? "Preparing…" : "Download links"}
+              </Button>
 
-              {canManage && selected.status !== "PAID" && (
+              {canManage && selected.status !== "PAID" && selected.status !== "REJECTED" && (
                 <Button size="lg" className="w-full" onClick={() => markPaidMutation.mutate(selected.id)} disabled={markPaidMutation.isPending}>
                   {markPaidMutation.isPending ? "Marking paid…" : "Mark as paid"}
+                </Button>
+              )}
+              {canManage && selected.status !== "PAID" && selected.status !== "REJECTED" && (
+                <Button variant="danger" size="lg" className="w-full" onClick={() => setRejectingId(selected.id)}>
+                  Reject invoice
                 </Button>
               )}
               {canManage && selected.gstStatus !== "COMPLETED" && (
@@ -223,7 +290,7 @@ function InvoicesContent() {
                 </Button>
               )}
 
-              {(markPaidMutation.isError || gstMutation.isError || downloadMutation.isError) && (
+              {(markPaidMutation.isError || gstMutation.isError || downloadMutation.isError || downloadLinksMutation.isError) && (
                 <ErrorNotice
                   message={
                     markPaidMutation.error instanceof ApiError
@@ -232,7 +299,9 @@ function InvoicesContent() {
                         ? gstMutation.error.message
                         : downloadMutation.error instanceof ApiError
                           ? downloadMutation.error.message
-                          : "Something went wrong."
+                          : downloadLinksMutation.error instanceof ApiError
+                            ? downloadLinksMutation.error.message
+                            : "Something went wrong."
                   }
                 />
               )}
@@ -240,7 +309,58 @@ function InvoicesContent() {
           )}
         </div>
       </div>
+
+      {rejectingId && (
+        <RejectInvoiceModal
+          onClose={() => setRejectingId(null)}
+          onConfirm={(remarks) => rejectMutation.mutate({ id: rejectingId, remarks })}
+          isPending={rejectMutation.isPending}
+          error={rejectMutation.error instanceof ApiError ? rejectMutation.error.message : rejectMutation.isError ? "Couldn't reject this invoice." : undefined}
+        />
+      )}
     </AppShell>
+  );
+}
+
+function RejectInvoiceModal({
+  onClose,
+  onConfirm,
+  isPending,
+  error,
+}: {
+  onClose: () => void;
+  onConfirm: (remarks: string) => void;
+  isPending: boolean;
+  error?: string;
+}) {
+  const [remarks, setRemarks] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          onConfirm(remarks);
+        }}
+        className="flex w-full max-w-[420px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+      >
+        <h2 className="text-lg font-bold">Reject invoice</h2>
+        <p className="text-[0.8125rem] text-text-faint">Its links go back to Insights approved, eligible to be re-invoiced once the issue is fixed.</p>
+        <Field label="Reason">
+          <TextField required value={remarks} onChange={setRemarks} placeholder="e.g. duplicate links, cost difference…" />
+        </Field>
+        {error && <ErrorNotice message={error} />}
+        <div className="flex gap-2.5">
+          <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="danger" className="flex-1" disabled={isPending || !remarks.trim()}>
+            {isPending ? "Rejecting…" : "Reject invoice"}
+          </Button>
+        </div>
+      </form>
+    </div>
   );
 }
 

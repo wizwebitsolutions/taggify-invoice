@@ -97,7 +97,13 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
 
       <div className="flex-1" />
 
-      <div className="flex items-center gap-2.5 rounded-xl border border-border p-2.5">
+      <Link
+        href="/profile"
+        className={cn(
+          "flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors hover:bg-surface",
+          active === "profile" ? "border-accent" : "border-border"
+        )}
+      >
         <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[0.8125rem] font-bold", AVATAR_TONE[user.tone ?? "emerald"])}>
           {user.initials}
         </div>
@@ -106,7 +112,7 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
           <div className="text-xs text-text-faint">{user.role}</div>
         </div>
         <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
-      </div>
+      </Link>
     </aside>
   );
 }

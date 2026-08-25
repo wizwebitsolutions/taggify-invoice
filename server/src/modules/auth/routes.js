@@ -1,7 +1,8 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { validateBody } from "../../middleware/validate.js";
-import { signupSchema, loginSchema, refreshSchema } from "./schemas.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
+import { signupSchema, loginSchema, refreshSchema, changePasswordSchema } from "./schemas.js";
 import * as authService from "./service.js";
 
 const router = Router();
@@ -37,6 +38,15 @@ router.post("/refresh", validateBody(refreshSchema), async (req, res, next) => {
   try {
     const result = await authService.refresh(req.body);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/change-password", requireAuth, validateBody(changePasswordSchema), async (req, res, next) => {
+  try {
+    await authService.changePassword(req.user.id, req.body);
+    res.status(204).send();
   } catch (err) {
     next(err);
   }

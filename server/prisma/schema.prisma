@@ -28,6 +28,7 @@ enum InvoiceStatus {
   DRAFT
   RAISED
   APPROVED
+  REJECTED
   PAID
 }
 
@@ -37,12 +38,24 @@ enum GstStatus {
   COMPLETED
 }
 
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id               String   @id @default(cuid())
   phoneNumber      String   @unique
   passwordHash     String
   role             Role
   name             String?
+  email            String?  @unique
+  secondaryPhone   String?
+  addressLine1     String?
+  addressLine2     String?
+  state            String?
+  pincode          String?
   whatsappVerified Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -54,6 +67,28 @@ model User {
   notifications    Notification[]
   submittedLinks   Link[]           @relation("SubmittedByUser")
   statusEvents     LinkStatusEvent[]
+  billingProfiles  BillingProfile[]
+}
+
+// Payout/tax identity a creator registers to receive invoice payments —
+// separate from Invoice itself since one user can hold several (e.g. one
+// per PAN/entity), and it needs its own admin approval gate.
+model BillingProfile {
+  id                String   @id @default(cuid())
+  userId            String
+  pan               String   @unique
+  name              String // name on the PAN
+  gstin             String?
+  msme              String?
+  bankAccountNumber String
+  ifscCode          String
+  approvalStatus    String   @default("pending") // pending | approved | rejected
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model TeamMembership {
@@ -112,11 +147,12 @@ model RateCard {
 }
 
 model Campaign {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   brandName String
   title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  deadline  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   links Link[]
 }
@@ -210,7 +246,9 @@ model Invoice {
   invoiceNumber String        @unique
   amount        Decimal       @db.Decimal(12, 2)
   status        InvoiceStatus @default(DRAFT)
+  paymentStatus PaymentStatus @default(PENDING)
   gstStatus     GstStatus     @default(PENDING)
+  remarks       String? // e.g. rejection reason
   dueDate       DateTime?
   paidAt        DateTime?
   createdAt     DateTime      @default(now())

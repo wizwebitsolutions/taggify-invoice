@@ -89,22 +89,36 @@ function AssetsContent() {
 function AssetCard({ asset, token, editable }: { asset: Asset; token: string; editable: boolean }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
+  // Seed with the standard formats plus any custom ones already on this
+  // asset's rate card (WLDD's rate cards carry free-form names like
+  // "VOXPOP" or "Type 4" — formats aren't a fixed enum server-side).
+  const initialFormats = [...new Set([...FORMATS, ...asset.rateCards.map((rc) => rc.format)])];
+  const [formats, setFormats] = useState<string[]>(initialFormats);
   const [amounts, setAmounts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(FORMATS.map((f) => [f, asset.rateCards.find((rc) => rc.format === f)?.amount ?? ""]))
+    Object.fromEntries(initialFormats.map((f) => [f, asset.rateCards.find((rc) => rc.format === f)?.amount ?? ""]))
   );
+  const [newFormat, setNewFormat] = useState("");
 
   const saveMutation = useMutation({
     mutationFn: () =>
       assetsApi.updateRateCard(
         token,
         asset.id,
-        FORMATS.filter((f) => amounts[f]).map((f) => ({ format: f, amount: Number(amounts[f]) }))
+        formats.filter((f) => amounts[f]).map((f) => ({ format: f, amount: Number(amounts[f]) }))
       ),
     onSuccess: () => {
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["assets"] });
     },
   });
+
+  function addCustomFormat() {
+    const f = newFormat.trim();
+    if (!f || formats.includes(f)) return;
+    setFormats((prev) => [...prev, f]);
+    setAmounts((prev) => ({ ...prev, [f]: "" }));
+    setNewFormat("");
+  }
 
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card">
@@ -141,7 +155,7 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
 
         {editing ? (
           <div className="flex flex-col gap-2.5">
-            {FORMATS.map((f) => (
+            {formats.map((f) => (
               <div key={f} className="flex items-center justify-between gap-3">
                 <span className="text-[0.8125rem] capitalize text-text-muted">{f}</span>
                 <input
@@ -154,6 +168,27 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
                 />
               </div>
             ))}
+            <div className="flex items-center gap-2 border-t border-border pt-2.5">
+              <input
+                value={newFormat}
+                onChange={(e) => setNewFormat(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addCustomFormat();
+                  }
+                }}
+                placeholder="Add custom format (e.g. VOXPOP)"
+                className="h-8 flex-1 rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              />
+              <button
+                type="button"
+                onClick={addCustomFormat}
+                className="rounded-md border border-border-strong px-2.5 py-1 text-[0.75rem] font-semibold text-text-muted hover:bg-surface-hover"
+              >
+                Add
+              </button>
+            </div>
             {saveMutation.isError && (
               <ErrorNotice message={saveMutation.error instanceof ApiError ? saveMutation.error.message : "Couldn't save."} />
             )}

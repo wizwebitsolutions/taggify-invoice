@@ -5,8 +5,10 @@ export const createAssetSchema = z.object({
   handle: z.string().min(1).max(60),
 });
 
+// Free-form format name (e.g. "VOXPOP", "Type 4") — not a fixed enum, so
+// rate cards can carry custom formats the way creator.wldd.in's do.
 export const rateCardEntrySchema = z.object({
-  format: z.enum(["reel", "story", "carousel", "collaboration", "video"]),
+  format: z.string().min(1).max(40),
   amount: z.number().positive(),
 });
 

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
-import { createLinkSchema, listLinksQuerySchema, reviewScreenshotSchema } from "./schemas.js";
+import { createLinkSchema, bulkCreateLinkSchema, listLinksQuerySchema, reviewScreenshotSchema } from "./schemas.js";
 import * as linksService from "./service.js";
 
 const router = Router();
@@ -11,6 +11,14 @@ router.use(requireAuth);
 router.post("/", requireRole("CREATOR", "TEAM_MEMBER"), validateBody(createLinkSchema), async (req, res, next) => {
   try {
     res.status(201).json(await linksService.createLink(req.user, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/bulk", requireRole("CREATOR", "TEAM_MEMBER"), validateBody(bulkCreateLinkSchema), async (req, res, next) => {
+  try {
+    res.status(201).json(await linksService.bulkCreateLink(req.user, req.body));
   } catch (err) {
     next(err);
   }

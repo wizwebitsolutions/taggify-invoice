@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createCampaignSchema } from "./schemas.js";
+import { createCampaignSchema, updateCampaignSchema } from "./schemas.js";
 import * as campaignsService from "./service.js";
 
 const router = Router();
@@ -19,6 +19,14 @@ router.get("/", async (req, res, next) => {
 router.post("/", requireRole("ADMIN"), validateBody(createCampaignSchema), async (req, res, next) => {
   try {
     res.status(201).json(await campaignsService.createCampaign(req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/:id", requireRole("ADMIN"), validateBody(updateCampaignSchema), async (req, res, next) => {
+  try {
+    res.json(await campaignsService.updateCampaign(req.params.id, req.body));
   } catch (err) {
     next(err);
   }

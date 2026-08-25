@@ -71,7 +71,14 @@ function CampaignsContent() {
                   <p className="text-xs font-semibold text-text-faint">{c.brandName}</p>
                   <p className="mt-1 text-[0.9375rem] font-bold leading-snug">{c.title}</p>
                 </div>
-                <p className="text-xs text-text-faint">Created {new Date(c.createdAt).toLocaleDateString()}</p>
+                <div className="flex items-center justify-between text-xs text-text-faint">
+                  <span>Created {new Date(c.createdAt).toLocaleDateString()}</span>
+                  {c.deadline && (
+                    <span className={new Date(c.deadline) < new Date() ? "font-semibold text-rose" : "font-semibold text-text-muted"}>
+                      Deadline {new Date(c.deadline).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -95,9 +102,10 @@ function CampaignsContent() {
 function NewCampaignModal({ token, onClose, onCreated }: { token: string; onClose: () => void; onCreated: () => void }) {
   const [brandName, setBrandName] = useState("");
   const [title, setTitle] = useState("");
+  const [deadline, setDeadline] = useState("");
 
   const createMutation = useMutation({
-    mutationFn: () => campaignsApi.create(token, brandName, title),
+    mutationFn: () => campaignsApi.create(token, brandName, title, deadline || undefined),
     onSuccess: onCreated,
   });
 
@@ -117,6 +125,9 @@ function NewCampaignModal({ token, onClose, onCreated }: { token: string; onClos
         </Field>
         <Field label="Campaign title">
           <TextField required value={title} onChange={setTitle} placeholder="e.g. Solmate Coffee × Launch Week" />
+        </Field>
+        <Field label="Deadline (optional)">
+          <TextField type="date" value={deadline} onChange={setDeadline} />
         </Field>
         {createMutation.isError && (
           <ErrorNotice message={createMutation.error instanceof ApiError ? createMutation.error.message : "Couldn't create the campaign."} />

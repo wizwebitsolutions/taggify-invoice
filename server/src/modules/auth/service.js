@@ -77,6 +77,28 @@ export async function refresh({ refreshToken }) {
   return issueTokenPair(user);
 }
 
+/**
+ * Self-service password change (per-request context: creator.wldd.in has
+ * this even though our default onboarding is admin-generated passwords —
+ * see system design.md §2.4). Revokes all existing refresh tokens so other
+ * sessions are signed out once the password changes.
+ */
+export async function changePassword(userId, { currentPassword, newPassword }) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+
+  const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!valid) {
+    throw new ApiError(401, "INVALID_CREDENTIALS", "Current password is incorrect");
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
+    prisma.refreshToken.updateMany({ where: { userId, revoked: false }, data: { revoked: true } }),
+  ]);
+}
+
 export async function logout({ refreshToken }) {
   const tokenHash = hashToken(refreshToken);
   await prisma.refreshToken.updateMany({

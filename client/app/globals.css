@@ -9,6 +9,20 @@ body {
   color: var(--text);
 }
 
+/* Applied for ~260ms by lib/theme-context.tsx while a theme swap is in
+   flight, so surfaces/borders/text cross-fade instead of flashing. Scoped
+   to this class (not a blanket `*` rule) so it doesn't fight the
+   `transition-colors` hover states components already carry the rest of
+   the time. */
+.theme-transition,
+.theme-transition * {
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease,
+    box-shadow 200ms ease !important;
+}
+
 /* Chrome/Safari paint autofilled inputs with a light background by
    default, which breaks the dark theme — override it to match. */
 input:-webkit-autofill,

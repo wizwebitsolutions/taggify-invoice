@@ -42,6 +42,13 @@ export default {
       boxShadow: {
         card: "var(--shadow-card)",
         "accent-glow": "var(--shadow-accent-glow)",
+        glow: "var(--shadow-glow)",
+        "glow-hover": "var(--shadow-glow-hover)",
+        "glow-rose": "var(--shadow-glow-rose)",
+        "glow-rose-hover": "var(--shadow-glow-rose-hover)",
+      },
+      backdropBlur: {
+        glass: "var(--glass-blur)",
       },
       fontFamily: {
         ui: ["var(--font-ui)"],

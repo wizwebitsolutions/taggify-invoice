@@ -22,4 +22,13 @@ router.post("/:id/read", async (req, res, next) => {
   }
 });
 
+router.post("/read-all", async (req, res, next) => {
+  try {
+    await notificationsService.markAllRead(req.user.id);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

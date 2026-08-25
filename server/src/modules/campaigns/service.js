@@ -9,6 +9,10 @@ export async function listCampaigns({ search } = {}) {
   });
 }
 
-export async function createCampaign({ brandName, title }) {
-  return prisma.campaign.create({ data: { brandName, title } });
+export async function createCampaign({ brandName, title, deadline }) {
+  return prisma.campaign.create({ data: { brandName, title, deadline } });
+}
+
+export async function updateCampaign(id, data) {
+  return prisma.campaign.update({ where: { id }, data });
 }
