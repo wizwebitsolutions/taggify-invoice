@@ -50,7 +50,7 @@ router.post("/:id/review-screenshot", requireRole("ADMIN"), validateBody(reviewS
 
 router.post("/:id/refresh-metrics", requireRole("ADMIN"), async (req, res, next) => {
   try {
-    res.json(await linksService.refreshMetricsNow(req.params.id));
+    res.json(await linksService.refreshMetricsNow(req.params.id, req.user));
   } catch (err) {
     next(err);
   }

@@ -352,6 +352,10 @@ function LinkDetailPanel({
     mutationFn: () => linksApi.approveInsights(token, link.id),
     onSuccess: onChanged,
   });
+  const refreshMetricsMutation = useMutation({
+    mutationFn: () => linksApi.refreshMetrics(token, link.id),
+    onSuccess: onChanged,
+  });
 
   const uploadScreenshotMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -378,8 +382,10 @@ function LinkDetailPanel({
   });
 
   const steps: TimelineStep[] = (timelineQuery.data ?? []).map((event, i, arr) => ({
+    id: event.id,
     title: STATUS_LABEL[event.status] ?? event.status,
     time: new Date(event.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+    note: event.note,
     state: i === arr.length - 1 ? "current" : "done",
   }));
 
@@ -436,11 +442,31 @@ function LinkDetailPanel({
           </Button>
         </div>
       )}
-      {isAdmin && link.status === "INSIGHTS_PENDING" && (
-        <div className="border-t border-border pt-4">
-          <Button size="sm" className="w-full" onClick={() => approveInsightsMutation.mutate()} disabled={approveInsightsMutation.isPending}>
-            Approve insights
+      {isAdmin && (link.status === "SCREENSHOT_APPROVED" || link.status === "INSIGHTS_PENDING") && (
+        <div className="flex flex-col gap-2 border-t border-border pt-4">
+          {link.status === "INSIGHTS_PENDING" && (
+            <Button size="sm" className="w-full" onClick={() => approveInsightsMutation.mutate()} disabled={approveInsightsMutation.isPending}>
+              Approve insights
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            className="w-full"
+            onClick={() => refreshMetricsMutation.mutate()}
+            disabled={refreshMetricsMutation.isPending}
+          >
+            {refreshMetricsMutation.isPending ? "Refreshing…" : "Refresh metrics"}
           </Button>
+          {refreshMetricsMutation.data && !refreshMetricsMutation.data.ok && (
+            <p className="text-[0.8125rem] text-rose">No data found for this URL — it may be dead, private, or invalid.</p>
+          )}
+          {refreshMetricsMutation.data?.ok && <p className="text-[0.8125rem] font-semibold text-accent">Metrics updated.</p>}
+          {refreshMetricsMutation.isError && (
+            <ErrorNotice
+              message={refreshMetricsMutation.error instanceof ApiError ? refreshMetricsMutation.error.message : "Couldn't refresh metrics."}
+            />
+          )}
         </div>
       )}
     </div>

@@ -4,8 +4,10 @@ import { cn } from "@/lib/utils";
 export type TimelineStepState = "done" | "current" | "pending";
 
 export interface TimelineStep {
+  id?: string;
   title: string;
   time?: string;
+  note?: string | null;
   state: TimelineStepState;
 }
 
@@ -19,7 +21,7 @@ export function StatusTimeline({ steps }: { steps: TimelineStep[] }) {
       {steps.map((step, i) => {
         const isLast = i === steps.length - 1;
         return (
-          <div key={step.title} className="flex gap-3.5">
+          <div key={step.id ?? `${step.title}-${i}`} className="flex gap-3.5">
             <div className="flex flex-col items-center">
               <div
                 className={cn(
@@ -39,6 +41,11 @@ export function StatusTimeline({ steps }: { steps: TimelineStep[] }) {
                 {step.title}
               </div>
               {step.time && <div className="mt-0.5 text-xs text-text-faint">{step.time}</div>}
+              {step.note && (
+                <div className={cn("mt-1 text-xs", /fail|reject|error|broken/i.test(step.note) ? "text-rose" : "text-text-faint")}>
+                  {step.note}
+                </div>
+              )}
             </div>
           </div>
         );

@@ -159,6 +159,21 @@ export async function approveInsights(linkId, admin) {
   });
 }
 
-export async function refreshMetricsNow(linkId) {
-  return refreshLinkMetrics(linkId);
+/**
+ * Manual "Refresh metrics" (admin-triggered retry — the cron does this
+ * automatically every few hours, but a stuck link shouldn't have to wait).
+ * Unlike the cron sweep, a successful scrape here also advances a
+ * SCREENSHOT_APPROVED link to INSIGHTS_PENDING, matching what a
+ * same-turn auto-scrape does in reviewScreenshot — otherwise a link could
+ * pick up a snapshot but never become eligible for "Approve insights".
+ */
+export async function refreshMetricsNow(linkId, admin) {
+  const link = await prisma.link.findUnique({ where: { id: linkId } });
+  if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+
+  const result = await refreshLinkMetrics(linkId);
+  if (result.ok && link.status === "SCREENSHOT_APPROVED") {
+    await transitionLinkStatus(linkId, "INSIGHTS_PENDING", { actedById: admin.id });
+  }
+  return result;
 }
