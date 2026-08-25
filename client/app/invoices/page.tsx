@@ -9,10 +9,10 @@ import { Button } from "@/components/ui/button";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Field, TextField } from "@/components/ui/form-field";
-import { DownloadIcon, SearchIcon } from "@/components/icons";
+import { DownloadIcon, SearchIcon, PlusIcon, AlertIcon, CheckCircleIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { useAuth } from "@/lib/auth-context";
-import { invoices as invoicesApi, ApiError, type Invoice } from "@/lib/api-client";
+import { invoices as invoicesApi, links as linksApi, ApiError, type Invoice, type Link } from "@/lib/api-client";
 import { money, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +32,7 @@ function InvoicesContent() {
   const [statusFilter, setStatusFilter] = useState<Invoice["status"] | "">("");
   const [paymentFilter, setPaymentFilter] = useState<Invoice["paymentStatus"] | "">("");
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [showNewInvoice, setShowNewInvoice] = useState(false);
   const token = accessToken!;
 
   const invoicesQuery = useQuery({
@@ -62,6 +63,7 @@ function InvoicesContent() {
   }, [items]);
 
   const canManage = user?.role === "ADMIN" || user?.role === "FINANCE";
+  const canRaiseInvoice = user?.role === "CREATOR" || user?.role === "ADMIN";
 
   const markPaidMutation = useMutation({
     mutationFn: (id: string) => invoicesApi.markPaid(token, id),
@@ -150,6 +152,12 @@ function InvoicesContent() {
             <DownloadIcon className="h-3.5 w-3.5" />
             Export CSV
           </Button>
+          {canRaiseInvoice && (
+            <Button size="sm" className="rounded-full" onClick={() => setShowNewInvoice(true)}>
+              <PlusIcon className="h-3.5 w-3.5" />
+              New invoice
+            </Button>
+          )}
         </div>
 
         <div className="flex min-h-0 flex-1 gap-5">
@@ -346,6 +354,17 @@ function InvoicesContent() {
           error={rejectMutation.error instanceof ApiError ? rejectMutation.error.message : rejectMutation.isError ? "Couldn't reject this invoice." : undefined}
         />
       )}
+
+      {showNewInvoice && (
+        <NewInvoiceModal
+          token={token}
+          onClose={() => setShowNewInvoice(false)}
+          onRaised={() => {
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
+            queryClient.invalidateQueries({ queryKey: ["links"] });
+          }}
+        />
+      )}
     </AppShell>
   );
 }
@@ -388,6 +407,181 @@ function RejectInvoiceModal({
           </Button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * "New invoice" flow (raised from a dedicated Invoices-page entry point,
+ * distinct from the multi-select "Bulk invoice" on My Works). Fetches every
+ * link eligible for invoicing — INSIGHTS_APPROVED and not yet on an
+ * invoice, which is the backend's structural way of enforcing that a
+ * screenshot + insights approval is mandatory before a link can be billed
+ * — and groups them by campaign for selection. Raising calls the same
+ * POST /invoices/bulk the dashboard uses, so the created invoice starts
+ * RAISED: visible to Admin/Finance to approve, reject, or mark paid.
+ */
+function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose: () => void; onRaised: () => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [raisedInvoice, setRaisedInvoice] = useState<Invoice | null>(null);
+
+  const eligibleQuery = useQuery({
+    queryKey: ["links", "INSIGHTS_APPROVED", "invoiceable"],
+    queryFn: () => linksApi.list(token, { status: "INSIGHTS_APPROVED", pageSize: 200 }),
+  });
+
+  const eligible = eligibleQuery.data?.items ?? [];
+  const groups = useMemo(() => {
+    const byCampaign = new Map<string, { title: string; brandName: string; links: Link[] }>();
+    for (const link of eligible) {
+      const key = link.campaignId;
+      if (!byCampaign.has(key)) {
+        byCampaign.set(key, { title: link.campaign?.title ?? "Untitled campaign", brandName: link.campaign?.brandName ?? "", links: [] });
+      }
+      byCampaign.get(key)!.links.push(link);
+    }
+    return [...byCampaign.values()];
+  }, [eligible]);
+
+  const allIds = eligible.map((l) => l.id);
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const selectedTotal = eligible.filter((l) => selected.has(l.id)).reduce((sum, l) => sum + Number(l.cost), 0);
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(allIds));
+  }
+  function toggleGroup(groupLinks: Link[]) {
+    const groupIds = groupLinks.map((l) => l.id);
+    const allIn = groupIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      groupIds.forEach((id) => (allIn ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  }
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  const raiseMutation = useMutation({
+    mutationFn: () => invoicesApi.bulkCreate(token, [...selected]),
+    onSuccess: (invoice) => {
+      setRaisedInvoice(invoice);
+      onRaised();
+    },
+  });
+
+  // Success screen — closes the loop on "goes to admin for approval"
+  // rather than just silently dismissing the modal.
+  if (raisedInvoice) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+        <div onClick={(e) => e.stopPropagation()} className="flex w-full max-w-[420px] flex-col items-center gap-4 rounded-lg border border-border bg-surface p-8 text-center shadow-card">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent">
+            <CheckCircleIcon className="h-6 w-6" />
+          </div>
+          <h2 className="text-lg font-bold">Invoice raised</h2>
+          <p className="text-[0.8125rem] text-text-muted">
+            <span className="font-mono">{raisedInvoice.invoiceNumber}</span> for {money(raisedInvoice.amount)} has been sent to your admin for
+            approval.
+          </p>
+          <Button className="w-full" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[85vh] w-full max-w-[640px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+      >
+        <div>
+          <h2 className="text-lg font-bold">New invoice</h2>
+          <p className="text-[0.8125rem] text-text-faint">Select the links to bill, grouped by campaign.</p>
+        </div>
+
+        <div className="flex items-start gap-2.5 rounded-md border border-blue/25 bg-blue-soft px-3.5 py-2.5 text-[0.8125rem] text-blue">
+          <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>Only links with an approved screenshot and approved insights are shown — both are mandatory before a link can be invoiced.</span>
+        </div>
+
+        {eligibleQuery.isLoading ? (
+          <TableSkeleton />
+        ) : eligible.length === 0 ? (
+          <EmptyState label="No links are ready to invoice yet — get screenshots and insights approved on My Works first." />
+        ) : (
+          <>
+            <label className="flex items-center gap-2.5 border-b border-border pb-3.5 text-[0.8125rem] font-semibold">
+              <input type="checkbox" checked={allSelected} onChange={toggleAll} className="h-4 w-4 rounded accent-[var(--accent)]" />
+              Select all · {eligible.length} link{eligible.length === 1 ? "" : "s"}
+            </label>
+
+            <div className="flex-1 overflow-y-auto">
+              <div className="flex flex-col gap-5">
+                {groups.map((group) => {
+                  const groupIds = group.links.map((l) => l.id);
+                  const groupAllIn = groupIds.every((id) => selected.has(id));
+                  const groupTotal = group.links.reduce((sum, l) => sum + Number(l.cost), 0);
+                  return (
+                    <div key={group.title + group.brandName} className="flex flex-col gap-2">
+                      <label className="flex items-center gap-2.5 text-[0.8125rem] font-bold">
+                        <input
+                          type="checkbox"
+                          checked={groupAllIn}
+                          onChange={() => toggleGroup(group.links)}
+                          className="h-4 w-4 rounded accent-[var(--accent)]"
+                        />
+                        {group.title}
+                        {group.brandName && <span className="font-normal text-text-faint">· {group.brandName}</span>}
+                        <span className="ml-auto font-normal text-text-faint">{money(groupTotal)}</span>
+                      </label>
+                      <div className="flex flex-col gap-1 pl-6">
+                        {group.links.map((link) => (
+                          <label key={link.id} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[0.8125rem] hover:bg-surface-2">
+                            <input
+                              type="checkbox"
+                              checked={selected.has(link.id)}
+                              onChange={() => toggleOne(link.id)}
+                              className="h-4 w-4 rounded accent-[var(--accent)]"
+                            />
+                            <span className="truncate text-text-muted">
+                              @{link.asset?.handle ?? "—"} · {link.format}
+                            </span>
+                            <span className="ml-auto shrink-0 font-semibold tabular-nums">{money(link.cost)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
+
+        {raiseMutation.isError && (
+          <ErrorNotice message={raiseMutation.error instanceof ApiError ? raiseMutation.error.message : "Couldn't raise this invoice."} />
+        )}
+
+        <div className="flex items-center gap-2.5 border-t border-border pt-4">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <div className="flex-1" />
+          {selected.size > 0 && <span className="text-[0.8125rem] font-semibold tabular-nums">{money(selectedTotal)}</span>}
+          <Button onClick={() => raiseMutation.mutate()} disabled={selected.size === 0 || raiseMutation.isPending}>
+            {raiseMutation.isPending ? "Raising…" : `Raise invoice · ${selected.size} selected`}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

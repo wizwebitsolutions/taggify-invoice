@@ -32,6 +32,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Admin",
     items: [
+      { key: "users", label: "Users", icon: TeamIcon, href: "/users" },
       { key: "team", label: "Team", icon: TeamIcon, href: "/team" },
       { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs" },
     ],

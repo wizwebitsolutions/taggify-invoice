@@ -112,6 +112,11 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
     },
   });
 
+  const approvalMutation = useMutation({
+    mutationFn: (approvalStatus: "approved" | "rejected") => assetsApi.setApproval(token, asset.id, approvalStatus),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }),
+  });
+
   function addCustomFormat() {
     const f = newFormat.trim();
     if (!f || formats.includes(f)) return;
@@ -142,6 +147,20 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
           {asset.approvalStatus}
         </span>
       </div>
+
+      {editable && asset.approvalStatus === "pending" && (
+        <div className="flex gap-2 border-t border-border pt-4">
+          <Button size="sm" className="flex-1" onClick={() => approvalMutation.mutate("approved")} disabled={approvalMutation.isPending}>
+            Approve page
+          </Button>
+          <Button variant="danger" size="sm" className="flex-1" onClick={() => approvalMutation.mutate("rejected")} disabled={approvalMutation.isPending}>
+            Reject
+          </Button>
+        </div>
+      )}
+      {approvalMutation.isError && (
+        <ErrorNotice message={approvalMutation.error instanceof ApiError ? approvalMutation.error.message : "Couldn't update approval status."} />
+      )}
 
       <div className="border-t border-border pt-4">
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.06em] text-text-faint">Performance metrics</p>

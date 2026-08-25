@@ -54,6 +54,7 @@ export interface User {
   addressLine2?: string | null;
   state?: string | null;
   pincode?: string | null;
+  createdAt?: string;
 }
 
 export interface BillingProfile {
@@ -204,6 +205,9 @@ export const auth = {
     request<void>("/auth/logout", { method: "POST", body: { refreshToken } }),
   changePassword: (token: string, currentPassword: string, newPassword: string) =>
     request<void>("/auth/change-password", { method: "POST", token, body: { currentPassword, newPassword } }),
+  // Admin-only — creates the account and returns a system-generated password, shown once.
+  signup: (token: string, body: { phoneNumber: string; name?: string; role: Role }) =>
+    request<{ user: User; generatedPassword: string }>("/auth/signup", { method: "POST", token, body }),
 };
 
 // ── Users ───────────────────────────────────────────────────────────
@@ -232,6 +236,8 @@ export const assets = {
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform } }),
   updateRateCard: (token: string, assetId: string, rateCards: { format: string; amount: number }[]) =>
     request<RateCard[]>(`/assets/${assetId}/rate-card`, { method: "PUT", token, body: { rateCards } }),
+  setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
+    request<Asset>(`/assets/${assetId}/approval`, { method: "PUT", token, body: { approvalStatus } }),
 };
 
 // ── Campaigns ───────────────────────────────────────────────────────
@@ -370,5 +376,7 @@ export const notifications = {
 // ── Admin ───────────────────────────────────────────────────────────
 export const admin = {
   users: (token: string) => request<User[]>("/admin/users", { token }),
+  updateUserRole: (token: string, userId: string, role: Role) =>
+    request<User>(`/admin/users/${userId}/role`, { method: "PUT", token, body: { role } }),
   jobRuns: (token: string) => request<JobRun[]>("/admin/job-runs", { token }),
 };
