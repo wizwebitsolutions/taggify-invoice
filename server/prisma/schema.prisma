@@ -127,6 +127,7 @@ model Link {
   assetId       String
   submittedById String
   url           String
+  format        String // reel | story | carousel | collaboration | video — mirrors RateCard.format
   cost          Decimal    @db.Decimal(12, 2)
   customRate    Boolean    @default(false)
   status        LinkStatus @default(SUBMITTED)

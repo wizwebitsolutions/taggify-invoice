@@ -1,94 +1,97 @@
-import type { ReactNode } from "react";
+"use client";
 
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { KpiCard } from "@/components/dashboard/kpi-card";
-import { StatusPill, type PillStatus, type GstStatus } from "@/components/ui/status-pill";
-import { ChevronDownIcon, DownloadIcon } from "@/components/icons";
-
-const USER = { initials: "FU", name: "Finance User", role: "Finance", tone: "blue" as const };
-
-const INVOICES: {
-  id: string;
-  number: string;
-  creator: string;
-  amount: string;
-  status: PillStatus;
-  gst: GstStatus;
-  aging: string;
-  overdue?: boolean;
-  actionable?: boolean;
-  selected?: boolean;
-}[] = [
-  {
-    id: "1",
-    number: "INV-260714-8811",
-    creator: "Demo Creator",
-    amount: "₹8,11,250",
-    status: "RAISED",
-    gst: "SCHEDULED",
-    aging: "Due Sep 8",
-    actionable: true,
-    selected: true,
-  },
-  {
-    id: "2",
-    number: "INV-260704-1755",
-    creator: "Nightowl Media",
-    amount: "₹25,53,520",
-    status: "PAID",
-    gst: "COMPLETED",
-    aging: "Settled Jul 12",
-  },
-  {
-    id: "3",
-    number: "INV-260621-4402",
-    creator: "Wanderloop Studio",
-    amount: "₹2,53,520",
-    status: "RAISED",
-    gst: "PENDING",
-    aging: "Overdue · 12d",
-    overdue: true,
-    actionable: true,
-  },
-  {
-    id: "4",
-    number: "INV-260610-9930",
-    creator: "Daily Bulletin Co.",
-    amount: "₹6,42,000",
-    status: "PAID",
-    gst: "COMPLETED",
-    aging: "Settled Jun 18",
-  },
-];
-
-const selected = INVOICES.find((i) => i.selected) ?? INVOICES[0];
+import { StatusPill } from "@/components/ui/status-pill";
+import { DownloadIcon } from "@/components/icons";
+import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
+import { useAuth } from "@/lib/auth-context";
+import { invoices as invoicesApi, ApiError, type Invoice } from "@/lib/api-client";
+import { money, initialsOf, roleLabel } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export default function InvoicesPage() {
   return (
+    <RequireAuth>
+      <InvoicesContent />
+    </RequireAuth>
+  );
+}
+
+function InvoicesContent() {
+  const { user, accessToken, logout } = useAuth();
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const token = accessToken!;
+
+  const invoicesQuery = useQuery({
+    queryKey: ["invoices"],
+    queryFn: () => invoicesApi.list(token, { pageSize: 100 }),
+  });
+
+  const items = invoicesQuery.data?.items ?? [];
+  const selected = items.find((i) => i.id === selectedId) ?? items[0];
+
+  const kpis = useMemo(() => {
+    const totalRaised = items.reduce((sum, i) => sum + Number(i.amount), 0);
+    const pending = items.filter((i) => i.status === "RAISED" || i.status === "APPROVED");
+    const overdue = pending.filter((i) => i.overdueDays > 0);
+    return {
+      totalRaised,
+      pendingCount: pending.length,
+      pendingAmount: pending.reduce((sum, i) => sum + Number(i.amount), 0),
+      overdueCount: overdue.length,
+      overdueAmount: overdue.reduce((sum, i) => sum + Number(i.amount), 0),
+    };
+  }, [items]);
+
+  const canManage = user?.role === "ADMIN" || user?.role === "FINANCE";
+
+  const markPaidMutation = useMutation({
+    mutationFn: (id: string) => invoicesApi.markPaid(token, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
+  });
+  const gstMutation = useMutation({
+    mutationFn: ({ id, gstStatus }: { id: string; gstStatus: Invoice["gstStatus"] }) => invoicesApi.updateGstStatus(token, id, gstStatus),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
+  });
+
+  const NEXT_GST: Record<Invoice["gstStatus"], Invoice["gstStatus"]> = {
+    PENDING: "SCHEDULED",
+    SCHEDULED: "COMPLETED",
+    COMPLETED: "COMPLETED",
+  };
+
+  return (
     <AppShell
       active="invoices"
-      user={USER}
+      user={{ initials: initialsOf(user?.name), name: user?.name ?? "—", role: roleLabel(user?.role), tone: user?.role === "FINANCE" ? "blue" : "emerald" }}
       searchPlaceholder="Search invoice number, creator…"
     >
       <div className="flex flex-col gap-7">
-        <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Finance</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">Invoices</h1>
-          <p className="text-[0.9375rem] text-text-muted">
-            Raised, paid, and GST status — tracked independently, settled manually.
-          </p>
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Finance</p>
+            <h1 className="mb-1.5 text-[1.625rem] font-bold">Invoices</h1>
+            <p className="text-[0.9375rem] text-text-muted">Raised, paid, and GST status — tracked independently, settled manually.</p>
+          </div>
+          <button onClick={logout} className="text-[0.8125rem] text-text-faint hover:text-text-muted">
+            Log out
+          </button>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
-          <KpiCard label="Total raised" value="₹41,64,770" foot="16 invoices this quarter" />
-          <KpiCard label="Pending payment" value="₹8,11,250" foot="1 invoice awaiting settlement" />
-          <KpiCard label="Overdue" value="₹2,53,520" foot="1 invoice past due date" tone="rose" />
+          <KpiCard label="Total raised" value={money(kpis.totalRaised)} foot={`${items.length} invoices total`} />
+          <KpiCard label="Pending payment" value={money(kpis.pendingAmount)} foot={`${kpis.pendingCount} invoice${kpis.pendingCount === 1 ? "" : "s"} awaiting settlement`} />
+          <KpiCard label="Overdue" value={money(kpis.overdueAmount)} foot={`${kpis.overdueCount} invoice${kpis.overdueCount === 1 ? "" : "s"} past due date`} tone={kpis.overdueCount > 0 ? "rose" : undefined} />
         </div>
 
         <div className="flex items-center gap-2.5">
-          <Chip>All statuses <ChevronDownIcon className="h-3 w-3" /></Chip>
-          <Chip>GST — any <ChevronDownIcon className="h-3 w-3" /></Chip>
           <div className="flex-1" />
           <Button variant="secondary" size="sm" className="rounded-full">
             <DownloadIcon className="h-3.5 w-3.5" />
@@ -107,77 +110,115 @@ export default function InvoicesPage() {
               <Th>Due</Th>
               <Th>Action</Th>
             </div>
-            <div>
-              {INVOICES.map((inv) => (
-                <div
-                  key={inv.id}
-                  className={`grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)] items-center gap-3 border-b border-border px-5 py-4 ${inv.selected ? "bg-surface-2" : ""}`}
-                >
-                  <div className="font-mono text-[0.8125rem] text-text-muted">{inv.number}</div>
-                  <div className="text-[0.8438rem] text-text-muted">{inv.creator}</div>
-                  <div className="text-[0.9375rem] font-bold tabular-nums">{inv.amount}</div>
-                  <div>
-                    <StatusPill status={inv.status} />
-                  </div>
-                  <div>
-                    <StatusPill status={inv.gst} />
-                  </div>
-                  <div className={`text-xs ${inv.overdue ? "font-bold text-rose" : "text-text-faint"}`}>{inv.aging}</div>
-                  <div>
-                    {inv.actionable ? (
-                      <Button variant="primary" size="sm" className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100">
-                        Mark paid
-                      </Button>
-                    ) : (
-                      <span className="text-[0.8438rem] text-text-muted">—</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+
+            {invoicesQuery.isLoading ? (
+              <TableSkeleton />
+            ) : items.length === 0 ? (
+              <EmptyState label="No invoices raised yet — bulk-invoice approved links from My Works." />
+            ) : (
+              <div>
+                {items.map((inv) => {
+                  const isOverdue = inv.overdueDays > 0;
+                  const isPaid = inv.status === "PAID";
+                  return (
+                    <div
+                      key={inv.id}
+                      onClick={() => setSelectedId(inv.id)}
+                      className={cn(
+                        "grid cursor-pointer grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)] items-center gap-3 border-b border-border px-5 py-4 hover:bg-surface-2",
+                        (inv.id === selectedId || (!selectedId && inv.id === items[0]?.id)) && "bg-surface-2"
+                      )}
+                    >
+                      <div className="truncate font-mono text-[0.8125rem] text-text-muted">{inv.invoiceNumber}</div>
+                      <div className="truncate text-[0.8438rem] text-text-muted">Creator</div>
+                      <div className="text-[0.9375rem] font-bold tabular-nums">{money(inv.amount)}</div>
+                      <div>
+                        <StatusPill status={inv.status} />
+                      </div>
+                      <div>
+                        <StatusPill status={inv.gstStatus} />
+                      </div>
+                      <div className={cn("text-xs", isOverdue ? "font-bold text-rose" : "text-text-faint")}>
+                        {isPaid ? (inv.paidAt ? `Settled ${new Date(inv.paidAt).toLocaleDateString()}` : "Settled") : isOverdue ? `Overdue · ${inv.overdueDays}d` : inv.dueDate ? `Due ${new Date(inv.dueDate).toLocaleDateString()}` : "—"}
+                      </div>
+                      <div onClick={(e) => e.stopPropagation()}>
+                        {canManage && !isPaid ? (
+                          <Button
+                            size="sm"
+                            className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100"
+                            onClick={() => markPaidMutation.mutate(inv.id)}
+                            disabled={markPaidMutation.isPending}
+                          >
+                            Mark paid
+                          </Button>
+                        ) : (
+                          <span className="text-[0.8438rem] text-text-muted">—</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          <div className="flex w-[340px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card">
-            <div>
-              <div className="font-mono text-xs text-text-faint">{selected.number}</div>
-              <div className="text-[1.875rem] font-extrabold tracking-tight tabular-nums">{selected.amount}</div>
+          {selected && (
+            <div className="flex w-[340px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card">
+              <div>
+                <div className="font-mono text-xs text-text-faint">{selected.invoiceNumber}</div>
+                <div className="text-[1.875rem] font-extrabold tracking-tight tabular-nums">{money(selected.amount)}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <StatusPill status={selected.status} />
+                <StatusPill status={selected.gstStatus} />
+              </div>
+              <div className="h-px bg-border" />
+              <div className="flex flex-col gap-3">
+                {(selected.items ?? []).slice(0, 4).map((item) => (
+                  <LineItem key={item.id} title={item.link?.campaign?.title ?? item.link?.url ?? "Link"} amount={money(item.amount)} />
+                ))}
+                {(selected.items?.length ?? 0) > 4 && (
+                  <LineItem title={`+ ${selected.items!.length - 4} more approved links`} amount="" />
+                )}
+              </div>
+              <div className="flex items-center justify-between border-t border-border pt-3.5">
+                <span className="text-[0.8125rem] text-text-faint">Total</span>
+                <span className="text-[1.125rem] font-extrabold tabular-nums">{money(selected.amount)}</span>
+              </div>
+
+              {canManage && selected.status !== "PAID" && (
+                <Button size="lg" className="w-full" onClick={() => markPaidMutation.mutate(selected.id)} disabled={markPaidMutation.isPending}>
+                  {markPaidMutation.isPending ? "Marking paid…" : "Mark as paid"}
+                </Button>
+              )}
+              {canManage && selected.gstStatus !== "COMPLETED" && (
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  className="w-full"
+                  onClick={() => gstMutation.mutate({ id: selected.id, gstStatus: NEXT_GST[selected.gstStatus] })}
+                  disabled={gstMutation.isPending}
+                >
+                  {gstMutation.isPending ? "Updating…" : `Advance GST to ${NEXT_GST[selected.gstStatus].toLowerCase()}`}
+                </Button>
+              )}
+
+              {(markPaidMutation.isError || gstMutation.isError) && (
+                <ErrorNotice
+                  message={
+                    markPaidMutation.error instanceof ApiError
+                      ? markPaidMutation.error.message
+                      : gstMutation.error instanceof ApiError
+                        ? gstMutation.error.message
+                        : "Something went wrong."
+                  }
+                />
+              )}
             </div>
-            <div className="flex gap-2">
-              <StatusPill status={selected.status} />
-              <StatusPill status={selected.gst} />
-            </div>
-            <div className="h-px bg-border" />
-            <div className="flex flex-col gap-3">
-              <LineItem title="Demo Brand × Launch Campaign" amount="₹12,500" />
-              <LineItem title="Solmate Coffee × Launch Week" amount="₹12,500" />
-              <LineItem title="+ 64 more approved links" amount="₹7,86,250" />
-            </div>
-            <div className="flex items-center justify-between border-t border-border pt-3.5">
-              <span className="text-[0.8125rem] text-text-faint">Total</span>
-              <span className="text-[1.125rem] font-extrabold tabular-nums">{selected.amount}</span>
-            </div>
-            <Button size="lg" className="w-full">
-              Mark as paid
-            </Button>
-            <Button variant="secondary" size="lg" className="w-full">
-              Update GST status
-            </Button>
-          </div>
+          )}
         </div>
       </div>
     </AppShell>
-  );
-}
-
-function Th({ children }: { children: ReactNode }) {
-  return <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">{children}</div>;
-}
-
-function Chip({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex h-[38px] items-center gap-2 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted">
-      {children}
-    </div>
   );
 }
 
@@ -186,7 +227,7 @@ function LineItem({ title, amount }: { title: string; amount: string }) {
     <div className="flex items-center gap-2.5">
       <div className="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-accent-soft to-accent-2-soft" />
       <div className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold">{title}</div>
-      <div className="text-[0.8125rem] font-bold tabular-nums">{amount}</div>
+      {amount && <div className="text-[0.8125rem] font-bold tabular-nums">{amount}</div>}
     </div>
   );
 }

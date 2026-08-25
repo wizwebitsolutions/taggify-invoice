@@ -24,16 +24,16 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Work",
     items: [
-      { key: "campaigns", label: "Campaigns", icon: CampaignIcon },
-      { key: "assets", label: "Assets", icon: AssetIcon },
+      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns" },
+      { key: "assets", label: "Assets", icon: AssetIcon, href: "/assets" },
     ],
   },
   { label: "Finance", items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices" }] },
   {
     label: "Admin",
     items: [
-      { key: "team", label: "Team", icon: TeamIcon },
-      { key: "job-runs", label: "Job runs", icon: ClockIcon },
+      { key: "team", label: "Team", icon: TeamIcon, href: "/team" },
+      { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs" },
     ],
   },
 ];

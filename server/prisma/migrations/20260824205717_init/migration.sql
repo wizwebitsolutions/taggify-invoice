@@ -90,6 +90,7 @@ CREATE TABLE "Link" (
     "assetId" TEXT NOT NULL,
     "submittedById" TEXT NOT NULL,
     "url" TEXT NOT NULL,
+    "format" TEXT NOT NULL,
     "cost" DECIMAL(12,2) NOT NULL,
     "customRate" BOOLEAN NOT NULL DEFAULT false,
     "status" "LinkStatus" NOT NULL DEFAULT 'SUBMITTED',

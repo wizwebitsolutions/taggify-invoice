@@ -23,7 +23,7 @@ export async function createLink(user, { campaignId, assetId, url, format, custo
   }
 
   const link = await prisma.link.create({
-    data: { campaignId, assetId, submittedById: user.id, url, cost, customRate, status: "SUBMITTED" },
+    data: { campaignId, assetId, submittedById: user.id, url, format, cost, customRate, status: "SUBMITTED" },
   });
 
   await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: user.id } });
