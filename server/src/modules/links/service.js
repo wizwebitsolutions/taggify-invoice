@@ -2,6 +2,7 @@ import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { transitionLinkStatus } from "./statusTimeline.js";
 import { refreshLinkMetrics } from "../scraping/service.js";
+import { publicUrlFor } from "../../lib/cloudinaryClient.js";
 
 export async function createLink(user, { campaignId, assetId, url, format, customAmount }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
@@ -72,7 +73,12 @@ export async function listLinks(user, filters) {
   if (!["ADMIN", "FINANCE"].includes(user.role)) {
     where.asset = { ownerId: user.id };
   }
-  if (filters.status) where.status = filters.status;
+  // A comma-separated status list (e.g. from the dashboard's "Links
+  // approved" KPI tile, which spans several statuses) becomes an IN match;
+  // a single status stays an equality match.
+  if (filters.status) {
+    where.status = filters.status.includes(",") ? { in: filters.status.split(",") } : filters.status;
+  }
   if (filters.campaignId) where.campaignId = filters.campaignId;
   if (filters.assetId) where.assetId = filters.assetId;
   if (filters.from || filters.to) {
@@ -92,7 +98,15 @@ export async function listLinks(user, filters) {
     prisma.link.count({ where }),
   ]);
 
-  return { items, total, page: filters.page, pageSize: filters.pageSize };
+  // Screenshot only carries a publicId in the DB — the admin review panel
+  // needs an actual image URL to show what was submitted, so compute it
+  // here rather than leaving callers to reconstruct a Cloudinary URL.
+  const withScreenshotUrls = items.map((link) => ({
+    ...link,
+    screenshot: link.screenshot ? { ...link.screenshot, url: publicUrlFor(link.screenshot.publicId) } : null,
+  }));
+
+  return { items: withScreenshotUrls, total, page: filters.page, pageSize: filters.pageSize };
 }
 
 export async function getLinkTimeline(linkId) {

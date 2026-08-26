@@ -70,7 +70,10 @@ export async function listInvoices(user, filters) {
   const [items, total] = await prisma.$transaction([
     prisma.invoice.findMany({
       where,
-      include: { items: { include: { link: true } } },
+      // creator wasn't included here — the invoices table had nowhere to
+      // read a name from and fell back to literally printing "Creator" in
+      // that column for every row (see client/app/invoices/page.tsx).
+      include: { creator: { select: { id: true, name: true, phoneNumber: true } }, items: { include: { link: true } } },
       orderBy: { createdAt: "desc" },
       skip: (filters.page - 1) * filters.pageSize,
       take: filters.pageSize,
