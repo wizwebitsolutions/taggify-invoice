@@ -1,11 +1,16 @@
 import { prisma } from "../../lib/prisma.js";
-import { refreshLinkMetrics, refreshAssetMetrics } from "../scraping/service.js";
+import { refreshLinkMetrics } from "../scraping/service.js";
 
 /**
- * Re-scrapes metrics for links still awaiting insight approval, and
- * refreshes each active asset's follower count. Runs on a fixed interval
- * via node-cron rather than being queued per-item — acceptable at the
- * observed scale (low thousands of links), revisit if that grows.
+ * Re-scrapes metrics for links still awaiting insight approval. Runs on a
+ * fixed interval via node-cron rather than being queued per-item —
+ * acceptable at the observed scale (low thousands of links), revisit if
+ * that grows.
+ *
+ * Asset-level profile/follower refresh used to run here too, but now has
+ * its own 24h cron (see assetProfileRescrape.js) — post engagement goes
+ * stale much faster than a follower count or a profile pic, so the two are
+ * scraped on separate schedules instead of both riding this 6h job.
  */
 export async function instagramRescrapeJob() {
   const pendingLinks = await prisma.link.findMany({
@@ -19,15 +24,6 @@ export async function instagramRescrapeJob() {
       await refreshLinkMetrics(id);
     } catch (err) {
       console.error(`instagramRescrapeJob: link ${id} failed`, err);
-    }
-  }
-
-  const assets = await prisma.asset.findMany({ where: { approvalStatus: "approved" }, select: { id: true } });
-  for (const { id } of assets) {
-    try {
-      await refreshAssetMetrics(id);
-    } catch (err) {
-      console.error(`instagramRescrapeJob: asset ${id} failed`, err);
     }
   }
 }

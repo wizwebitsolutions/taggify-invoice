@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runTrackedJob } from "./jobRunner.js";
 import { instagramRescrapeJob } from "./instagramRescrape.js";
+import { assetProfileRescrapeJob } from "./assetProfileRescrape.js";
 import { invoiceAgingSweepJob } from "./invoiceAgingSweep.js";
 import { screenshotReminderJob } from "./screenshotReminder.js";
 
@@ -18,14 +19,16 @@ export function startCronJobs() {
   }
 
   const igSchedule = process.env.INSTAGRAM_RESCRAPE_CRON || "0 */6 * * *";
+  const assetProfileSchedule = process.env.ASSET_PROFILE_RESCRAPE_CRON || "0 3 * * *"; // 24h interval
   const invoiceSchedule = process.env.INVOICE_AGING_SWEEP_CRON || "0 9 * * *";
   const reminderSchedule = process.env.SCREENSHOT_REMINDER_CRON || "0 10 * * *";
 
   cron.schedule(igSchedule, () => runTrackedJob("instagram_rescrape", instagramRescrapeJob));
+  cron.schedule(assetProfileSchedule, () => runTrackedJob("asset_profile_rescrape", assetProfileRescrapeJob));
   cron.schedule(invoiceSchedule, () => runTrackedJob("invoice_aging_sweep", invoiceAgingSweepJob));
   cron.schedule(reminderSchedule, () => runTrackedJob("screenshot_reminder", screenshotReminderJob));
 
   console.log(
-    `Cron jobs scheduled — instagram_rescrape: "${igSchedule}", invoice_aging_sweep: "${invoiceSchedule}", screenshot_reminder: "${reminderSchedule}"`
+    `Cron jobs scheduled — instagram_rescrape: "${igSchedule}", asset_profile_rescrape: "${assetProfileSchedule}", invoice_aging_sweep: "${invoiceSchedule}", screenshot_reminder: "${reminderSchedule}"`
   );
 }

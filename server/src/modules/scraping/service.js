@@ -41,7 +41,13 @@ export async function refreshLinkMetrics(linkId) {
   }
 }
 
-/** Refreshes an Asset's follower/media-count snapshot. */
+/**
+ * Refreshes an Asset's follower/media-count snapshot, and syncs its profile
+ * details (full name, bio, avatar) from the same Apify call. Called from
+ * the dedicated 24h asset-profile cron (see jobs/assetProfileRescrape.js) —
+ * not the 6h link-rescrape job — since a profile pic/bio doesn't go stale
+ * nearly as fast as post engagement does.
+ */
 export async function refreshAssetMetrics(assetId) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId } });
   if (!asset) throw new Error(`Asset ${assetId} not found`);
@@ -50,5 +56,13 @@ export async function refreshAssetMetrics(assetId) {
   await prisma.accountSnapshot.create({
     data: { assetId, followers: metrics.followers, mediaCount: metrics.mediaCount, source: "apify" },
   });
-  await prisma.asset.update({ where: { id: assetId }, data: { followers: metrics.followers } });
+  await prisma.asset.update({
+    where: { id: assetId },
+    data: {
+      followers: metrics.followers,
+      fullName: metrics.fullName,
+      biography: metrics.biography,
+      profilePicUrl: metrics.profilePicUrl,
+    },
+  });
 }
