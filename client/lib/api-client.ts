@@ -17,9 +17,80 @@ export class ApiError extends Error {
   }
 }
 
+// Shared with lib/auth-context.tsx (one source of truth for the key) so a
+// background refresh triggered here and the React state living there never
+// disagree about where the session is stored.
+export const AUTH_STORAGE_KEY = "taggify_auth";
+
+interface StoredAuthShape {
+  user: unknown;
+  accessToken: string;
+  refreshToken: string;
+}
+
+function readStoredAuth(): StoredAuthShape | null {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuth(next: StoredAuthShape | null) {
+  try {
+    if (next) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(next));
+    else localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {
+    // best-effort — a request still gets its retried/failed outcome either way
+  }
+  // AuthProvider only reads localStorage once on mount; this tells it (and
+  // any other listener in this tab — localStorage's own "storage" event
+  // only fires in *other* tabs) that the session changed under it.
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("taggify:auth-sync"));
+}
+
+// The access token is short-lived (15m) and nothing was ever calling
+// POST /auth/refresh — every request just started 401ing after 15 minutes,
+// silently rendering empty lists everywhere with no error and no way back
+// short of manually logging out and in. This makes a 401 self-heal instead.
+//
+// One shared in-flight promise: the server *rotates* refresh tokens
+// (single-use, revoked once redeemed — see server/src/modules/auth/service.js),
+// so two requests 401ing at once and each redeeming the refresh token would
+// race — the second would redeem an already-revoked token and fail. Every
+// concurrent 401 awaits the same refresh instead of starting its own.
+let refreshPromise: Promise<string | null> | null = null;
+
+function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const stored = readStoredAuth();
+      if (!stored?.refreshToken) return null;
+      try {
+        const result = await request<AuthResponse>("/auth/refresh", {
+          method: "POST",
+          body: { refreshToken: stored.refreshToken },
+        });
+        writeStoredAuth({ user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken });
+        return result.accessToken;
+      } catch {
+        // Refresh token itself is dead (expired past its 30d life, or
+        // revoked) — nothing left to retry with. Clear the session so
+        // RequireAuth redirects to /login instead of looping on 401s.
+        writeStoredAuth(null);
+        return null;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+  }
+  return refreshPromise;
+}
+
 async function request<T>(
   path: string,
-  { method = "GET", body, token }: { method?: string; body?: unknown; token?: string | null } = {}
+  { method = "GET", body, token, _isRetry = false }: { method?: string; body?: unknown; token?: string | null; _isRetry?: boolean } = {}
 ): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method,
@@ -34,6 +105,13 @@ async function request<T>(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // Never intercept /auth/* itself — login failing with 401 is a wrong
+    // password, not an expired session, and refresh's own 401 is handled
+    // by refreshAccessToken's catch, not by recursing back into refreshing.
+    if (res.status === 401 && token && !_isRetry && !path.startsWith("/auth/")) {
+      const freshToken = await refreshAccessToken();
+      if (freshToken) return request<T>(path, { method, body, token: freshToken, _isRetry: true });
+    }
     throw new ApiError(res.status, data?.error?.code ?? "UNKNOWN", data?.error?.message ?? res.statusText);
   }
   return data as T;
@@ -133,7 +211,7 @@ export interface Link {
   createdAt: string;
   campaign?: Campaign;
   asset?: Asset;
-  screenshot?: { id: string; publicId: string; approved: boolean | null } | null;
+  screenshot?: { id: string; publicId: string; approved: boolean | null; url: string | null } | null;
   postSnapshots?: PostSnapshot[];
 }
 
@@ -165,6 +243,7 @@ export interface Invoice {
   paidAt: string | null;
   createdAt: string;
   overdueDays: number;
+  creator?: { id: string; name: string | null; phoneNumber: string };
   items?: { id: string; amount: string; link: Link }[];
   billingProfile?: BillingProfile | null;
 }

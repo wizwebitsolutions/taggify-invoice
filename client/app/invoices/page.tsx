@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { RequireAuth } from "@/components/auth/require-auth";
@@ -27,10 +28,18 @@ export default function InvoicesPage() {
 function InvoicesContent() {
   const { user, accessToken } = useAuth();
   const queryClient = useQueryClient();
+  // Seeds the filters from the URL once on mount — lets the admin dashboard
+  // deep-link here already filtered (e.g. /invoices?status=RAISED) instead
+  // of landing on an unfiltered list the admin then has to re-filter by hand.
+  const searchParams = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<Invoice["status"] | "">("");
-  const [paymentFilter, setPaymentFilter] = useState<Invoice["paymentStatus"] | "">("");
+  const [statusFilter, setStatusFilter] = useState<Invoice["status"] | "">(
+    (searchParams.get("status") as Invoice["status"] | null) ?? ""
+  );
+  const [paymentFilter, setPaymentFilter] = useState<Invoice["paymentStatus"] | "">(
+    (searchParams.get("paymentStatus") as Invoice["paymentStatus"] | null) ?? ""
+  );
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [showNewInvoice, setShowNewInvoice] = useState(false);
   const token = accessToken!;
@@ -192,7 +201,7 @@ function InvoicesContent() {
                       )}
                     >
                       <div className="truncate font-mono text-[0.8125rem] text-text-muted">{inv.invoiceNumber}</div>
-                      <div className="truncate text-[0.8438rem] text-text-muted">Creator</div>
+                      <div className="truncate text-[0.8438rem] text-text-muted">{inv.creator?.name ?? inv.creator?.phoneNumber ?? "—"}</div>
                       <div className="text-[0.9375rem] font-bold tabular-nums">{money(inv.amount)}</div>
                       <div className="flex flex-col gap-1">
                         <StatusPill status={inv.status} />

@@ -2,9 +2,9 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-import { auth, type User } from "@/lib/api-client";
+import { auth, AUTH_STORAGE_KEY, type User } from "@/lib/api-client";
 
-const STORAGE_KEY = "taggify_auth";
+const STORAGE_KEY = AUTH_STORAGE_KEY;
 
 interface StoredAuth {
   user: User;
@@ -28,13 +28,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setStored(JSON.parse(raw));
-    } catch {
-      // corrupted/blocked storage — fall through to logged-out state
+    function readFromStorage() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        setStored(raw ? JSON.parse(raw) : null);
+      } catch {
+        // corrupted/blocked storage — fall through to logged-out state
+        setStored(null);
+      }
     }
+
+    readFromStorage();
     setIsLoading(false);
+
+    // api-client's background token refresh (or a forced logout when the
+    // refresh token itself is dead) writes localStorage directly, outside
+    // React — this is how that becomes visible here instead of this
+    // context silently holding an access token api-client has already
+    // replaced or cleared.
+    window.addEventListener("taggify:auth-sync", readFromStorage);
+    return () => window.removeEventListener("taggify:auth-sync", readFromStorage);
   }, []);
 
   async function login(phoneNumber: string, password: string) {

@@ -24,7 +24,7 @@ const statusPillVariants = cva(
   }
 );
 
-type Tone = VariantProps<typeof statusPillVariants>["tone"];
+export type Tone = VariantProps<typeof statusPillVariants>["tone"];
 
 // Mirrors the backend's Prisma enums exactly (server/prisma/schema.prisma)
 // plus one UI-only status ("OVERDUE") derived from an invoice's dueDate
@@ -43,7 +43,11 @@ export type GstStatus = "PENDING" | "SCHEDULED" | "COMPLETED";
 export type PaymentStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | PaymentStatus | "OVERDUE";
 
-const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone }> = {
+// Exported so charts (admin dashboard) can color a status bar/segment with
+// exactly the same tone a pill for that status would use — one source of
+// truth for "what color is this status" instead of a second lookup drifting
+// from this one.
+export const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone }> = {
   SUBMITTED: { label: "Submitted", tone: "slate" },
   PENDING_SCREENSHOT_REVIEW: { label: "Pending review", tone: "indigo" },
   SCREENSHOT_REJECTED: { label: "Rejected", tone: "rose" },

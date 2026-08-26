@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { RequireAuth } from "@/components/auth/require-auth";
@@ -23,7 +24,10 @@ export default function ProfilePage() {
 
 function ProfileContent() {
   const { user, accessToken } = useAuth();
-  const [tab, setTab] = useState<"profile" | "billing">("profile");
+  // /profile?tab=billing deep-links straight to the billing tab — the admin
+  // dashboard's "Billing profiles awaiting approval" card links here.
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState<"profile" | "billing">(searchParams.get("tab") === "billing" ? "billing" : "profile");
   const token = accessToken!;
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: () => usersApi.me(token) });
