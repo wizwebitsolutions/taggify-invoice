@@ -2,7 +2,13 @@ import { z } from "zod";
 
 export const createAssetSchema = z.object({
   platform: z.string().default("instagram"),
-  handle: z.string().min(1).max(60),
+  // Strip a leading "@" (and whitespace) — the UI always prepends its own
+  // "@" when displaying a handle, so a stored "@handle" renders as "@@handle".
+  handle: z
+    .string()
+    .min(1)
+    .max(60)
+    .transform((h) => h.trim().replace(/^@+/, "")),
 });
 
 // Free-form format name (e.g. "VOXPOP", "Type 4") — not a fixed enum, so

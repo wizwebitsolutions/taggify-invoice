@@ -122,6 +122,9 @@ model Asset {
   platform       String   @default("instagram")
   handle         String
   followers      Int      @default(0)
+  fullName       String? // profile display name, synced from Apify
+  biography      String? // profile bio, synced from Apify
+  profilePicUrl  String? // Instagram CDN URL, synced from Apify — re-synced every 24h so it doesn't go stale
   approvalStatus String   @default("pending") // pending | approved | rejected
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

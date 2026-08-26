@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/form-field";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { links as linksApi, ApiError } from "@/lib/api-client";
+
+// Standard formats every page should be able to post — mirrors the Assets
+// rate-card editor's list. A page's rate card only needs *some* of these
+// priced (unpriced ones just fail with "No rate card set…" per link when
+// submitted), but every page should still see the full set here rather
+// than only whichever formats happen to already have a price.
+const STANDARD_FORMATS = ["reel", "story", "carousel", "collaboration", "video"];
 
 /**
  * Bulk link upload — paste any number of post URLs (one per line) and
@@ -34,10 +41,24 @@ export function UploadLinksModal({
   const [campaignId, setCampaignId] = useState(initialCampaignId ?? campaigns[0]?.id ?? "");
   const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
   const [urlsText, setUrlsText] = useState("");
-  const [format, setFormat] = useState(assets[0]?.rateCards[0]?.format ?? "reel");
+  const [format, setFormat] = useState(assets[0]?.rateCards[0]?.format ?? STANDARD_FORMATS[0]);
 
   const asset = assets.find((a) => a.id === assetId);
   const urls = urlsText.split("\n").map((u) => u.trim()).filter(Boolean);
+
+  // Every page offers the standard format set, plus any custom formats its
+  // rate card already carries (e.g. "VOXPOP") — not just whichever formats
+  // happen to have a price set already.
+  const availableFormats = [...new Set([...STANDARD_FORMATS, ...(asset?.rateCards.map((rc) => rc.format) ?? [])])];
+
+  // Keep the selected format valid when the chosen page changes, preferring
+  // a format this page has actually priced.
+  useEffect(() => {
+    const priced = asset?.rateCards.map((rc) => rc.format) ?? [];
+    if (priced.includes(format)) return;
+    setFormat(priced[0] ?? STANDARD_FORMATS[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetId]);
 
   const bulkMutation = useMutation({
     mutationFn: () => linksApi.bulkCreate(token, { campaignId, assetId, format, urls }),
@@ -97,11 +118,15 @@ export function UploadLinksModal({
 
         <Field label="Format">
           <Select value={format} onChange={setFormat}>
-            {(asset?.rateCards ?? []).map((rc) => (
-              <option key={rc.format} value={rc.format}>
-                {rc.format}
-              </option>
-            ))}
+            {availableFormats.map((f) => {
+              const priced = asset?.rateCards.some((rc) => rc.format === f);
+              return (
+                <option key={f} value={f}>
+                  {f}
+                  {priced ? "" : " (no rate set)"}
+                </option>
+              );
+            })}
           </Select>
         </Field>
 
