@@ -436,7 +436,13 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
 
   const eligibleQuery = useQuery({
     queryKey: ["links", "INSIGHTS_APPROVED", "invoiceable"],
-    queryFn: () => linksApi.list(token, { status: "INSIGHTS_APPROVED", pageSize: 200 }),
+    // 100 is the server's hard cap (listLinksQuerySchema) — a pageSize
+    // above it 400s the whole request. That 400 was getting silently
+    // swallowed below (eligible ??= []) and shown as "no links ready",
+    // masking the real error for every creator regardless of how many
+    // links were actually eligible. See admin-dashboard.tsx for the same
+    // cap on its own queries.
+    queryFn: () => linksApi.list(token, { status: "INSIGHTS_APPROVED", pageSize: 100 }),
   });
 
   const eligible = eligibleQuery.data?.items ?? [];
@@ -524,6 +530,12 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
 
         {eligibleQuery.isLoading ? (
           <TableSkeleton />
+        ) : eligibleQuery.isError ? (
+          // Was falling through to the empty state below on any fetch
+          // error (eligible ??= []) — indistinguishable from "genuinely
+          // nothing to invoice" and exactly how the pageSize-400 bug above
+          // went unnoticed. A real error now reads as one.
+          <ErrorNotice message={eligibleQuery.error instanceof ApiError ? eligibleQuery.error.message : "Couldn't load links ready to invoice."} />
         ) : eligible.length === 0 ? (
           <EmptyState label="No links are ready to invoice yet — get screenshots and insights approved on My Works first." />
         ) : (
