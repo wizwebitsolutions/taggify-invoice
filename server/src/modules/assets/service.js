@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
+import { refreshAssetMetrics } from "../scraping/service.js";
 
 /**
  * Creators see only their own assets; Admin/Finance see everything —
@@ -39,13 +40,40 @@ async function getAvgEngagement(assetId) {
 }
 
 export async function createAsset(user, { platform, handle }) {
-  return prisma.asset.create({
+  const asset = await prisma.asset.create({
     data: { ownerId: user.id, platform, handle, approvalStatus: "pending" },
   });
+
+  // Fire-and-forget — pulls followers/full name/bio/avatar in the background
+  // so a newly-added page isn't left blank indefinitely: the only other
+  // place that populates these fields is assetProfileRescrapeJob, a 24h
+  // cron that (deliberately) only rescrapes already-approved assets, so a
+  // brand-new "pending" asset would otherwise never get scraped at all.
+  // Not awaited: the Apify actor call can take up to ~2 minutes and
+  // shouldn't block the "Add page" request; a bad handle or transient
+  // failure here just means the page shows blank until it's approved
+  // (see setApprovalStatus) or the next cron tick.
+  refreshAssetMetrics(asset.id).catch((err) =>
+    console.error(`createAsset: initial Apify scrape failed for handle "${handle}"`, err)
+  );
+
+  return asset;
 }
 
 export async function setApprovalStatus(assetId, approvalStatus) {
-  return prisma.asset.update({ where: { id: assetId }, data: { approvalStatus } });
+  const asset = await prisma.asset.update({ where: { id: assetId }, data: { approvalStatus } });
+
+  // Second chance at a scrape right when a page goes live, rather than
+  // waiting for the next 24h assetProfileRescrapeJob tick — also covers the
+  // case where the create-time scrape above failed or ran before the actor
+  // had indexed the profile.
+  if (approvalStatus === "approved") {
+    refreshAssetMetrics(assetId).catch((err) =>
+      console.error(`setApprovalStatus: Apify scrape failed for asset ${assetId}`, err)
+    );
+  }
+
+  return asset;
 }
 
 /** Upserts each (assetId, format) rate — admin-only, versioned by effectiveFrom. */
