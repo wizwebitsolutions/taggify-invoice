@@ -75,9 +75,19 @@ function refreshAccessToken(): Promise<string | null> {
         writeStoredAuth({ user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken });
         return result.accessToken;
       } catch {
-        // Refresh token itself is dead (expired past its 30d life, or
-        // revoked) — nothing left to retry with. Clear the session so
-        // RequireAuth redirects to /login instead of looping on 401s.
+        // The refresh token is single-use and rotated server-side (see
+        // authService.refresh) — with two tabs/devices open on the same
+        // session, both can have the same access token and race to refresh
+        // it within moments of each other. Whichever loses the race gets
+        // rejected here even though the session is fine: the *other* caller
+        // already redeemed it and localStorage now holds a newer pair. Only
+        // wipe the session if storage still points at the token we just
+        // tried — a genuinely dead refresh token — not when someone else
+        // already won the race.
+        const latest = readStoredAuth();
+        if (latest?.refreshToken && latest.refreshToken !== stored.refreshToken) {
+          return latest.accessToken;
+        }
         writeStoredAuth(null);
         return null;
       } finally {

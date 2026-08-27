@@ -47,7 +47,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // context silently holding an access token api-client has already
     // replaced or cleared.
     window.addEventListener("taggify:auth-sync", readFromStorage);
-    return () => window.removeEventListener("taggify:auth-sync", readFromStorage);
+
+    // Cross-tab: the native "storage" event fires in *other* tabs whenever
+    // one tab writes this key (login, logout, or a background refresh).
+    // Without this, a second open tab never learns its session was rotated
+    // until its own access token expires and it races the first tab to
+    // redeem the same (now single-use) refresh token — the loser looked
+    // logged out until a manual sign-out/sign-in. Picking up the rotated
+    // pair here as soon as it happens avoids that race in the first place.
+    function onStorage(e: StorageEvent) {
+      if (e.key === STORAGE_KEY) readFromStorage();
+    }
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("taggify:auth-sync", readFromStorage);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   async function login(phoneNumber: string, password: string) {
