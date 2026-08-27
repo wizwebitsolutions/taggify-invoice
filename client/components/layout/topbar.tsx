@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "@/lib/utils";
@@ -47,13 +48,17 @@ export function Topbar({
   });
 
   return (
-    <div className="flex h-[72px] shrink-0 items-center justify-between border-b border-border px-8">
-      <div className="flex h-10 w-[340px] items-center gap-2.5 rounded-full border border-border bg-surface px-4 text-sm text-text-faint">
+    <div className="flex h-[72px] shrink-0 items-center gap-4 border-b border-border px-8">
+      {/* flex-1 + max-w (was a fixed w-[340px]) so this gives way first on
+          a narrow window — the account controls to the right (profile,
+          log out) are the ones that must never get squeezed past the
+          edge and clipped. */}
+      <div className="flex h-10 min-w-0 max-w-[340px] flex-1 items-center gap-2.5 rounded-full border border-border bg-surface px-4 text-sm text-text-faint">
         <SearchIcon className="h-[15px] w-[15px] shrink-0" />
-        {placeholder}
+        <span className="truncate">{placeholder}</span>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center gap-4">
         <button
           onClick={toggleTheme}
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
@@ -119,15 +124,28 @@ export function Topbar({
 
         {children}
 
-        <div className={cn("flex h-8 w-8 items-center justify-center rounded-full text-[0.8125rem] font-bold", AVATAR_TONE[user.tone ?? "emerald"])}>
+        {/* Was a plain non-interactive div — reads as an account/profile
+            button at a glance (top-right avatar is the universal spot for
+            one) but did nothing. Now an actual link to /profile, matching
+            the sidebar's own profile card. shrink-0 so it can't get
+            squeezed by the search bar on a narrow window. */}
+        <Link
+          href="/profile"
+          title="Profile"
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[0.8125rem] font-bold transition-opacity hover:opacity-80",
+            AVATAR_TONE[user.tone ?? "emerald"]
+          )}
+        >
           {user.initials}
-        </div>
+        </Link>
 
         {/* Present on every AppShell page (was previously duplicated —
             inconsistently — on individual pages). Highlighted (danger
             variant) since signing out is a deliberate, easy-to-miss-if-
-            subtle action. */}
-        <Button variant="danger" size="sm" onClick={logout}>
+            subtle action. shrink-0 so it's never the thing that gets
+            clipped off the edge on a narrow window. */}
+        <Button variant="danger" size="sm" className="shrink-0" onClick={logout}>
           <LogoutIcon className="h-3.5 w-3.5" />
           Log out
         </Button>
