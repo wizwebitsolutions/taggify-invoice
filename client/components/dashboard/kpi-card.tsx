@@ -10,6 +10,7 @@ export function KpiCard({
   tone,
   onClick,
   active,
+  className,
 }: {
   icon?: ComponentType<{ className?: string }>;
   label: string;
@@ -21,6 +22,8 @@ export function KpiCard({
   onClick?: () => void;
   /** Whether this KPI's filter is the one currently applied — draws the accent ring. */
   active?: boolean;
+  /** Lets the KPI row switch this card between a horizontal-scroll strip (mobile) and a grid cell (desktop) without rendering it twice. */
+  className?: string;
 }) {
   const Comp = onClick ? "button" : "div";
   return (
@@ -32,7 +35,8 @@ export function KpiCard({
         tone === "indigo" && "border-accent-2/35 bg-gradient-to-b from-accent-2-soft to-transparent",
         tone === "rose" && "border-rose/35 bg-gradient-to-b from-rose-soft to-transparent",
         onClick && "cursor-pointer hover:border-accent/50 hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-        active && "border-accent ring-1 ring-accent"
+        active && "border-accent ring-1 ring-accent",
+        className
       )}
     >
       {Icon && (

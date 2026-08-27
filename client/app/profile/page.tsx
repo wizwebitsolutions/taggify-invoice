@@ -7,8 +7,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { Field, TextField } from "@/components/ui/form-field";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
+import { LogoutIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { users as usersApi, auth as authApi, billing as billingApi, ApiError, type User, type BillingProfile } from "@/lib/api-client";
@@ -23,7 +25,7 @@ export default function ProfilePage() {
 }
 
 function ProfileContent() {
-  const { user, accessToken } = useAuth();
+  const { user, accessToken, logout } = useAuth();
   // /profile?tab=billing deep-links straight to the billing tab — the admin
   // dashboard's "Billing profiles awaiting approval" card links here.
   const searchParams = useSearchParams();
@@ -69,6 +71,12 @@ function ProfileContent() {
         ) : (
           <BillingTab token={token} isReviewer={user?.role === "ADMIN" || user?.role === "FINANCE"} />
         )}
+
+        {/* Desktop carries log out in the topbar (hidden below md) — the mobile "More" sheet has its own, but it lives here too since this is the account page. */}
+        <Button variant="danger" size="lg" className="w-full md:hidden" onClick={logout}>
+          <LogoutIcon className="h-3.5 w-3.5" />
+          Log out
+        </Button>
       </div>
     </AppShell>
   );
@@ -100,7 +108,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-6 shadow-card">
         <h2 className="text-[0.9375rem] font-bold">Contact details</h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Name">
             <TextField value={name} onChange={setName} placeholder="Your name" />
           </Field>
@@ -117,7 +125,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
 
         <div className="border-t border-border pt-4">
           <p className="mb-3 text-xs font-bold uppercase tracking-[0.06em] text-text-faint">Address</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Address line 1">
               <TextField value={addressLine1} onChange={setAddressLine1} />
             </Field>
@@ -175,7 +183,7 @@ function ChangePasswordCard({ token }: { token: string }) {
         <p className="mt-1 text-[0.8125rem] text-text-faint">Let&apos;s make sure your password is strong.</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Current password">
           <TextField type="password" value={currentPassword} onChange={setCurrentPassword} />
         </Field>
@@ -272,7 +280,7 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
                   {bp.approvalStatus}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-3 border-t border-border pt-3 text-[0.8125rem]">
+              <div className="grid grid-cols-1 gap-3 border-t border-border pt-3 text-[0.8125rem] sm:grid-cols-2">
                 <div>
                   <p className="text-xs text-text-faint">GSTIN</p>
                   <p className="font-medium">{bp.gstin || "—"}</p>
@@ -333,18 +341,17 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <Sheet onClose={onClose} panelClassName="md:max-w-[460px]">
       <form
-        onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
           createMutation.mutate();
         }}
-        className="flex w-full max-w-[460px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <h2 className="text-lg font-bold">Add a billing profile</h2>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="PAN">
             <TextField required value={pan} onChange={(v) => setPan(v.toUpperCase())} placeholder="ABCDE1234F" maxLength={10} />
           </Field>
@@ -378,6 +385,6 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
           </Button>
         </div>
       </form>
-    </div>
+    </Sheet>
   );
 }

@@ -79,8 +79,11 @@ export function LinkDetailPanel({
     state: i === arr.length - 1 ? "current" : "done",
   }));
 
+  // No outer chrome (border/bg/width/padding) here — call sites own that,
+  // since desktop wraps this in a persistent side panel while mobile wraps
+  // it in a <Sheet> bottom sheet; the content is identical either way.
   return (
-    <div className="flex w-[320px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card">
+    <div className="flex flex-col gap-5">
       {link.screenshot?.url ? (
         <a
           href={link.screenshot.url}

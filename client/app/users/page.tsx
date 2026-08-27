@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { Field, TextField, Select } from "@/components/ui/form-field";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, TeamIcon } from "@/components/icons";
@@ -59,10 +60,18 @@ function UsersContent() {
       }
     >
       <div className="flex flex-col gap-7">
-        <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Admin</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">Users</h1>
-          <p className="text-[0.9375rem] text-text-muted">Every account on Taggify, and who can create new ones.</p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Admin</p>
+            <h1 className="mb-1.5 text-[1.625rem] font-bold">Users</h1>
+            <p className="text-[0.9375rem] text-text-muted">Every account on Taggify, and who can create new ones.</p>
+          </div>
+          {/* Desktop carries this same action in the topbar (hidden below md). */}
+          {isAdmin && (
+            <Button size="icon" className="shrink-0 md:hidden" onClick={() => setShowCreate(true)} aria-label="Add user">
+              <PlusIcon className="h-4 w-4 text-accent-ink" />
+            </Button>
+          )}
         </div>
 
         {!isAdmin ? (
@@ -78,15 +87,19 @@ function UsersContent() {
             <EmptyState label="No users yet." />
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface shadow-card">
-            <div className="grid grid-cols-[2fr_1.5fr_1fr_1fr] gap-3 border-b border-border px-5 py-3.5">
+          // overflow-x-auto + a min-width floor (rather than a mobile card
+          // rewrite, out of proportion for an admin-only, occasional-use
+          // table) — the table scrolls within its own card on a narrow
+          // screen instead of forcing the whole page to scroll sideways.
+          <div className="overflow-x-auto rounded-lg border border-border bg-surface shadow-card">
+            <div className="grid min-w-[560px] grid-cols-[2fr_1.5fr_1fr_1fr] gap-3 border-b border-border px-5 py-3.5">
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Name</div>
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Phone</div>
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Role</div>
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Joined</div>
             </div>
             {items.map((u) => (
-              <div key={u.id} className="grid grid-cols-[2fr_1.5fr_1fr_1fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
+              <div key={u.id} className="grid min-w-[560px] grid-cols-[2fr_1.5fr_1fr_1fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2">
                     <TeamIcon className="h-4 w-4 text-text-muted" />
@@ -142,9 +155,8 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
   const created = createMutation.data;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
       <form
-        onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
           if (created) {
@@ -153,7 +165,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
           }
           createMutation.mutate();
         }}
-        className="flex w-full max-w-[420px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <h2 className="text-lg font-bold">Add a user</h2>
 
@@ -212,6 +224,6 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
           </Button>
         </div>
       </form>
-    </div>
+    </Sheet>
   );
 }

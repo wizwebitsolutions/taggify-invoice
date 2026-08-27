@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { LinkDetailPanel, STATUS_LABEL } from "@/components/dashboard/link-detail-panel";
 import { TrendAreaChart } from "@/components/charts/trend-area-chart";
@@ -173,6 +174,8 @@ export function AdminDashboard() {
   });
   const queueRows = queueQuery.data?.items ?? [];
   const queueDetail = queueRows.find((l) => l.id === detailId) ?? queueRows[0];
+  // Mobile's sheet only opens on an explicit tap — no fallback-to-first-row like the desktop panel above.
+  const mobileQueueDetail = detailId ? queueRows.find((l) => l.id === detailId) : undefined;
   const isDefaultQueue = queueStatus === ACTIONABLE_STATUSES;
 
   function selectFunnelStatus(status: string) {
@@ -214,10 +217,11 @@ export function AdminDashboard() {
           <p className="text-[0.9375rem] text-text-muted">Finance, pipeline health, and pages — across every creator.</p>
         </div>
 
-        {/* Finance KPIs */}
-        <div className="grid grid-cols-4 gap-4">
-          <KpiCard icon={InvoiceIcon} label="Total raised" value={money(financeKpis.totalRaised)} foot={`${invoices.length} invoices`} onClick={() => router.push("/invoices")} />
+        {/* Finance KPIs — horizontal-scroll strip on mobile, a 4-up grid at md+. */}
+        <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
+          <KpiCard className="w-[160px] shrink-0 md:w-auto" icon={InvoiceIcon} label="Total raised" value={money(financeKpis.totalRaised)} foot={`${invoices.length} invoices`} onClick={() => router.push("/invoices")} />
           <KpiCard
+            className="w-[160px] shrink-0 md:w-auto"
             icon={ClockIcon}
             label="Pending payment"
             value={money(financeKpis.pendingAmount)}
@@ -225,6 +229,7 @@ export function AdminDashboard() {
             onClick={() => router.push("/invoices?status=RAISED")}
           />
           <KpiCard
+            className="w-[160px] shrink-0 md:w-auto"
             icon={AlertIcon}
             label="Overdue"
             value={money(financeKpis.overdueAmount)}
@@ -237,6 +242,7 @@ export function AdminDashboard() {
             onClick={() => router.push("/invoices?status=RAISED")}
           />
           <KpiCard
+            className="w-[160px] shrink-0 md:w-auto"
             icon={CheckCircleIcon}
             label="Collected"
             value={money(financeKpis.collectedAmount)}
@@ -245,10 +251,11 @@ export function AdminDashboard() {
           />
         </div>
 
-        {/* Ops KPIs */}
-        <div className="grid grid-cols-4 gap-4">
-          <KpiCard icon={AssetIcon} label="Active pages" value={String(opsKpis.activePages)} foot={`${assets.length} registered total`} onClick={() => router.push("/assets")} />
+        {/* Ops KPIs — same horizontal-scroll/grid switch. */}
+        <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
+          <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={AssetIcon} label="Active pages" value={String(opsKpis.activePages)} foot={`${assets.length} registered total`} onClick={() => router.push("/assets")} />
           <KpiCard
+            className="w-[150px] shrink-0 md:w-auto"
             icon={AlertIcon}
             label="Pending approvals"
             value={String(opsKpis.pendingApprovals)}
@@ -256,8 +263,9 @@ export function AdminDashboard() {
             tone={opsKpis.pendingApprovals > 0 ? "indigo" : undefined}
             onClick={() => scrollToId("pending-approvals")}
           />
-          <KpiCard icon={CampaignIcon} label="Campaigns" value={String(opsKpis.campaigns)} onClick={() => router.push("/campaigns")} />
+          <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={CampaignIcon} label="Campaigns" value={String(opsKpis.campaigns)} onClick={() => router.push("/campaigns")} />
           <KpiCard
+            className="w-[150px] shrink-0 md:w-auto"
             icon={ClockIcon}
             label="Links in pipeline"
             value={String(opsKpis.inPipeline)}
@@ -276,7 +284,7 @@ export function AdminDashboard() {
         </section>
 
         {/* Link funnel + top pages */}
-        <div className="grid grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <section className="rounded-lg border border-border bg-surface p-6 shadow-card">
             <div className="mb-5">
               <h2 className="text-[0.9375rem] font-bold">Link pipeline</h2>
@@ -338,8 +346,8 @@ export function AdminDashboard() {
             )}
           </div>
 
-          <div className="flex min-h-0 gap-5">
-            <div className="flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card">
+          <div className="flex min-h-0 flex-col gap-4 md:flex-row md:gap-5">
+            <div className="hidden flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card md:block">
               <div className="grid grid-cols-[minmax(0,2.4fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.3fr)_24px] gap-3 border-b border-border px-5 py-3.5">
                 <Th>Post</Th>
                 <Th>Page</Th>
@@ -378,23 +386,68 @@ export function AdminDashboard() {
               )}
             </div>
 
-            {queueDetail && (
-              <LinkDetailPanel
-                link={queueDetail}
-                token={token}
-                isAdmin={isAdmin}
-                canUploadScreenshot={false}
-                onChanged={() => {
-                  queryClient.invalidateQueries({ queryKey: ["links"] });
-                  queryClient.invalidateQueries({ queryKey: ["linkTimeline", queueDetail.id] });
-                }}
-              />
-            )}
+            {/* Mobile: cards instead of a table row. */}
+            <div className="flex flex-col gap-3 md:hidden">
+              {queueQuery.isLoading ? (
+                <TableSkeleton />
+              ) : queueRows.length === 0 ? (
+                <EmptyState label={isDefaultQueue ? "Nothing waiting on you — all caught up." : "No links in this stage."} />
+              ) : (
+                queueRows.map((link) => (
+                  <div
+                    key={link.id}
+                    onClick={() => setDetailId(link.id)}
+                    className="flex items-center gap-3 rounded-[14px] border border-border bg-surface p-3.5 shadow-card"
+                  >
+                    <div className="h-9 w-9 shrink-0 rounded-[9px] bg-gradient-to-br from-accent-soft to-accent-2-soft" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold">{link.campaign?.title ?? "—"}</div>
+                      <div className="mt-0.5 truncate text-xs text-text-faint">@{link.asset?.handle ?? "—"} · {money(link.cost)}</div>
+                    </div>
+                    <StatusPill status={link.status} />
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Desktop: persistent side panel. */}
+            <div className="hidden w-[320px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card md:flex">
+              {queueDetail && (
+                <LinkDetailPanel
+                  link={queueDetail}
+                  token={token}
+                  isAdmin={isAdmin}
+                  canUploadScreenshot={false}
+                  onChanged={() => {
+                    queryClient.invalidateQueries({ queryKey: ["links"] });
+                    queryClient.invalidateQueries({ queryKey: ["linkTimeline", queueDetail.id] });
+                  }}
+                />
+              )}
+            </div>
           </div>
+
+          {/* Mobile: detail opens as a bottom sheet. */}
+          {mobileQueueDetail && (
+            <Sheet onClose={() => setDetailId(null)} overlayClassName="md:hidden" panelClassName="md:hidden">
+              <div className="overflow-y-auto p-6 pt-1">
+                <LinkDetailPanel
+                  link={mobileQueueDetail}
+                  token={token}
+                  isAdmin={isAdmin}
+                  canUploadScreenshot={false}
+                  onChanged={() => {
+                    queryClient.invalidateQueries({ queryKey: ["links"] });
+                    queryClient.invalidateQueries({ queryKey: ["linkTimeline", mobileQueueDetail.id] });
+                  }}
+                />
+              </div>
+            </Sheet>
+          )}
         </section>
 
         {/* Pending approvals */}
-        <section id="pending-approvals" className="scroll-mt-6 grid grid-cols-2 gap-5">
+        <section id="pending-approvals" className="scroll-mt-6 grid grid-cols-1 gap-5 md:grid-cols-2">
           <div className="rounded-lg border border-border bg-surface p-6 shadow-card">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-[0.9375rem] font-bold">Pages awaiting approval</h2>
@@ -464,7 +517,7 @@ export function AdminDashboard() {
 
         {/* System health — ADMIN only, Finance can't reach /admin/* */}
         {isAdmin && (
-          <section className="grid grid-cols-2 gap-5">
+          <section className="grid grid-cols-1 gap-5 md:grid-cols-2">
             <div className="rounded-lg border border-border bg-surface p-6 shadow-card">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-[0.9375rem] font-bold">Recent job runs</h2>

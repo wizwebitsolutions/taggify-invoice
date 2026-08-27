@@ -48,22 +48,28 @@ export function Topbar({
   });
 
   return (
-    <div className="flex h-[72px] shrink-0 items-center gap-4 border-b border-border px-8">
+    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 md:h-[72px] md:gap-4 md:px-8">
       {/* flex-1 + max-w (was a fixed w-[340px]) so this gives way first on
           a narrow window — the account controls to the right (profile,
           log out) are the ones that must never get squeezed past the
-          edge and clipped. */}
-      <div className="flex h-10 min-w-0 max-w-[340px] flex-1 items-center gap-2.5 rounded-full border border-border bg-surface px-4 text-sm text-text-faint">
+          edge and clipped. Hidden below md: the mobile icon-only stand-in
+          just underneath takes its place there. */}
+      <div className="hidden h-10 min-w-0 max-w-[340px] flex-1 items-center gap-2.5 rounded-full border border-border bg-surface px-4 text-sm text-text-faint md:flex">
         <SearchIcon className="h-[15px] w-[15px] shrink-0" />
         <span className="truncate">{placeholder}</span>
       </div>
+      {/* Mobile: same (currently decorative) search affordance, condensed to an icon so it doesn't crowd the account cluster on a narrow screen. */}
+      <div className="flex h-9 w-9 flex-1 items-center justify-center rounded-full border border-border bg-surface text-text-faint md:hidden">
+        <SearchIcon className="h-4 w-4" />
+      </div>
 
-      <div className="flex shrink-0 items-center gap-4">
+      <div className="flex shrink-0 items-center gap-3 md:gap-4">
+        {/* Theme toggle lives in the mobile "More" sheet instead — no room for it in the condensed mobile bar. */}
         <button
           onClick={toggleTheme}
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           aria-label="Toggle color theme"
-          className="flex h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-border bg-surface text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+          className="hidden h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-border bg-surface text-text-muted transition-colors hover:bg-surface-hover hover:text-text md:flex"
         >
           {theme === "dark" ? <SunIcon className="h-[18px] w-[18px]" /> : <MoonIcon className="h-[18px] w-[18px]" />}
         </button>
@@ -82,7 +88,7 @@ export function Topbar({
           {open && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-              <div className="absolute right-0 top-[calc(100%+8px)] z-50 flex max-h-[420px] w-[360px] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-card">
+              <div className="absolute right-0 top-[calc(100%+8px)] z-50 flex max-h-[420px] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-card">
                 <div className="flex items-center justify-between border-b border-border px-4 py-3">
                   <p className="text-[0.875rem] font-bold">Notifications</p>
                   {unreadCount > 0 && (
@@ -122,7 +128,10 @@ export function Topbar({
           )}
         </div>
 
-        {children}
+        {/* Desktop-only action (e.g. "Upload links", "Add page") — on mobile
+            the same action is a FAB or a header icon button the page renders
+            itself (AppShell's `fab` prop / a per-page "+" button). */}
+        <div className="hidden md:contents">{children}</div>
 
         {/* Was a plain non-interactive div — reads as an account/profile
             button at a glance (top-right avatar is the universal spot for
@@ -144,8 +153,9 @@ export function Topbar({
             inconsistently — on individual pages). Highlighted (danger
             variant) since signing out is a deliberate, easy-to-miss-if-
             subtle action. shrink-0 so it's never the thing that gets
-            clipped off the edge on a narrow window. */}
-        <Button variant="danger" size="sm" className="shrink-0" onClick={logout}>
+            clipped off the edge on a narrow window. Hidden on mobile —
+            the "More" sheet's Log out row covers it there. */}
+        <Button variant="danger" size="sm" className="hidden shrink-0 md:inline-flex" onClick={logout}>
           <LogoutIcon className="h-3.5 w-3.5" />
           Log out
         </Button>

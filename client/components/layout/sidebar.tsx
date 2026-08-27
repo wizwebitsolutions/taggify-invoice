@@ -60,7 +60,7 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
     // last item after a flex-1 spacer, so on a short viewport with several
     // nav groups it got pushed past the bottom edge and clipped by the
     // app shell's overflow-hidden instead of ever being reachable.
-    <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-border bg-sidebar">
+    <aside className="hidden h-full w-[260px] shrink-0 flex-col border-r border-border bg-sidebar md:flex">
       <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto p-4">
         <div className="flex items-center gap-2.5 px-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-sm font-extrabold text-accent-ink">

@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { Field, TextField } from "@/components/ui/form-field";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
@@ -50,10 +51,18 @@ function CampaignsContent() {
       }
     >
       <div className="flex flex-col gap-7">
-        <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Work</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">Campaigns</h1>
-          <p className="text-[0.9375rem] text-text-muted">Brand deals assigned to your pages.</p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Work</p>
+            <h1 className="mb-1.5 text-[1.625rem] font-bold">Campaigns</h1>
+            <p className="text-[0.9375rem] text-text-muted">Brand deals assigned to your pages.</p>
+          </div>
+          {/* Desktop carries this same action in the topbar (hidden below md). */}
+          {canCreate && (
+            <Button size="icon" className="shrink-0 md:hidden" onClick={() => setShowForm(true)} aria-label="New campaign">
+              <PlusIcon className="h-4 w-4 text-accent-ink" />
+            </Button>
+          )}
         </div>
 
         {campaignsQuery.isLoading ? (
@@ -65,7 +74,7 @@ function CampaignsContent() {
             <EmptyState label="No campaigns yet." />
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((c) => (
               <div key={c.id} className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card">
                 <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-surface-2">
@@ -133,14 +142,13 @@ function NewCampaignModal({ token, onClose, onCreated }: { token: string; onClos
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
       <form
-        onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
           createMutation.mutate();
         }}
-        className="flex w-full max-w-[420px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <h2 className="text-lg font-bold">New campaign</h2>
         <Field label="Brand name">
@@ -164,6 +172,6 @@ function NewCampaignModal({ token, onClose, onCreated }: { token: string; onClos
           </Button>
         </div>
       </form>
-    </div>
+    </Sheet>
   );
 }

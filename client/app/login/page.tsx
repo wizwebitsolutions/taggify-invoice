@@ -95,8 +95,14 @@ export default function LoginPage() {
       </div>
 
       {/* Form */}
-      <div className="flex flex-1 items-center justify-center bg-bg p-8">
+      <div className="flex flex-1 items-center justify-center bg-bg p-6 sm:p-8">
         <form onSubmit={handleSubmit} className="flex w-full max-w-[380px] flex-col gap-7">
+          {/* The editorial panel is hidden below lg — carry the wordmark down here so mobile isn't just a bare form. */}
+          <div className="flex items-center gap-2.5 lg:hidden">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-sm font-extrabold text-accent-ink">T</div>
+            <span className="text-[1rem] font-bold tracking-tight">Taggify</span>
+          </div>
+
           <div>
             <h1 className="mb-2 text-2xl font-bold">Welcome back</h1>
             <p className="text-[0.9375rem] text-text-muted">Sign in with the phone number on your account.</p>

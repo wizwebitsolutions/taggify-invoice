@@ -64,8 +64,11 @@ function JobRunsContent() {
             <EmptyState label="No job runs recorded yet." />
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface shadow-card">
-            <div className="grid grid-cols-[1.4fr_1fr_1.3fr_1.3fr_2fr] gap-3 border-b border-border px-5 py-3.5">
+          // overflow-x-auto + a min-width floor — this table scrolls within
+          // its own card on a narrow screen instead of the whole page
+          // scrolling sideways.
+          <div className="overflow-x-auto rounded-lg border border-border bg-surface shadow-card">
+            <div className="grid min-w-[640px] grid-cols-[1.4fr_1fr_1.3fr_1.3fr_2fr] gap-3 border-b border-border px-5 py-3.5">
               <Th>Job</Th>
               <Th>Status</Th>
               <Th>Started</Th>
@@ -73,7 +76,7 @@ function JobRunsContent() {
               <Th>Error</Th>
             </div>
             {(jobRunsQuery.data ?? []).map((run) => (
-              <div key={run.id} className="grid grid-cols-[1.4fr_1fr_1.3fr_1.3fr_2fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
+              <div key={run.id} className="grid min-w-[640px] grid-cols-[1.4fr_1fr_1.3fr_1.3fr_2fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
                 <div className="flex items-center gap-2.5">
                   <ClockIcon className="h-4 w-4 shrink-0 text-text-faint" />
                   <span className="truncate text-[0.8438rem] font-semibold">{run.jobName}</span>

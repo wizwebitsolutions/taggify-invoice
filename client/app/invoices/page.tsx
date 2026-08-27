@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Field, TextField } from "@/components/ui/form-field";
@@ -57,6 +58,8 @@ function InvoicesContent() {
 
   const items = invoicesQuery.data?.items ?? [];
   const selected = items.find((i) => i.id === selectedId) ?? items[0];
+  // Mobile's sheet only opens on an explicit tap — no fallback-to-first-row like the desktop panel below.
+  const mobileSelected = selectedId ? items.find((i) => i.id === selectedId) : undefined;
 
   const kpis = useMemo(() => {
     const totalRaised = items.reduce((sum, i) => sum + Number(i.amount), 0);
@@ -102,11 +105,105 @@ function InvoicesContent() {
     COMPLETED: "COMPLETED",
   };
 
+  // Shared between the desktop persistent panel and the mobile bottom
+  // sheet — same content, different outer chrome, so this stays one
+  // definition instead of two copies drifting apart.
+  function renderInvoiceDetail(inv: Invoice) {
+    return (
+      <>
+        <div>
+          <div className="font-mono text-xs text-text-faint">{inv.invoiceNumber}</div>
+          <div className="text-[1.875rem] font-extrabold tracking-tight tabular-nums">{money(inv.amount)}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <StatusPill status={inv.status} />
+          <StatusPill status={inv.paymentStatus} />
+          <StatusPill status={inv.gstStatus} />
+        </div>
+        {inv.status === "REJECTED" && inv.remarks && (
+          <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] text-rose">{inv.remarks}</p>
+        )}
+        <div className="h-px bg-border" />
+        <div className="flex flex-col gap-3">
+          {(inv.items ?? []).slice(0, 4).map((item) => (
+            <LineItem key={item.id} title={item.link?.campaign?.title ?? item.link?.url ?? "Link"} amount={money(item.amount)} />
+          ))}
+          {(inv.items?.length ?? 0) > 4 && <LineItem title={`+ ${inv.items!.length - 4} more approved links`} amount="" />}
+        </div>
+        <div className="flex items-center justify-between border-t border-border pt-3.5">
+          <span className="text-[0.8125rem] text-text-faint">Total</span>
+          <span className="text-[1.125rem] font-extrabold tabular-nums">{money(inv.amount)}</span>
+        </div>
+
+        <Button variant="secondary" size="lg" className="w-full" onClick={() => downloadMutation.mutate(inv)} disabled={downloadMutation.isPending}>
+          <DownloadIcon className="h-3.5 w-3.5" />
+          {downloadMutation.isPending ? "Preparing PDF…" : "Download PDF"}
+        </Button>
+        <Button
+          variant="secondary"
+          size="lg"
+          className="w-full"
+          onClick={() => downloadLinksMutation.mutate(inv)}
+          disabled={downloadLinksMutation.isPending}
+        >
+          <SearchIcon className="h-3.5 w-3.5" />
+          {downloadLinksMutation.isPending ? "Preparing…" : "Download links"}
+        </Button>
+
+        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
+          <Button size="lg" className="w-full" onClick={() => markPaidMutation.mutate(inv.id)} disabled={markPaidMutation.isPending}>
+            {markPaidMutation.isPending ? "Marking paid…" : "Mark as paid"}
+          </Button>
+        )}
+        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
+          <Button variant="danger" size="lg" className="w-full" onClick={() => setRejectingId(inv.id)}>
+            Reject invoice
+          </Button>
+        )}
+        {canManage && inv.gstStatus !== "COMPLETED" && (
+          <Button
+            variant="secondary"
+            size="lg"
+            className="w-full"
+            onClick={() => gstMutation.mutate({ id: inv.id, gstStatus: NEXT_GST[inv.gstStatus] })}
+            disabled={gstMutation.isPending}
+          >
+            {gstMutation.isPending ? "Updating…" : `Advance GST to ${NEXT_GST[inv.gstStatus].toLowerCase()}`}
+          </Button>
+        )}
+
+        {(markPaidMutation.isError || gstMutation.isError || downloadMutation.isError || downloadLinksMutation.isError) && (
+          <ErrorNotice
+            message={
+              markPaidMutation.error instanceof ApiError
+                ? markPaidMutation.error.message
+                : gstMutation.error instanceof ApiError
+                  ? gstMutation.error.message
+                  : downloadMutation.error instanceof ApiError
+                    ? downloadMutation.error.message
+                    : downloadLinksMutation.error instanceof ApiError
+                      ? downloadLinksMutation.error.message
+                      : "Something went wrong."
+            }
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <AppShell
       active="invoices"
       user={{ initials: initialsOf(user?.name), name: user?.name ?? "—", role: roleLabel(user?.role), tone: user?.role === "FINANCE" ? "blue" : "emerald" }}
       searchPlaceholder="Search invoice number, creator…"
+      fab={
+        canRaiseInvoice ? (
+          <Button size="lg" className="h-14 rounded-full px-5 shadow-glow" onClick={() => setShowNewInvoice(true)}>
+            <PlusIcon className="h-4 w-4 text-accent-ink" />
+            New invoice
+          </Button>
+        ) : undefined
+      }
     >
       <div className="flex flex-col gap-7">
         <div>
@@ -115,14 +212,15 @@ function InvoicesContent() {
           <p className="text-[0.9375rem] text-text-muted">Raised, paid, and GST status — tracked independently, settled manually.</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
-          <KpiCard label="Total raised" value={money(kpis.totalRaised)} foot={`${items.length} invoices total`} />
-          <KpiCard label="Pending payment" value={money(kpis.pendingAmount)} foot={`${kpis.pendingCount} invoice${kpis.pendingCount === 1 ? "" : "s"} awaiting settlement`} />
-          <KpiCard label="Overdue" value={money(kpis.overdueAmount)} foot={`${kpis.overdueCount} invoice${kpis.overdueCount === 1 ? "" : "s"} past due date`} tone={kpis.overdueCount > 0 ? "rose" : undefined} />
+        {/* Horizontal-scroll strip on mobile, a 3-up grid at md+. */}
+        <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-3 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
+          <KpiCard className="w-[170px] shrink-0 md:w-auto" label="Total raised" value={money(kpis.totalRaised)} foot={`${items.length} invoices total`} />
+          <KpiCard className="w-[170px] shrink-0 md:w-auto" label="Pending payment" value={money(kpis.pendingAmount)} foot={`${kpis.pendingCount} invoice${kpis.pendingCount === 1 ? "" : "s"} awaiting settlement`} />
+          <KpiCard className="w-[170px] shrink-0 md:w-auto" label="Overdue" value={money(kpis.overdueAmount)} foot={`${kpis.overdueCount} invoice${kpis.overdueCount === 1 ? "" : "s"} past due date`} tone={kpis.overdueCount > 0 ? "rose" : undefined} />
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-64 items-center gap-2 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-faint">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex h-9 min-w-[160px] flex-1 items-center gap-2 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-faint sm:flex-none sm:w-64">
             <SearchIcon className="h-3.5 w-3.5 shrink-0" />
             <input
               value={search}
@@ -156,21 +254,21 @@ function InvoicesContent() {
             <option value="CANCELLED">Cancelled</option>
           </select>
 
-          <div className="flex-1" />
+          <div className="hidden flex-1 md:block" />
           <Button variant="secondary" size="sm" className="rounded-full">
             <DownloadIcon className="h-3.5 w-3.5" />
             Export CSV
           </Button>
           {canRaiseInvoice && (
-            <Button size="sm" className="rounded-full" onClick={() => setShowNewInvoice(true)}>
+            <Button size="sm" className="hidden rounded-full md:inline-flex" onClick={() => setShowNewInvoice(true)}>
               <PlusIcon className="h-3.5 w-3.5" />
               New invoice
             </Button>
           )}
         </div>
 
-        <div className="flex min-h-0 flex-1 gap-5">
-          <div className="flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row md:gap-5">
+          <div className="hidden flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card md:block">
             <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.1fr)] gap-3 border-b border-border px-5 py-3.5">
               <Th>Invoice</Th>
               <Th>Creator</Th>
@@ -264,96 +362,86 @@ function InvoicesContent() {
             )}
           </div>
 
-          {selected && (
-            <div className="flex w-[340px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card">
-              <div>
-                <div className="font-mono text-xs text-text-faint">{selected.invoiceNumber}</div>
-                <div className="text-[1.875rem] font-extrabold tracking-tight tabular-nums">{money(selected.amount)}</div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <StatusPill status={selected.status} />
-                <StatusPill status={selected.paymentStatus} />
-                <StatusPill status={selected.gstStatus} />
-              </div>
-              {selected.status === "REJECTED" && selected.remarks && (
-                <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] text-rose">{selected.remarks}</p>
-              )}
-              <div className="h-px bg-border" />
-              <div className="flex flex-col gap-3">
-                {(selected.items ?? []).slice(0, 4).map((item) => (
-                  <LineItem key={item.id} title={item.link?.campaign?.title ?? item.link?.url ?? "Link"} amount={money(item.amount)} />
-                ))}
-                {(selected.items?.length ?? 0) > 4 && (
-                  <LineItem title={`+ ${selected.items!.length - 4} more approved links`} amount="" />
-                )}
-              </div>
-              <div className="flex items-center justify-between border-t border-border pt-3.5">
-                <span className="text-[0.8125rem] text-text-faint">Total</span>
-                <span className="text-[1.125rem] font-extrabold tabular-nums">{money(selected.amount)}</span>
-              </div>
+          {/* Mobile: cards instead of a table row. */}
+          <div className="flex flex-col gap-3 md:hidden">
+            {invoicesQuery.isLoading ? (
+              <TableSkeleton />
+            ) : items.length === 0 ? (
+              <EmptyState label="No invoices raised yet — bulk-invoice approved links from My Works." />
+            ) : (
+              items.map((inv) => {
+                const isOverdue = inv.overdueDays > 0;
+                const isPaid = inv.status === "PAID";
+                return (
+                  <div
+                    key={inv.id}
+                    onClick={() => setSelectedId(inv.id)}
+                    className="flex flex-col gap-2.5 rounded-[14px] border border-border bg-surface p-3.5 shadow-card"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-mono text-xs text-text-faint">{inv.invoiceNumber}</span>
+                      <StatusPill status={inv.status} />
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-[0.8125rem] text-text-muted">{inv.creator?.name ?? inv.creator?.phoneNumber ?? "—"}</span>
+                      <span className="shrink-0 text-[1.0625rem] font-bold tabular-nums">{money(inv.amount)}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <StatusPill status={inv.paymentStatus} />
+                      <StatusPill status={inv.gstStatus} />
+                    </div>
+                    <div className="flex items-center justify-between border-t border-border pt-2.5">
+                      <span className={cn("text-xs", isOverdue ? "font-bold text-rose" : "text-text-faint")}>
+                        {isPaid
+                          ? inv.paidAt
+                            ? `Settled ${new Date(inv.paidAt).toLocaleDateString()}`
+                            : "Settled"
+                          : isOverdue
+                            ? `Overdue · ${inv.overdueDays}d`
+                            : inv.dueDate
+                              ? `Due ${new Date(inv.dueDate).toLocaleDateString()}`
+                              : "—"}
+                      </span>
+                      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+                        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
+                          <Button
+                            size="sm"
+                            className="h-9 bg-accent-soft px-2.5 text-accent shadow-none hover:brightness-100"
+                            onClick={() => markPaidMutation.mutate(inv.id)}
+                            disabled={markPaidMutation.isPending}
+                          >
+                            Mark paid
+                          </Button>
+                        )}
+                        <button
+                          title="Download PDF"
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted disabled:opacity-50"
+                          onClick={() => downloadMutation.mutate(inv)}
+                          disabled={downloadMutation.isPending}
+                        >
+                          <DownloadIcon className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
 
-              <Button
-                variant="secondary"
-                size="lg"
-                className="w-full"
-                onClick={() => downloadMutation.mutate(selected)}
-                disabled={downloadMutation.isPending}
-              >
-                <DownloadIcon className="h-3.5 w-3.5" />
-                {downloadMutation.isPending ? "Preparing PDF…" : "Download PDF"}
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                className="w-full"
-                onClick={() => downloadLinksMutation.mutate(selected)}
-                disabled={downloadLinksMutation.isPending}
-              >
-                <SearchIcon className="h-3.5 w-3.5" />
-                {downloadLinksMutation.isPending ? "Preparing…" : "Download links"}
-              </Button>
-
-              {canManage && selected.status !== "PAID" && selected.status !== "REJECTED" && (
-                <Button size="lg" className="w-full" onClick={() => markPaidMutation.mutate(selected.id)} disabled={markPaidMutation.isPending}>
-                  {markPaidMutation.isPending ? "Marking paid…" : "Mark as paid"}
-                </Button>
-              )}
-              {canManage && selected.status !== "PAID" && selected.status !== "REJECTED" && (
-                <Button variant="danger" size="lg" className="w-full" onClick={() => setRejectingId(selected.id)}>
-                  Reject invoice
-                </Button>
-              )}
-              {canManage && selected.gstStatus !== "COMPLETED" && (
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  className="w-full"
-                  onClick={() => gstMutation.mutate({ id: selected.id, gstStatus: NEXT_GST[selected.gstStatus] })}
-                  disabled={gstMutation.isPending}
-                >
-                  {gstMutation.isPending ? "Updating…" : `Advance GST to ${NEXT_GST[selected.gstStatus].toLowerCase()}`}
-                </Button>
-              )}
-
-              {(markPaidMutation.isError || gstMutation.isError || downloadMutation.isError || downloadLinksMutation.isError) && (
-                <ErrorNotice
-                  message={
-                    markPaidMutation.error instanceof ApiError
-                      ? markPaidMutation.error.message
-                      : gstMutation.error instanceof ApiError
-                        ? gstMutation.error.message
-                        : downloadMutation.error instanceof ApiError
-                          ? downloadMutation.error.message
-                          : downloadLinksMutation.error instanceof ApiError
-                            ? downloadLinksMutation.error.message
-                            : "Something went wrong."
-                  }
-                />
-              )}
-            </div>
-          )}
+          {/* Desktop: persistent side panel. */}
+          <div className="hidden w-[340px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card md:flex">
+            {selected && renderInvoiceDetail(selected)}
+          </div>
         </div>
       </div>
+
+      {/* Mobile: detail opens as a bottom sheet. */}
+      {mobileSelected && (
+        <Sheet onClose={() => setSelectedId(null)} overlayClassName="md:hidden" panelClassName="md:hidden">
+          <div className="flex flex-col gap-5 overflow-y-auto p-6 pt-1">{renderInvoiceDetail(mobileSelected)}</div>
+        </Sheet>
+      )}
 
       {rejectingId && (
         <RejectInvoiceModal
@@ -392,14 +480,13 @@ function RejectInvoiceModal({
   const [remarks, setRemarks] = useState("");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
       <form
-        onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
           onConfirm(remarks);
         }}
-        className="flex w-full max-w-[420px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <h2 className="text-lg font-bold">Reject invoice</h2>
         <p className="text-[0.8125rem] text-text-faint">Its links go back to Insights approved, eligible to be re-invoiced once the issue is fixed.</p>
@@ -416,7 +503,7 @@ function RejectInvoiceModal({
           </Button>
         </div>
       </form>
-    </div>
+    </Sheet>
   );
 }
 
@@ -494,8 +581,8 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
   // rather than just silently dismissing the modal.
   if (raisedInvoice) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-        <div onClick={(e) => e.stopPropagation()} className="flex w-full max-w-[420px] flex-col items-center gap-4 rounded-lg border border-border bg-surface p-8 text-center shadow-card">
+      <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
+        <div className="flex flex-col items-center gap-4 p-8 pt-2 text-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent">
             <CheckCircleIcon className="h-6 w-6" />
           </div>
@@ -508,16 +595,13 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
             Done
           </Button>
         </div>
-      </div>
+      </Sheet>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-[640px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
-      >
+    <Sheet onClose={onClose} panelClassName="md:max-w-[640px]">
+      <div className="flex flex-1 min-h-0 flex-col gap-5 p-6 pt-1">
         <div>
           <h2 className="text-lg font-bold">New invoice</h2>
           <p className="text-[0.8125rem] text-text-faint">Select the links to bill, grouped by campaign.</p>
@@ -603,7 +687,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
           </Button>
         </div>
       </div>
-    </div>
+    </Sheet>
   );
 }
 

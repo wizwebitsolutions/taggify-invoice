@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { Field, Select } from "@/components/ui/form-field";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { links as linksApi, ApiError } from "@/lib/api-client";
@@ -68,9 +69,8 @@ export function UploadLinksModal({
   const pinnedCampaign = campaigns.find((c) => c.id === initialCampaignId);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <Sheet onClose={onClose} panelClassName="md:max-w-[460px]">
       <form
-        onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
           if (result) {
@@ -79,7 +79,7 @@ export function UploadLinksModal({
           }
           bulkMutation.mutate();
         }}
-        className="flex w-full max-w-[460px] flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card"
+        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <div>
           <h2 className="text-lg font-bold">Upload links</h2>
@@ -177,6 +177,6 @@ export function UploadLinksModal({
           )}
         </div>
       </form>
-    </div>
+    </Sheet>
   );
 }
