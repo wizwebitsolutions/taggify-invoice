@@ -68,6 +68,8 @@ model User {
   submittedLinks   Link[]           @relation("SubmittedByUser")
   statusEvents     LinkStatusEvent[]
   billingProfiles  BillingProfile[]
+  costRevisions    LinkCostRevision[]
+  plans            Plan[]
 }
 
 // Payout/tax identity a creator registers to receive invoice payments —
@@ -125,16 +127,42 @@ model Asset {
   fullName       String? // profile display name, synced from Apify
   biography      String? // profile bio, synced from Apify
   profilePicUrl  String? // Instagram CDN URL, synced from Apify — re-synced every 24h so it doesn't go stale
+  category       String? // free-form, e.g. "Meme page", "News page" — not a fixed enum, same convention as RateCard.format
   approvalStatus String   @default("pending") // pending | approved | rejected
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  owner     User              @relation(fields: [ownerId], references: [id])
-  rateCards RateCard[]
-  links     Link[]
-  snapshots AccountSnapshot[]
+  owner       User                 @relation(fields: [ownerId], references: [id])
+  rateCards   RateCard[]
+  links       Link[]
+  snapshots   AccountSnapshot[]
+  assignments CampaignAssignment[]
+  planItems   PlanItem[]
 
   @@unique([ownerId, platform, handle])
+}
+
+// One row per page/creator an admin listed when attaching a sheet to a
+// campaign (newTask.md #8) — "which pages/creators is this campaign visible
+// to". `pageHandle`/`creatorPhone` are the raw values from that sheet, kept
+// even after matching for reference. `assetId` is filled in once matched to
+// an existing page, or once an admin creates the missing page for a
+// still-pending row (newTask.md #11's approval-before-creation gate is the
+// existing Asset.approvalStatus flow on whatever gets created here — a page
+// created this way starts "pending" exactly like any other new page).
+model CampaignAssignment {
+  id           String   @id @default(cuid())
+  campaignId   String
+  assetId      String?
+  pageHandle   String
+  creatorPhone String?
+  status       String   @default("pending") // pending | matched
+  createdAt    DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  asset    Asset?   @relation(fields: [assetId], references: [id])
+
+  @@index([campaignId])
 }
 
 model RateCard {
@@ -154,10 +182,13 @@ model Campaign {
   brandName String
   title     String
   deadline  DateTime?
+  costCap   Decimal?  @db.Decimal(12, 2) // total budget cap (newTask.md #8) — "remaining budget" (#9) is derived: costCap - sum(links.cost), not stored
+  sheetLink String? // reference URL (e.g. a Google Sheet) an admin attached when creating the campaign — kept as a plain link, not live-fetched; the actual page/creator list comes in via an uploaded file (see CampaignAssignment)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  links Link[]
+  links       Link[]
+  assignments CampaignAssignment[]
 }
 
 model Link {
@@ -181,10 +212,29 @@ model Link {
   postSnapshots PostSnapshot[]
   invoiceItem   InvoiceItem?
   statusEvents  LinkStatusEvent[]
+  costRevisions LinkCostRevision[]
 
   @@index([status])
   @@index([assetId])
   @@index([campaignId])
+}
+
+// Audit trail for admin-revised per-page costs within a campaign (newTask.md
+// #10) — Link.cost itself always holds the current value; this is the
+// history of what it used to be and why.
+model LinkCostRevision {
+  id            String   @id @default(cuid())
+  linkId        String
+  previousCost  Decimal  @db.Decimal(12, 2)
+  newCost       Decimal  @db.Decimal(12, 2)
+  note          String?
+  revisedById   String
+  createdAt     DateTime @default(now())
+
+  link       Link @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  revisedBy  User @relation(fields: [revisedById], references: [id])
+
+  @@index([linkId])
 }
 
 model LinkStatusEvent {
@@ -222,6 +272,8 @@ model PostSnapshot {
   saves          Int
   shares         Int
   reposts        Int
+  thumbnailUrl   String? // post's display image/cover, from Apify — powers the campaign card's post preview
+  caption        String? // post caption text, from Apify — same card
   source         String   @default("apify")
   capturedAt     DateTime @default(now())
 
@@ -247,7 +299,10 @@ model Invoice {
   id            String        @id @default(cuid())
   creatorId     String
   invoiceNumber String        @unique
-  amount        Decimal       @db.Decimal(12, 2)
+  amount        Decimal       @db.Decimal(12, 2) // final billed total = subtotal + gstAmount
+  subtotal      Decimal       @db.Decimal(12, 2) // sum of the invoiced links' cost, pre-GST
+  isGstInvoice  Boolean       @default(false)
+  gstAmount     Decimal       @db.Decimal(12, 2) @default(0) // 18% of subtotal when isGstInvoice, else 0
   status        InvoiceStatus @default(DRAFT)
   paymentStatus PaymentStatus @default(PENDING)
   gstStatus     GstStatus     @default(PENDING)
@@ -296,4 +351,36 @@ model JobRun {
   error      String?
 
   @@index([jobName, startedAt])
+}
+
+// "Inventory" (newTask.md #13) — a proposal an admin builds to pitch a set
+// of pages to a brand client, exported as a PDF. Distinct from Campaign:
+// a Campaign is work actually happening; a Plan is a pitch that may never
+// become one. cost/expected engagement are computed at read time from the
+// selected pages (service.js), not stored, same as Campaign's budget fields.
+model Plan {
+  id            String   @id @default(cuid())
+  name          String
+  clientName    String
+  clientContact String?
+  budget        Decimal? @db.Decimal(12, 2)
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  createdBy User       @relation(fields: [createdById], references: [id])
+  items     PlanItem[]
+}
+
+model PlanItem {
+  id      String  @id @default(cuid())
+  planId  String
+  assetId String
+  format  String // reel | story | carousel | collaboration | video — mirrors RateCard.format
+  cost    Decimal @db.Decimal(12, 2) // snapshot of the rate at the time it was added to the plan
+
+  plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  asset Asset @relation(fields: [assetId], references: [id])
+
+  @@index([planId])
 }
