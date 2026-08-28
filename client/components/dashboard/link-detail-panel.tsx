@@ -1,6 +1,7 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { StatusTimeline, type TimelineStep } from "@/components/dashboard/status-timeline";
@@ -29,6 +30,7 @@ export function LinkDetailPanel({
   canUploadScreenshot: boolean;
   onChanged: () => void;
 }) {
+  const queryClient = useQueryClient();
   const timelineQuery = useQuery({
     queryKey: ["linkTimeline", link.id],
     queryFn: () => linksApi.timeline(token, link.id),
@@ -102,9 +104,21 @@ export function LinkDetailPanel({
         <p className="text-base font-bold">{link.campaign?.title ?? "—"}</p>
         <p className="mt-1 text-[0.8125rem] text-text-faint">@{link.asset?.handle} · {link.url}</p>
       </div>
-      <div className="flex items-center justify-between border-t border-border pt-3">
-        <span className="text-xs text-text-faint">Cost</span>
-        <span className="text-[1.125rem] font-extrabold tabular-nums">{money(link.cost)}</span>
+      <div className="border-t border-border pt-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-faint">Cost</span>
+          <span className="text-[1.125rem] font-extrabold tabular-nums">{money(link.cost)}</span>
+        </div>
+        {isAdmin && (
+          <CostRevisionControl
+            link={link}
+            token={token}
+            onChanged={() => {
+              queryClient.invalidateQueries({ queryKey: ["linkCostRevisions", link.id] });
+              onChanged();
+            }}
+          />
+        )}
       </div>
 
       {timelineQuery.isLoading ? (
@@ -172,6 +186,100 @@ export function LinkDetailPanel({
             <ErrorNotice
               message={refreshMetricsMutation.error instanceof ApiError ? refreshMetricsMutation.error.message : "Couldn't refresh metrics."}
             />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Admin-only cost revision (newTask.md #10: "campaigns can have cost
+ * revise ... for individual pages"). Blocked once a link is INVOICED —
+ * matches the server-side guard (reject the invoice first if it genuinely
+ * needs to change).
+ */
+function CostRevisionControl({ link, token, onChanged }: { link: Link; token: string; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [cost, setCost] = useState(link.cost);
+  const [note, setNote] = useState("");
+
+  const revisionsQuery = useQuery({
+    queryKey: ["linkCostRevisions", link.id],
+    queryFn: () => linksApi.costRevisions(token, link.id),
+    enabled: showHistory,
+  });
+
+  const reviseMutation = useMutation({
+    mutationFn: () => linksApi.reviseCost(token, link.id, Number(cost), note || undefined),
+    onSuccess: () => {
+      setEditing(false);
+      setNote("");
+      onChanged();
+    },
+  });
+
+  if (link.status === "INVOICED") {
+    return <p className="mt-1 text-[0.6875rem] text-text-faint">Reject the invoice to revise this link's cost.</p>;
+  }
+
+  return (
+    <div className="mt-1.5">
+      {editing ? (
+        <div className="flex flex-col gap-2 rounded-md border border-border-strong bg-surface-2 p-2.5">
+          <input
+            type="number"
+            min={0}
+            value={cost}
+            onChange={(e) => setCost(e.target.value)}
+            className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-right text-[0.8125rem] text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Reason (optional)"
+            className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          />
+          {reviseMutation.isError && (
+            <ErrorNotice message={reviseMutation.error instanceof ApiError ? reviseMutation.error.message : "Couldn't revise the cost."} />
+          )}
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" className="flex-1" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" className="flex-1" onClick={() => reviseMutation.mutate()} disabled={reviseMutation.isPending}>
+              {reviseMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <button onClick={() => setEditing(true)} className="text-[0.75rem] font-semibold text-accent hover:text-accent-2">
+            Revise cost
+          </button>
+          <button onClick={() => setShowHistory((v) => !v)} className="text-[0.75rem] text-text-faint hover:text-text-muted">
+            {showHistory ? "Hide history" : "History"}
+          </button>
+        </div>
+      )}
+
+      {showHistory && !editing && (
+        <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">
+          {revisionsQuery.isLoading ? (
+            <p className="text-[0.75rem] text-text-faint">Loading…</p>
+          ) : (revisionsQuery.data?.length ?? 0) === 0 ? (
+            <p className="text-[0.75rem] text-text-faint">No revisions yet.</p>
+          ) : (
+            revisionsQuery.data!.map((r) => (
+              <div key={r.id} className="text-[0.75rem] text-text-faint">
+                <span className="font-semibold text-text-muted">
+                  {money(r.previousCost)} → {money(r.newCost)}
+                </span>{" "}
+                by {r.revisedBy?.name ?? "admin"} · {new Date(r.createdAt).toLocaleDateString()}
+                {r.note && <span> — {r.note}</span>}
+              </div>
+            ))
           )}
         </div>
       )}

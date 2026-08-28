@@ -3,6 +3,10 @@ import { z } from "zod";
 export const bulkInvoiceSchema = z.object({
   linkIds: z.array(z.string().min(1)).min(1),
   dueInDays: z.number().int().positive().default(15),
+  // GST is not mandatory (newTask.md #4): the raiser explicitly picks a GST
+  // invoice (18% auto-added, see bulkCreateInvoice's GST_RATE) or a non-GST
+  // one. Defaults to non-GST rather than silently taxing someone.
+  isGstInvoice: z.boolean().default(false),
 });
 
 export const gstStatusSchema = z.object({

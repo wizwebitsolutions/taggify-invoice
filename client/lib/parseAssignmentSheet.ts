@@ -1,0 +1,81 @@
+import Papa from "papaparse";
+
+/**
+ * Parses an uploaded page/creator sheet (newTask.md #8) into rows the
+ * campaign-creation API understands. CSV only — not because "Excel sheet"
+ * wasn't the ask, but because XLSX-parsing libraries currently available on
+ * npm carry known, unpatched advisories (prototype pollution / ReDoS); CSV
+ * covers the same need (any spreadsheet tool exports to it) without that
+ * risk. Assumes the first row is a header row.
+ */
+export interface ParsedAssignmentRow {
+  handle: string;
+  phone?: string;
+}
+
+const HANDLE_HEADERS = ["handle", "page", "page handle", "instagram", "instagram handle", "username"];
+const PHONE_HEADERS = ["phone", "phone number", "creator phone", "creator", "owner"];
+
+export async function parseAssignmentSheet(file: File): Promise<ParsedAssignmentRow[]> {
+  const text = await file.text();
+  const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+
+  const rows: ParsedAssignmentRow[] = [];
+  for (const row of data) {
+    const keys = Object.keys(row);
+    const handleKey = keys.find((k) => HANDLE_HEADERS.includes(k.trim().toLowerCase())) ?? keys[0];
+    const phoneKey = keys.find((k) => PHONE_HEADERS.includes(k.trim().toLowerCase()));
+    const handle = handleKey ? row[handleKey]?.trim() : "";
+    if (!handle) continue;
+    const phone = phoneKey ? row[phoneKey]?.trim() : undefined;
+    rows.push({ handle, phone: phone || undefined });
+  }
+  return rows;
+}
+
+/**
+ * Admin bulk-import of already-done work (newTask.md #8's second sheet:
+ * "which page posted it, their finance part") — one row per post: which
+ * campaign, which page, the post URL, its format, and optionally what it's
+ * billed at (falls back to the page's rate card server-side if left blank).
+ */
+export interface ParsedWorkImportRow {
+  campaignTitle: string;
+  pageHandle: string;
+  url: string;
+  format: string;
+  cost?: number;
+}
+
+const CAMPAIGN_HEADERS = ["campaign", "campaign title", "campaign name"];
+const URL_HEADERS = ["url", "link", "post url", "post link"];
+const FORMAT_HEADERS = ["format", "type", "post type"];
+const COST_HEADERS = ["cost", "amount", "rate", "price", "finance"];
+
+export async function parseWorkImportSheet(file: File): Promise<ParsedWorkImportRow[]> {
+  const text = await file.text();
+  const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+
+  const rows: ParsedWorkImportRow[] = [];
+  for (const row of data) {
+    const keys = Object.keys(row);
+    const find = (headers: string[]) => keys.find((k) => headers.includes(k.trim().toLowerCase()));
+    const campaignKey = find(CAMPAIGN_HEADERS);
+    const handleKey = find(HANDLE_HEADERS);
+    const urlKey = find(URL_HEADERS);
+    const formatKey = find(FORMAT_HEADERS);
+    const costKey = find(COST_HEADERS);
+
+    const campaignTitle = campaignKey ? row[campaignKey]?.trim() : "";
+    const pageHandle = handleKey ? row[handleKey]?.trim() : "";
+    const url = urlKey ? row[urlKey]?.trim() : "";
+    const format = (formatKey ? row[formatKey]?.trim() : "")?.toLowerCase();
+    if (!campaignTitle || !pageHandle || !url || !format) continue;
+
+    const rawCost = costKey ? row[costKey]?.trim() : "";
+    const cost = rawCost ? Number(rawCost.replace(/[^\d.]/g, "")) : undefined;
+
+    rows.push({ campaignTitle, pageHandle, url, format, cost: cost && !Number.isNaN(cost) ? cost : undefined });
+  }
+  return rows;
+}

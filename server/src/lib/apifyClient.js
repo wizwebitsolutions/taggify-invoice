@@ -84,6 +84,30 @@ export const ApifyInstagramProvider = {
       shares: m.share_count ?? -1,
       reposts: m.repost_count ?? -1,
       postedAt: post.taken_at_date ? new Date(post.taken_at_date) : null,
+      thumbnailUrl: extractThumbnailUrl(post),
+      caption: extractCaption(post),
     };
   },
 };
+
+// The exact field names data-slayer/instagram-post-details returns for the
+// cover image and caption weren't confirmed against a live scrape when this
+// was written (no reachable Apify credentials in that session) — this tries
+// every field name that IG-post-detail scrapers commonly use, in priority
+// order, and falls back to null rather than guessing wrong. If the campaign
+// card ends up with no thumbnail/caption in practice, log one real `post`
+// payload and add its actual field name here.
+function extractThumbnailUrl(post) {
+  return (
+    post.thumbnail_url ??
+    post.display_url ??
+    post.image_versions2?.candidates?.[0]?.url ??
+    post.thumbnail_src ??
+    null
+  );
+}
+
+function extractCaption(post) {
+  const raw = post.caption?.text ?? post.caption ?? post.edge_media_to_caption?.edges?.[0]?.node?.text ?? null;
+  return typeof raw === "string" ? raw : null;
+}

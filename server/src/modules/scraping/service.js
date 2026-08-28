@@ -23,6 +23,8 @@ export async function refreshLinkMetrics(linkId) {
         saves: metrics.saves,
         shares: metrics.shares,
         reposts: metrics.reposts,
+        thumbnailUrl: metrics.thumbnailUrl,
+        caption: metrics.caption,
         source: "apify",
       },
     });

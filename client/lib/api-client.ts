@@ -173,12 +173,28 @@ export interface RateCard {
   effectiveFrom: string;
 }
 
+// Suggested starting points, not a fixed enum — Asset.category is free-form
+// server-side (same convention as RateCard.format's custom formats), so a
+// page can be tagged with anything typed into the "custom category" input
+// alongside these. Shared between assets/page.tsx's "Add page" and
+// users/page.tsx's "Add user" (which can create a creator's first page(s)
+// inline) so the two pickers don't drift apart.
+export const PAGE_CATEGORIES = ["Meme page", "News page", "Entertainment", "Lifestyle", "Fashion", "Fitness", "Food"];
+
+// Standard rate-card/link formats — not a fixed enum server-side (a rate
+// card can carry a free-form custom format too), just the starting set
+// shown in pickers. Shared between assets/page.tsx and users/page.tsx's
+// multi-page "Add user" flow.
+export const LINK_FORMATS = ["reel", "story", "carousel", "collaboration", "video"] as const;
+
 export interface Asset {
   id: string;
   ownerId: string;
   platform: string;
   handle: string;
   followers: number;
+  /** Free-form, e.g. "Meme page", "News page" — set at creation. */
+  category?: string | null;
   approvalStatus: string;
   createdAt: string;
   rateCards: RateCard[];
@@ -191,6 +207,41 @@ export interface Campaign {
   title: string;
   deadline: string | null;
   createdAt: string;
+  costCap?: string | null;
+  sheetLink?: string | null;
+  /** How many links (posts) have been submitted under this campaign so far. */
+  postCount?: number;
+  /** One post's preview, picked server-side, to represent the whole campaign on its card. Null until at least one submitted post has been scraped. */
+  representativePost?: { thumbnailUrl: string | null; caption: string | null } | null;
+  /** Sum of likeCount across every submitted post's latest snapshot (unknown/-1 counts excluded). */
+  totalLikes?: number;
+  /** Sum of every non-screenshot-rejected link's cost. */
+  spent?: number;
+  /** costCap - spent, or null if no cap was set. */
+  remainingBudget?: number | null;
+  /** Rows from an attached sheet still waiting on a page/creator to be created for them. */
+  pendingAssignmentCount?: number;
+}
+
+export interface CampaignAssignment {
+  id: string;
+  campaignId: string;
+  assetId: string | null;
+  pageHandle: string;
+  creatorPhone: string | null;
+  status: "pending" | "matched";
+  createdAt: string;
+  asset?: { id: string; handle: string; category: string | null; approvalStatus: string } | null;
+}
+
+export interface LinkCostRevision {
+  id: string;
+  linkId: string;
+  previousCost: string;
+  newCost: string;
+  note: string | null;
+  createdAt: string;
+  revisedBy?: { id: string; name: string | null };
 }
 
 export interface PostSnapshot {
@@ -199,6 +250,13 @@ export interface PostSnapshot {
   videoViews: number;
   capturedAt: string;
 }
+
+// Mirrors server/src/modules/invoices/service.js's INVOICEABLE_STATUSES —
+// kept here, not redefined per-component, so the two can't drift apart.
+// Screenshot approval is the real "was the work done" gate; insights
+// (Apify metrics) are not required before a link can be invoiced.
+export const INVOICEABLE_LINK_STATUSES: Link["status"][] = ["SCREENSHOT_APPROVED", "INSIGHTS_PENDING", "INSIGHTS_APPROVED"];
+export const INVOICEABLE_LINK_STATUSES_CSV = INVOICEABLE_LINK_STATUSES.join(",");
 
 export interface Link {
   id: string;
@@ -244,7 +302,10 @@ export interface Invoice {
   id: string;
   creatorId: string;
   invoiceNumber: string;
-  amount: string;
+  amount: string; // final total = subtotal + gstAmount
+  subtotal: string;
+  isGstInvoice: boolean;
+  gstAmount: string;
   status: "DRAFT" | "RAISED" | "APPROVED" | "REJECTED" | "PAID";
   paymentStatus: "PENDING" | "COMPLETED" | "CANCELLED";
   gstStatus: "PENDING" | "SCHEDULED" | "COMPLETED";
@@ -273,6 +334,34 @@ export interface JobRun {
   startedAt: string;
   finishedAt: string | null;
   error: string | null;
+}
+
+// "Inventory" (newTask.md #13) — a pitch document built from a set of pages.
+export interface PlanItem {
+  id: string;
+  planId: string;
+  assetId: string;
+  format: string;
+  cost: string;
+  asset?: { id: string; handle: string; category: string | null; followers: number };
+}
+
+export interface Plan {
+  id: string;
+  name: string;
+  clientName: string;
+  clientContact: string | null;
+  budget: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: PlanItem[];
+  /** Sum of every item's cost. */
+  totalCost: number;
+  /** budget - totalCost. Positive = under budget, negative = over. Null if no budget was set. */
+  budgetVariance: number | null;
+  /** Summed avg. likes/views across the plan's distinct pages. */
+  expectedEngagement: { likes: number; views: number };
+  createdBy?: { id: string; name: string | null };
 }
 
 export interface Notification {
@@ -321,8 +410,8 @@ export const billing = {
 // ── Assets ──────────────────────────────────────────────────────────
 export const assets = {
   list: (token: string) => request<Asset[]>("/assets", { token }),
-  create: (token: string, handle: string, platform = "instagram") =>
-    request<Asset>("/assets", { method: "POST", token, body: { handle, platform } }),
+  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string } = {}) =>
+    request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
   updateRateCard: (token: string, assetId: string, rateCards: { format: string; amount: number }[]) =>
     request<RateCard[]>(`/assets/${assetId}/rate-card`, { method: "PUT", token, body: { rateCards } }),
   setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
@@ -332,10 +421,32 @@ export const assets = {
 // ── Campaigns ───────────────────────────────────────────────────────
 export const campaigns = {
   list: (token: string) => request<Campaign[]>("/campaigns", { token }),
-  create: (token: string, brandName: string, title: string, deadline?: string) =>
-    request<Campaign>("/campaigns", { method: "POST", token, body: { brandName, title, deadline } }),
-  update: (token: string, id: string, body: { brandName?: string; title?: string; deadline?: string | null }) =>
+  create: (
+    token: string,
+    body: {
+      brandName: string;
+      title: string;
+      deadline?: string;
+      costCap?: number;
+      sheetLink?: string;
+      assignments?: { handle: string; phone?: string }[];
+    }
+  ) =>
+    request<{ campaign: Campaign; matchedCount: number; pendingCount: number }>("/campaigns", {
+      method: "POST",
+      token,
+      body,
+    }),
+  update: (token: string, id: string, body: { brandName?: string; title?: string; deadline?: string | null; costCap?: number | null }) =>
     request<Campaign>(`/campaigns/${id}`, { method: "PUT", token, body }),
+  listAssignments: (token: string, campaignId: string) =>
+    request<CampaignAssignment[]>(`/campaigns/${campaignId}/assignments`, { token }),
+  resolveAssignment: (token: string, campaignId: string, assignmentId: string, assetId: string) =>
+    request<CampaignAssignment>(`/campaigns/${campaignId}/assignments/${assignmentId}`, {
+      method: "PUT",
+      token,
+      body: { assetId },
+    }),
 };
 
 // ── Links ───────────────────────────────────────────────────────────
@@ -363,6 +474,15 @@ export const links = {
       token,
       body,
     }),
+  // Admin sheet import of already-done work (newTask.md #8) — resolves each
+  // row's campaign/page by name, skipping (not failing the batch) any row
+  // that doesn't match or was already submitted.
+  bulkImport: (token: string, rows: { campaignTitle: string; pageHandle: string; url: string; format: string; cost?: number }[]) =>
+    request<{ created: Link[]; skipped: { row: unknown; reason: string }[]; totalSubmitted: number }>("/links/bulk-import", {
+      method: "POST",
+      token,
+      body: { rows },
+    }),
   timeline: (token: string, linkId: string) =>
     request<LinkStatusEvent[]>(`/links/${linkId}/timeline`, { token }),
   reviewScreenshot: (token: string, linkId: string, approved: boolean, note?: string) =>
@@ -371,6 +491,10 @@ export const links = {
     request<Link>(`/links/${linkId}/approve-insights`, { method: "POST", token }),
   refreshMetrics: (token: string, linkId: string) =>
     request<{ ok: boolean; reason?: string }>(`/links/${linkId}/refresh-metrics`, { method: "POST", token }),
+  reviseCost: (token: string, linkId: string, cost: number, note?: string) =>
+    request<Link>(`/links/${linkId}/cost`, { method: "PUT", token, body: { cost, note } }),
+  costRevisions: (token: string, linkId: string) =>
+    request<LinkCostRevision[]>(`/links/${linkId}/cost-revisions`, { token }),
 };
 
 // ── Screenshots ─────────────────────────────────────────────────────
@@ -401,8 +525,8 @@ export const invoices = {
     qs.set("pageSize", String(params.pageSize ?? 100));
     return request<Paginated<Invoice>>(`/invoices?${qs}`, { token });
   },
-  bulkCreate: (token: string, linkIds: string[], dueInDays = 15) =>
-    request<Invoice>("/invoices/bulk", { method: "POST", token, body: { linkIds, dueInDays } }),
+  bulkCreate: (token: string, linkIds: string[], dueInDays = 15, isGstInvoice = false) =>
+    request<Invoice>("/invoices/bulk", { method: "POST", token, body: { linkIds, dueInDays, isGstInvoice } }),
   markPaid: (token: string, invoiceId: string) =>
     request<Invoice>(`/invoices/${invoiceId}/mark-paid`, { method: "POST", token }),
   reject: (token: string, invoiceId: string, remarks: string) =>
@@ -468,4 +592,51 @@ export const admin = {
   updateUserRole: (token: string, userId: string, role: Role) =>
     request<User>(`/admin/users/${userId}/role`, { method: "PUT", token, body: { role } }),
   jobRuns: (token: string) => request<JobRun[]>("/admin/job-runs", { token }),
+  // Manual trigger for the daily finance export (newTask.md #2) — same job
+  // the cron runs, reported back synchronously so it's actually testable.
+  runFinanceExportNow: (token: string) =>
+    request<{ ok: true; commitSha?: string; htmlUrl?: string }>("/admin/finance-export/run-now", { method: "POST", token }),
+  // Reset-and-reveal, not a stored/recoverable password — see admin/service.js.
+  resetPassword: (token: string, userId: string) =>
+    request<{ generatedPassword: string }>(`/admin/users/${userId}/reset-password`, { method: "POST", token }),
+};
+
+// ── Plans ("Inventory") ────────────────────────────────────────────
+export interface PlanItemInput {
+  assetId: string;
+  format: string;
+  /** Omit to fall back to the page's rate card for that format. */
+  cost?: number;
+}
+
+export const plans = {
+  list: (token: string) => request<Plan[]>("/plans", { token }),
+  get: (token: string, id: string) => request<Plan>(`/plans/${id}`, { token }),
+  create: (
+    token: string,
+    body: { name: string; clientName: string; clientContact?: string; budget?: number; items?: PlanItemInput[] }
+  ) => request<Plan>("/plans", { method: "POST", token, body }),
+  update: (
+    token: string,
+    id: string,
+    body: Partial<{ name: string; clientName: string; clientContact: string | null; budget: number | null; items: PlanItemInput[] }>
+  ) => request<Plan>(`/plans/${id}`, { method: "PUT", token, body }),
+  remove: (token: string, id: string) => request<void>(`/plans/${id}`, { method: "DELETE", token }),
+  // Binary response, same pattern as invoices.downloadPdf.
+  downloadPdf: async (token: string, id: string, name?: string) => {
+    const res = await fetch(`${API_URL}/plans/${id}/pdf`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data?.error?.code ?? "UNKNOWN", data?.error?.message ?? res.statusText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name ?? id}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

@@ -123,7 +123,10 @@ export function AdminDashboard() {
     };
   }, [assets, billingProfiles, campaignsQuery.data, links]);
 
-  const revenueTrend = useMemo(() => {
+  // Invoice amounts are money paid OUT to creators, not money the agency
+  // earns — "expenditure", not "revenue" (label-only fix; the underlying
+  // per-month sum is unchanged).
+  const expenditureTrend = useMemo(() => {
     const months = lastNMonths(6);
     const byKey = new Map(months.map((m) => [m.key, 0]));
     for (const inv of invoices) {
@@ -274,12 +277,12 @@ export function AdminDashboard() {
           />
         </div>
 
-        {/* Revenue trend */}
+        {/* Expenditure trend */}
         <section className="rounded-lg border border-border bg-surface p-6 shadow-card">
           {invoicesQuery.isLoading ? (
             <TableSkeleton rows={1} />
           ) : (
-            <TrendAreaChart data={revenueTrend} label="Revenue trend" subtitle="Last 6 months" formatValue={money} />
+            <TrendAreaChart data={expenditureTrend} label="Expenditure trend" subtitle="Last 6 months" formatValue={money} />
           )}
         </section>
 

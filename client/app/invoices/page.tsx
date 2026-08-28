@@ -14,7 +14,16 @@ import { Field, TextField } from "@/components/ui/form-field";
 import { DownloadIcon, SearchIcon, PlusIcon, AlertIcon, CheckCircleIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { useAuth } from "@/lib/auth-context";
-import { invoices as invoicesApi, links as linksApi, ApiError, type Invoice, type Link } from "@/lib/api-client";
+import {
+  invoices as invoicesApi,
+  links as linksApi,
+  campaigns as campaignsApi,
+  INVOICEABLE_LINK_STATUSES_CSV,
+  ApiError,
+  type Invoice,
+  type Link,
+  type Campaign,
+} from "@/lib/api-client";
 import { money, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -119,6 +128,11 @@ function InvoicesContent() {
           <StatusPill status={inv.status} />
           <StatusPill status={inv.paymentStatus} />
           <StatusPill status={inv.gstStatus} />
+          {inv.isGstInvoice && (
+            <span className="rounded-full border border-accent/25 bg-accent-soft px-2.5 py-1 text-[0.6875rem] font-bold text-accent">
+              GST invoice
+            </span>
+          )}
         </div>
         {inv.status === "REJECTED" && inv.remarks && (
           <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] text-rose">{inv.remarks}</p>
@@ -130,9 +144,23 @@ function InvoicesContent() {
           ))}
           {(inv.items?.length ?? 0) > 4 && <LineItem title={`+ ${inv.items!.length - 4} more approved links`} amount="" />}
         </div>
-        <div className="flex items-center justify-between border-t border-border pt-3.5">
-          <span className="text-[0.8125rem] text-text-faint">Total</span>
-          <span className="text-[1.125rem] font-extrabold tabular-nums">{money(inv.amount)}</span>
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3.5 text-[0.8125rem]">
+          {inv.isGstInvoice && (
+            <>
+              <div className="flex items-center justify-between text-text-faint">
+                <span>Subtotal</span>
+                <span className="tabular-nums">{money(inv.subtotal)}</span>
+              </div>
+              <div className="flex items-center justify-between text-text-faint">
+                <span>GST (18%)</span>
+                <span className="tabular-nums">{money(inv.gstAmount)}</span>
+              </div>
+            </>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-text-faint">Total</span>
+            <span className="text-[1.125rem] font-extrabold tabular-nums">{money(inv.amount)}</span>
+          </div>
         </div>
 
         <Button variant="secondary" size="lg" className="w-full" onClick={() => downloadMutation.mutate(inv)} disabled={downloadMutation.isPending}>
@@ -489,7 +517,7 @@ function RejectInvoiceModal({
         className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <h2 className="text-lg font-bold">Reject invoice</h2>
-        <p className="text-[0.8125rem] text-text-faint">Its links go back to Insights approved, eligible to be re-invoiced once the issue is fixed.</p>
+        <p className="text-[0.8125rem] text-text-faint">Its links go back to whatever status they were in before this invoice, eligible to be re-invoiced once the issue is fixed.</p>
         <Field label="Reason">
           <TextField required value={remarks} onChange={setRemarks} placeholder="e.g. duplicate links, cost difference…" />
         </Field>
@@ -507,32 +535,78 @@ function RejectInvoiceModal({
   );
 }
 
+// Mirrors server/src/modules/invoices/service.js's GST_RATE — a live
+// preview of the total before submitting has to match what the server will
+// actually charge, or the preview is worse than useless.
+const GST_RATE = 0.18;
+
 /**
  * "New invoice" flow (raised from a dedicated Invoices-page entry point,
- * distinct from the multi-select "Bulk invoice" on My Works). Fetches every
- * link eligible for invoicing — INSIGHTS_APPROVED and not yet on an
- * invoice, which is the backend's structural way of enforcing that a
- * screenshot + insights approval is mandatory before a link can be billed
- * — and groups them by campaign for selection. Raising calls the same
- * POST /invoices/bulk the dashboard uses, so the created invoice starts
- * RAISED: visible to Admin/Finance to approve, reject, or mark paid.
+ * distinct from the multi-select "Bulk invoice" on My Works). Two steps:
+ *   1. Filters — narrow down by date range and/or campaign (newTask.md #4).
+ *   2. Preview — the links that matched, grouped by campaign, a live
+ *      subtotal/GST/total breakdown, and the GST-vs-non-GST choice, before
+ *      actually raising anything.
+ * Fetches every link eligible for invoicing (screenshot approved, not yet
+ * on an invoice — see INVOICEABLE_LINK_STATUSES_CSV) matching the chosen
+ * filters. Raising calls the same POST /invoices/bulk the dashboard's quick
+ * "Bulk invoice" uses, so the created invoice starts RAISED: visible to
+ * Admin/Finance to approve, reject, or mark paid.
  */
 function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose: () => void; onRaised: () => void }) {
+  const [step, setStep] = useState<"filters" | "preview">("filters");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [campaignSearch, setCampaignSearch] = useState("");
+  const [campaignId, setCampaignId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [isGstInvoice, setIsGstInvoice] = useState(false);
   const [raisedInvoice, setRaisedInvoice] = useState<Invoice | null>(null);
 
+  const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
+  const selectedCampaign = (campaignsQuery.data ?? []).find((c: Campaign) => c.id === campaignId) ?? null;
+  const campaignMatches = useMemo(() => {
+    const all = campaignsQuery.data ?? [];
+    const q = campaignSearch.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((c: Campaign) => c.title.toLowerCase().includes(q) || c.brandName.toLowerCase().includes(q));
+  }, [campaignsQuery.data, campaignSearch]);
+
   const eligibleQuery = useQuery({
-    queryKey: ["links", "INSIGHTS_APPROVED", "invoiceable"],
+    queryKey: ["links", "invoiceable", fromDate, toDate, campaignId],
     // 100 is the server's hard cap (listLinksQuerySchema) — a pageSize
     // above it 400s the whole request. That 400 was getting silently
     // swallowed below (eligible ??= []) and shown as "no links ready",
     // masking the real error for every creator regardless of how many
     // links were actually eligible. See admin-dashboard.tsx for the same
     // cap on its own queries.
-    queryFn: () => linksApi.list(token, { status: "INSIGHTS_APPROVED", pageSize: 100 }),
+    queryFn: () =>
+      linksApi.list(token, {
+        status: INVOICEABLE_LINK_STATUSES_CSV,
+        from: fromDate || undefined,
+        to: toDate || undefined,
+        campaignId: campaignId ?? undefined,
+        pageSize: 100,
+      }),
+    enabled: step === "preview",
   });
 
   const eligible = eligibleQuery.data?.items ?? [];
+
+  // Land on preview with everything the filters matched already selected —
+  // the point of filtering first is to narrow down to what you meant to
+  // bill, so re-ticking every box by hand afterward would just be busywork.
+  // Still individually deselectable below. Keyed on the filters themselves
+  // (not e.g. dataUpdatedAt) so a background refetch of the *same* filters
+  // can't silently wipe a selection the user already hand-adjusted — this
+  // only resets when fromDate/toDate/campaignId actually change.
+  const filterKey = `${fromDate}|${toDate}|${campaignId ?? ""}`;
+  const [autoSelectedFor, setAutoSelectedFor] = useState<string | null>(null);
+  if (eligibleQuery.data && autoSelectedFor !== filterKey) {
+    setAutoSelectedFor(filterKey);
+    setSelected(new Set(eligible.map((l) => l.id)));
+  }
+
   const groups = useMemo(() => {
     const byCampaign = new Map<string, { title: string; brandName: string; links: Link[] }>();
     for (const link of eligible) {
@@ -547,7 +621,9 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
 
   const allIds = eligible.map((l) => l.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
-  const selectedTotal = eligible.filter((l) => selected.has(l.id)).reduce((sum, l) => sum + Number(l.cost), 0);
+  const subtotal = eligible.filter((l) => selected.has(l.id)).reduce((sum, l) => sum + Number(l.cost), 0);
+  const gstAmount = isGstInvoice ? Math.round(subtotal * GST_RATE * 100) / 100 : 0;
+  const total = subtotal + gstAmount;
 
   function toggleAll() {
     setSelected(allSelected ? new Set() : new Set(allIds));
@@ -570,7 +646,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
   }
 
   const raiseMutation = useMutation({
-    mutationFn: () => invoicesApi.bulkCreate(token, [...selected]),
+    mutationFn: () => invoicesApi.bulkCreate(token, [...selected], 15, isGstInvoice),
     onSuccess: (invoice) => {
       setRaisedInvoice(invoice);
       onRaised();
@@ -588,8 +664,8 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
           </div>
           <h2 className="text-lg font-bold">Invoice raised</h2>
           <p className="text-[0.8125rem] text-text-muted">
-            <span className="font-mono">{raisedInvoice.invoiceNumber}</span> for {money(raisedInvoice.amount)} has been sent to your admin for
-            approval.
+            <span className="font-mono">{raisedInvoice.invoiceNumber}</span> for {money(raisedInvoice.amount)}
+            {raisedInvoice.isGstInvoice ? " (incl. 18% GST)" : ""} has been sent to your admin for approval.
           </p>
           <Button className="w-full" onClick={onClose}>
             Done
@@ -599,17 +675,103 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
     );
   }
 
+  // ── Step 1: date range + campaign search ─────────────────────────
+  if (step === "filters") {
+    return (
+      <Sheet onClose={onClose} panelClassName="md:max-w-[480px]">
+        <div className="flex flex-1 min-h-0 flex-col gap-5 p-6 pt-1">
+          <div>
+            <h2 className="text-lg font-bold">New invoice</h2>
+            <p className="text-[0.8125rem] text-text-faint">Narrow down to what you're billing, then preview it.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="From (optional)">
+              <TextField type="date" value={fromDate} onChange={setFromDate} />
+            </Field>
+            <Field label="To (optional)">
+              <TextField type="date" value={toDate} onChange={setToDate} />
+            </Field>
+          </div>
+
+          <Field label="Campaign (optional — leave blank for all)">
+            {selectedCampaign ? (
+              <div className="flex items-center justify-between rounded-md border border-border-strong bg-surface-2 px-3.5 py-2.5 text-[0.9375rem]">
+                <span className="truncate">
+                  {selectedCampaign.title} <span className="text-text-faint">· {selectedCampaign.brandName}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCampaignId(null);
+                    setCampaignSearch("");
+                  }}
+                  className="shrink-0 text-text-faint hover:text-text"
+                  aria-label="Clear campaign"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <>
+                <TextField value={campaignSearch} onChange={setCampaignSearch} placeholder="Search campaigns…" />
+                {campaignSearch.trim() && (
+                  <div className="mt-1.5 max-h-40 overflow-y-auto rounded-md border border-border">
+                    {campaignMatches.length === 0 ? (
+                      <p className="px-3.5 py-2.5 text-[0.8125rem] text-text-faint">No campaigns match "{campaignSearch}".</p>
+                    ) : (
+                      campaignMatches.map((c: Campaign) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            setCampaignId(c.id);
+                            setCampaignSearch("");
+                          }}
+                          className="flex w-full flex-col px-3.5 py-2.5 text-left text-[0.8125rem] hover:bg-surface-2"
+                        >
+                          <span className="font-semibold">{c.title}</span>
+                          <span className="text-text-faint">{c.brandName}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </Field>
+
+          <div className="flex items-center gap-2.5 border-t border-border pt-4">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <div className="flex-1" />
+            <Button onClick={() => setStep("preview")}>Continue</Button>
+          </div>
+        </div>
+      </Sheet>
+    );
+  }
+
+  // ── Step 2: preview + GST choice + total ──────────────────────────
   return (
     <Sheet onClose={onClose} panelClassName="md:max-w-[640px]">
       <div className="flex flex-1 min-h-0 flex-col gap-5 p-6 pt-1">
         <div>
-          <h2 className="text-lg font-bold">New invoice</h2>
+          <button
+            type="button"
+            onClick={() => setStep("filters")}
+            className="mb-1 text-[0.8125rem] font-semibold text-text-faint hover:text-text"
+          >
+            ‹ Back to filters
+          </button>
+          <h2 className="text-lg font-bold">Preview invoice</h2>
           <p className="text-[0.8125rem] text-text-faint">Select the links to bill, grouped by campaign.</p>
         </div>
 
         <div className="flex items-start gap-2.5 rounded-md border border-blue/25 bg-blue-soft px-3.5 py-2.5 text-[0.8125rem] text-blue">
           <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>Only links with an approved screenshot and approved insights are shown — both are mandatory before a link can be invoiced.</span>
+          <span>Only links with an approved screenshot are shown — insights aren't required to invoice.</span>
         </div>
 
         {eligibleQuery.isLoading ? (
@@ -621,7 +783,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
           // went unnoticed. A real error now reads as one.
           <ErrorNotice message={eligibleQuery.error instanceof ApiError ? eligibleQuery.error.message : "Couldn't load links ready to invoice."} />
         ) : eligible.length === 0 ? (
-          <EmptyState label="No links are ready to invoice yet — get screenshots and insights approved on My Works first." />
+          <EmptyState label="No links matched these filters — try widening the date range or clearing the campaign." />
         ) : (
           <>
             <label className="flex items-center gap-2.5 border-b border-border pb-3.5 text-[0.8125rem] font-semibold">
@@ -629,7 +791,13 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
               Select all · {eligible.length} link{eligible.length === 1 ? "" : "s"}
             </label>
 
-            <div className="flex-1 overflow-y-auto">
+            {/* min-h so the link list can't get squeezed to near-nothing on a
+                short viewport — step 2 now also carries the GST toggle +
+                totals card below it, competing for the same fixed modal
+                height the original single-purpose list didn't have to
+                share (found by actually driving this in a real, short
+                browser window, not just reading the JSX). */}
+            <div className="min-h-[160px] flex-1 overflow-y-auto">
               <div className="flex flex-col gap-5">
                 {groups.map((group) => {
                   const groupIds = group.links.map((l) => l.id);
@@ -669,6 +837,47 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
                 })}
               </div>
             </div>
+
+            {/* GST choice — newTask.md #4: pick GST (auto +18%) or non-GST before raising. */}
+            <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2 p-1">
+              <button
+                type="button"
+                onClick={() => setIsGstInvoice(false)}
+                className={cn(
+                  "flex-1 rounded-[6px] py-2 text-center text-[0.8125rem] font-semibold transition-colors",
+                  !isGstInvoice ? "bg-surface shadow-card" : "text-text-faint"
+                )}
+              >
+                Non-GST invoice
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsGstInvoice(true)}
+                className={cn(
+                  "flex-1 rounded-[6px] py-2 text-center text-[0.8125rem] font-semibold transition-colors",
+                  isGstInvoice ? "bg-surface shadow-card" : "text-text-faint"
+                )}
+              >
+                GST invoice · +18%
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-1.5 rounded-md border border-border p-3.5 text-[0.8125rem]">
+              <div className="flex items-center justify-between text-text-muted">
+                <span>Subtotal</span>
+                <span className="tabular-nums">{money(subtotal)}</span>
+              </div>
+              {isGstInvoice && (
+                <div className="flex items-center justify-between text-text-muted">
+                  <span>GST (18%)</span>
+                  <span className="tabular-nums">{money(gstAmount)}</span>
+                </div>
+              )}
+              <div className="mt-1 flex items-center justify-between border-t border-border pt-1.5 text-[0.9375rem] font-bold">
+                <span>Total</span>
+                <span className="tabular-nums">{money(total)}</span>
+              </div>
+            </div>
           </>
         )}
 
@@ -681,9 +890,8 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
             Cancel
           </Button>
           <div className="flex-1" />
-          {selected.size > 0 && <span className="text-[0.8125rem] font-semibold tabular-nums">{money(selectedTotal)}</span>}
           <Button onClick={() => raiseMutation.mutate()} disabled={selected.size === 0 || raiseMutation.isPending}>
-            {raiseMutation.isPending ? "Raising…" : `Raise invoice · ${selected.size} selected`}
+            {raiseMutation.isPending ? "Raising…" : `Raise invoice · ${money(total)}`}
           </Button>
         </div>
       </div>

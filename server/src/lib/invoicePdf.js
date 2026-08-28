@@ -46,7 +46,8 @@ function renderInvoice(doc, invoice) {
       invoice.status === "PAID" ? `Paid ${dateStr(invoice.paidAt)}` : `Due ${dateStr(invoice.dueDate)}`,
       left,
       106
-    );
+    )
+    .text(invoice.isGstInvoice ? "GST Invoice · 18% applied" : "Non-GST Invoice", left, 120);
 
   // status pills, top right
   const pillY = 50;
@@ -143,10 +144,20 @@ function renderInvoice(doc, invoice) {
     doc.moveTo(left, y - 4).lineTo(right, y - 4).strokeColor("#f0f0f0").lineWidth(0.5).stroke();
   }
 
-  // ── Total ──────────────────────────────────────────────────────
+  // ── Total (subtotal + GST breakdown, when this is a GST invoice) ──
   y += 12;
   doc.moveTo(left, y).lineTo(right, y).strokeColor("#111111").lineWidth(1).stroke();
   y += 10;
+
+  if (invoice.isGstInvoice) {
+    doc.font("Helvetica").fontSize(9.5).fillColor("#555555").text("Subtotal", left, y);
+    doc.font("Helvetica").fontSize(9.5).fillColor("#555555").text(money(invoice.subtotal), left, y, { width: contentWidth, align: "right" });
+    y += 16;
+    doc.font("Helvetica").fontSize(9.5).fillColor("#555555").text("GST (18%)", left, y);
+    doc.font("Helvetica").fontSize(9.5).fillColor("#555555").text(money(invoice.gstAmount), left, y, { width: contentWidth, align: "right" });
+    y += 18;
+  }
+
   doc.font("Helvetica-Bold").fontSize(11).fillColor("#111111").text("Total", left, y);
   doc.font("Helvetica-Bold").fontSize(13).fillColor("#111111").text(money(invoice.amount), left, y - 2, {
     width: contentWidth,
@@ -160,7 +171,9 @@ function renderInvoice(doc, invoice) {
     .fontSize(7.5)
     .fillColor("#999999")
     .text(
-      "System-generated invoice. Payment status and GST status are tracked manually and settled outside this system (bank transfer). This document is not a computed tax invoice.",
+      invoice.isGstInvoice
+        ? "System-generated invoice. GST is calculated at a flat 18% on the subtotal. Payment status and GST filing status are tracked manually and settled outside this system (bank transfer)."
+        : "System-generated invoice. Payment status and GST status are tracked manually and settled outside this system (bank transfer). This document is not a computed tax invoice.",
       left,
       footerY,
       { width: contentWidth }

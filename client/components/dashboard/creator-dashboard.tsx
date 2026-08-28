@@ -13,7 +13,14 @@ import { LinkIcon, CameraIcon, CheckCircleIcon, InvoiceIcon, AlertIcon, PlusIcon
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { useAuth } from "@/lib/auth-context";
-import { links as linksApi, campaigns as campaignsApi, assets as assetsApi, invoices as invoicesApi, ApiError } from "@/lib/api-client";
+import {
+  links as linksApi,
+  campaigns as campaignsApi,
+  assets as assetsApi,
+  invoices as invoicesApi,
+  ApiError,
+  INVOICEABLE_LINK_STATUSES,
+} from "@/lib/api-client";
 import { money, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +28,8 @@ import { cn } from "@/lib/utils";
 // review) — kept as one constant so the "Links approved" KPI tile and the
 // dropdown option that mirrors it can't drift apart.
 const APPROVED_GROUP_FILTER = "SCREENSHOT_APPROVED,INSIGHTS_PENDING,INSIGHTS_APPROVED,INVOICED";
+
+const INVOICEABLE_STATUSES = new Set<string>(INVOICEABLE_LINK_STATUSES);
 
 const STATUS_FILTERS: { label: string; value: string | undefined }[] = [
   { label: "All statuses", value: undefined },
@@ -76,7 +85,7 @@ export function CreatorDashboard() {
       pendingScreenshots: items.filter((l) => l.status === "PENDING_SCREENSHOT_REVIEW").length,
       approved: items.filter((l) => !["SUBMITTED", "PENDING_SCREENSHOT_REVIEW", "SCREENSHOT_REJECTED"].includes(l.status)).length,
       invoiced: items.filter((l) => l.status === "INVOICED").length,
-      uninvoiced: items.filter((l) => l.status === "INSIGHTS_APPROVED").length,
+      uninvoiced: items.filter((l) => INVOICEABLE_STATUSES.has(l.status)).length,
     };
   }, [allLinksQuery.data]);
 
@@ -263,7 +272,7 @@ export function CreatorDashboard() {
               <div>
                 {rows.map((link) => {
                   const snapshot = link.postSnapshots?.[0];
-                  const eligible = link.status === "INSIGHTS_APPROVED";
+                  const eligible = INVOICEABLE_STATUSES.has(link.status);
                   return (
                     <div
                       key={link.id}

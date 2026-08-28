@@ -50,7 +50,7 @@ export function TrendAreaChart({
   color = "var(--accent)",
 }: {
   data: { label: string; value: number }[];
-  /** e.g. "Revenue trend" */
+  /** e.g. "Expenditure trend" */
   label: string;
   /** e.g. "Last 6 months" */
   subtitle: string;

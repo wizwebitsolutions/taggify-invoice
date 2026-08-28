@@ -68,6 +68,61 @@ export async function bulkCreateLink(user, { campaignId, assetId, format, urls }
   return { created, skipped, totalSubmitted: uniqueUrls.length };
 }
 
+/**
+ * Admin bulk-import of already-completed work from a sheet (newTask.md #8:
+ * "which page posted it, their finance part"). Unlike bulkCreateLink (one
+ * campaign/page for many URLs), each row here can name a different
+ * campaign/page — resolved by title/handle since that's what a sheet
+ * actually has, not IDs. The importing admin is recorded as submittedBy;
+ * there's no "submitted by the creator" concept for work an admin is
+ * retroactively recording on their behalf.
+ */
+export async function bulkImportLinks(admin, { rows }) {
+  const campaignTitles = [...new Set(rows.map((r) => r.campaignTitle.trim()))];
+  const pageHandles = [...new Set(rows.map((r) => r.pageHandle.trim().replace(/^@+/, "")))];
+
+  const [campaigns, assets] = await Promise.all([
+    prisma.campaign.findMany({ where: { title: { in: campaignTitles, mode: "insensitive" } } }),
+    prisma.asset.findMany({ where: { handle: { in: pageHandles, mode: "insensitive" } }, include: { rateCards: true } }),
+  ]);
+  const campaignByTitle = new Map(campaigns.map((c) => [c.title.toLowerCase(), c]));
+  const assetByHandle = new Map(assets.map((a) => [a.handle.toLowerCase(), a]));
+
+  const created = [];
+  const skipped = [];
+  for (const row of rows) {
+    const campaign = campaignByTitle.get(row.campaignTitle.trim().toLowerCase());
+    const asset = assetByHandle.get(row.pageHandle.trim().replace(/^@+/, "").toLowerCase());
+    if (!campaign) {
+      skipped.push({ row, reason: `No campaign titled "${row.campaignTitle}"` });
+      continue;
+    }
+    if (!asset) {
+      skipped.push({ row, reason: `No page @${row.pageHandle}` });
+      continue;
+    }
+    const existing = await prisma.link.findFirst({ where: { url: row.url, assetId: asset.id } });
+    if (existing) {
+      skipped.push({ row, reason: "Already submitted for this page" });
+      continue;
+    }
+    try {
+      const link = await createOneLink(admin, asset, {
+        campaignId: campaign.id,
+        assetId: asset.id,
+        url: row.url,
+        format: row.format,
+        customAmount: row.cost,
+      });
+      created.push(link);
+    } catch (err) {
+      skipped.push({ row, reason: err instanceof ApiError ? err.message : "Couldn't create this link" });
+    }
+  }
+
+  return { created, skipped, totalSubmitted: rows.length };
+}
+
 export async function listLinks(user, filters) {
   const where = {};
   if (!["ADMIN", "FINANCE"].includes(user.role)) {
@@ -190,4 +245,37 @@ export async function refreshMetricsNow(linkId, admin) {
     await transitionLinkStatus(linkId, "INSIGHTS_PENDING", { actedById: admin.id });
   }
   return result;
+}
+
+/**
+ * Revises what a submitted post is billed at (newTask.md #10), logging the
+ * change to LinkCostRevision so there's a history of what it used to be and
+ * why. Blocked once a link is INVOICED — an invoice's amount is a snapshot
+ * of its items' cost at the time it was raised (InvoiceItem.amount), so
+ * changing Link.cost after the fact would silently desync the two; reject
+ * the invoice first (which reopens the link) if the cost genuinely needs to
+ * change post-invoicing.
+ */
+export async function reviseLinkCost(linkId, admin, { cost, note }) {
+  const link = await prisma.link.findUnique({ where: { id: linkId } });
+  if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  if (link.status === "INVOICED") {
+    throw new ApiError(409, "ALREADY_INVOICED", "Reject the invoice this link is on before revising its cost");
+  }
+
+  const [updated] = await prisma.$transaction([
+    prisma.link.update({ where: { id: linkId }, data: { cost, customRate: true } }),
+    prisma.linkCostRevision.create({
+      data: { linkId, previousCost: link.cost, newCost: cost, note, revisedById: admin.id },
+    }),
+  ]);
+  return updated;
+}
+
+export async function getLinkCostRevisions(linkId) {
+  return prisma.linkCostRevision.findMany({
+    where: { linkId },
+    include: { revisedBy: { select: { id: true, name: true } } },
+    orderBy: { createdAt: "desc" },
+  });
 }
