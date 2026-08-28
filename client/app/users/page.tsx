@@ -8,13 +8,21 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { Field, TextField, Select } from "@/components/ui/form-field";
+import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
-import { PlusIcon, TeamIcon } from "@/components/icons";
+import { PlusIcon, TeamIcon, AssetIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { admin as adminApi, auth as authApi, ApiError, type User, type Role } from "@/lib/api-client";
+import { admin as adminApi, auth as authApi, assets as assetsApi, LINK_FORMATS, ApiError, type User, type Role } from "@/lib/api-client";
 import { initialsOf, roleLabel } from "@/lib/format";
 
 const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"];
+
+// Only CREATOR accounts own Instagram pages (see system design.md's roles) —
+// Team member/Admin/Finance accounts have no use for one, so the "at least
+// one page" requirement (newTask.md #6) only applies when creating a
+// CREATOR. Stated here since the source request didn't spell out which
+// roles it covers.
+const ROLE_REQUIRES_PAGE: Role = "CREATOR";
 
 /**
  * Admin-only user directory + account creation. Per the login page's own
@@ -34,6 +42,7 @@ function UsersContent() {
   const { user, accessToken } = useAuth();
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [resettingUser, setResettingUser] = useState<User | null>(null);
   const token = accessToken!;
   const isAdmin = user?.role === "ADMIN";
 
@@ -92,14 +101,15 @@ function UsersContent() {
           // table) — the table scrolls within its own card on a narrow
           // screen instead of forcing the whole page to scroll sideways.
           <div className="overflow-x-auto rounded-lg border border-border bg-surface shadow-card">
-            <div className="grid min-w-[560px] grid-cols-[2fr_1.5fr_1fr_1fr] gap-3 border-b border-border px-5 py-3.5">
+            <div className="grid min-w-[680px] grid-cols-[2fr_1.5fr_1fr_1fr_1fr] gap-3 border-b border-border px-5 py-3.5">
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Name</div>
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Phone</div>
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Role</div>
               <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Joined</div>
+              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Action</div>
             </div>
             {items.map((u) => (
-              <div key={u.id} className="grid min-w-[560px] grid-cols-[2fr_1.5fr_1fr_1fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
+              <div key={u.id} className="grid min-w-[680px] grid-cols-[2fr_1.5fr_1fr_1fr_1fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2">
                     <TeamIcon className="h-4 w-4 text-text-muted" />
@@ -121,6 +131,13 @@ function UsersContent() {
                   ))}
                 </select>
                 <span className="text-xs text-text-faint">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</span>
+                <button
+                  type="button"
+                  onClick={() => setResettingUser(u)}
+                  className="w-fit text-[0.75rem] font-semibold text-accent hover:text-accent-2"
+                >
+                  Reset password
+                </button>
               </div>
             ))}
           </div>
@@ -138,24 +155,132 @@ function UsersContent() {
           onCreated={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })}
         />
       )}
+
+      {resettingUser && (
+        <ResetPasswordModal token={token} targetUser={resettingUser} onClose={() => setResettingUser(null)} />
+      )}
     </AppShell>
   );
+}
+
+/**
+ * newTask.md #8 — "admin will have password of all creators", built as
+ * reset-and-reveal (see CLAUDE.md) instead of a stored/recoverable
+ * password: this generates a brand new one on the spot and shows it once,
+ * same as account creation. Confirms first since it signs the user out
+ * everywhere — a plain click-and-done button would be too easy to hit by
+ * accident on the wrong row.
+ */
+function ResetPasswordModal({ token, targetUser, onClose }: { token: string; targetUser: User; onClose: () => void }) {
+  const resetMutation = useMutation({
+    mutationFn: () => adminApi.resetPassword(token, targetUser.id),
+  });
+
+  return (
+    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
+      <div className="flex flex-col gap-5 overflow-y-auto p-6 pt-1">
+        <h2 className="text-lg font-bold">Reset password</h2>
+
+        {resetMutation.data ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-[0.8125rem] text-text-muted">
+              New password for <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong>. Share it with them now
+              — it&apos;s shown only this once and can&apos;t be retrieved again. They&apos;ve been signed out everywhere.
+            </p>
+            <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-bold tracking-wide">
+              {resetMutation.data.generatedPassword}
+            </div>
+            <Button className="w-full" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        ) : (
+          <>
+            <p className="text-[0.8125rem] text-text-muted">
+              This generates a new password for <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> and signs
+              them out of every device. Their current password stops working immediately.
+            </p>
+            {resetMutation.isError && (
+              <ErrorNotice message={resetMutation.error instanceof ApiError ? resetMutation.error.message : "Couldn't reset this password."} />
+            )}
+            <div className="flex gap-2.5">
+              <Button variant="ghost" className="flex-1" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button variant="danger" className="flex-1" onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending}>
+                {resetMutation.isPending ? "Resetting…" : "Reset password"}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+interface DraftPage {
+  handle: string;
+  category: string;
+  rates: Record<string, string>;
+}
+
+function emptyPage(): DraftPage {
+  return { handle: "", category: "", rates: {} };
 }
 
 function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose: () => void; onCreated: () => void }) {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("CREATOR");
+  const [pages, setPages] = useState<DraftPage[]>([emptyPage()]);
+  // Page creation happens after signup succeeds, one request per page — a
+  // single bad handle shouldn't roll back the account that was just
+  // created, so failures are collected and shown, not thrown (same
+  // created-vs-skipped pattern as links' bulk upload).
+  const [pageFailures, setPageFailures] = useState<string[]>([]);
+
+  const requiresPage = role === ROLE_REQUIRES_PAGE;
+  const validPages = pages.filter((p) => p.handle.trim());
+  const canSubmit = phoneNumber.trim().length > 0 && (!requiresPage || validPages.length > 0);
+
+  function updatePage(index: number, patch: Partial<DraftPage>) {
+    setPages((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+  }
+  function addPage() {
+    setPages((prev) => [...prev, emptyPage()]);
+  }
+  function removePage(index: number) {
+    setPages((prev) => prev.filter((_, i) => i !== index));
+  }
 
   const createMutation = useMutation({
-    mutationFn: () => authApi.signup(token, { phoneNumber: `+91${phoneNumber.replace(/\D/g, "")}`, name: name || undefined, role }),
+    mutationFn: async () => {
+      const result = await authApi.signup(token, { phoneNumber: `+91${phoneNumber.replace(/\D/g, "")}`, name: name || undefined, role });
+      const failures: string[] = [];
+      for (const page of validPages) {
+        try {
+          const asset = await assetsApi.create(token, page.handle, "instagram", {
+            category: page.category || undefined,
+            ownerId: result.user.id,
+          });
+          const rateCards = Object.entries(page.rates)
+            .filter(([, amount]) => amount.trim())
+            .map(([format, amount]) => ({ format, amount: Number(amount) }));
+          if (rateCards.length > 0) await assetsApi.updateRateCard(token, asset.id, rateCards);
+        } catch (err) {
+          failures.push(`@${page.handle} — ${err instanceof ApiError ? err.message : "couldn't be created"}`);
+        }
+      }
+      setPageFailures(failures);
+      return result;
+    },
     onSuccess: onCreated,
   });
 
   const created = createMutation.data;
 
   return (
-    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
+    <Sheet onClose={onClose} panelClassName="md:max-w-[480px]">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -165,7 +290,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
           }
           createMutation.mutate();
         }}
-        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
+        className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <h2 className="text-lg font-bold">Add a user</h2>
 
@@ -178,6 +303,14 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
             <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-bold tracking-wide">
               {created.generatedPassword}
             </div>
+            {validPages.length > 0 && (
+              <p className="text-[0.8125rem] text-text-muted">
+                {validPages.length - pageFailures.length} of {validPages.length} page{validPages.length === 1 ? "" : "s"} created.
+              </p>
+            )}
+            {pageFailures.length > 0 && (
+              <ErrorNotice message={`Some pages weren't created: ${pageFailures.join("; ")} — add them from Assets afterward.`} />
+            )}
           </div>
         ) : (
           <>
@@ -206,6 +339,63 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
                 ))}
               </Select>
             </Field>
+
+            {requiresPage && (
+              <div className="flex flex-col gap-3 border-t border-border pt-4">
+                <div>
+                  <p className="text-[0.8125rem] font-semibold">Pages</p>
+                  <p className="text-[0.75rem] text-text-faint">At least one Instagram page is required for a creator account.</p>
+                </div>
+                {pages.map((page, i) => (
+                  <div key={i} className="flex flex-col gap-2.5 rounded-md border border-border p-3.5">
+                    <div className="flex items-center gap-2">
+                      <AssetIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
+                      <input
+                        required={i === 0}
+                        value={page.handle}
+                        onChange={(e) => updatePage(i, { handle: e.target.value })}
+                        placeholder="Instagram handle (without @)"
+                        className="h-9 flex-1 rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      />
+                      {pages.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removePage(i)}
+                          aria-label="Remove page"
+                          className="shrink-0 text-text-faint hover:text-rose"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    <CategoryPicker value={page.category} onChange={(v) => updatePage(i, { category: v })} />
+                    <div className="grid grid-cols-2 gap-2">
+                      {LINK_FORMATS.map((format) => (
+                        <div key={format} className="flex items-center justify-between gap-2">
+                          <span className="text-[0.75rem] capitalize text-text-faint">{format}</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={page.rates[format] ?? ""}
+                            onChange={(e) => updatePage(i, { rates: { ...page.rates, [format]: e.target.value } })}
+                            placeholder="₹ rate"
+                            className="h-7 w-20 rounded-md border border-border-strong bg-surface-2 px-2 text-right text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addPage}
+                  className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border-strong py-2 text-[0.8125rem] font-semibold text-text-muted hover:bg-surface-2"
+                >
+                  <PlusIcon className="h-3.5 w-3.5" />
+                  Add another page
+                </button>
+              </div>
+            )}
           </>
         )}
 
@@ -219,7 +409,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
               Cancel
             </Button>
           )}
-          <Button type="submit" className="flex-1" disabled={createMutation.isPending || !phoneNumber}>
+          <Button type="submit" className="flex-1" disabled={createMutation.isPending || (!created && !canSubmit)}>
             {created ? "Done" : createMutation.isPending ? "Creating…" : "Create user"}
           </Button>
         </div>

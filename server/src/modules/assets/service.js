@@ -22,7 +22,7 @@ export async function listAssets(user) {
  * from its most recent scrape, averaged across every link that's been
  * scraped at least once. Links with no snapshot yet don't count toward it.
  */
-async function getAvgEngagement(assetId) {
+export async function getAvgEngagement(assetId) {
   const links = await prisma.link.findMany({
     where: { assetId },
     select: { postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 } },
@@ -39,9 +39,15 @@ async function getAvgEngagement(assetId) {
   };
 }
 
-export async function createAsset(user, { platform, handle }) {
+export async function createAsset(user, { platform, handle, category, ownerId }) {
+  // Only an admin may register a page on someone else's behalf (the "create
+  // a user with their first page(s)" flow on the Users page); a CREATOR
+  // creating their own page never sends ownerId, so this never fires for them.
+  if (ownerId && ownerId !== user.id && user.role !== "ADMIN") {
+    throw new ApiError(403, "FORBIDDEN", "Only an admin can register a page for another user");
+  }
   const asset = await prisma.asset.create({
-    data: { ownerId: user.id, platform, handle, approvalStatus: "pending" },
+    data: { ownerId: ownerId ?? user.id, platform, handle, category, approvalStatus: "pending" },
   });
 
   // Fire-and-forget — pulls followers/full name/bio/avatar in the background

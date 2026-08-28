@@ -8,13 +8,12 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { Field, TextField } from "@/components/ui/form-field";
+import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, AssetIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { assets as assetsApi, ApiError, type Asset } from "@/lib/api-client";
+import { assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Asset } from "@/lib/api-client";
 import { money, initialsOf, roleLabel } from "@/lib/format";
-
-const FORMATS = ["reel", "story", "carousel", "collaboration", "video"] as const;
 
 export default function AssetsPage() {
   return (
@@ -143,7 +142,10 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
           </div>
           <div>
             <p className="text-[0.9375rem] font-bold">@{asset.handle}</p>
-            <p className="text-xs text-text-faint">{asset.followers.toLocaleString()} followers</p>
+            <p className="text-xs text-text-faint">
+              {asset.followers.toLocaleString()} followers
+              {asset.category && <span> · {asset.category}</span>}
+            </p>
           </div>
         </div>
         <span
@@ -269,9 +271,10 @@ function EngagementStat({ label, value }: { label: string; value: number | null 
 
 function NewAssetModal({ token, onClose, onCreated }: { token: string; onClose: () => void; onCreated: () => void }) {
   const [handle, setHandle] = useState("");
+  const [category, setCategory] = useState("");
 
   const createMutation = useMutation({
-    mutationFn: () => assetsApi.create(token, handle),
+    mutationFn: () => assetsApi.create(token, handle, "instagram", category ? { category } : {}),
     onSuccess: onCreated,
   });
 
@@ -287,6 +290,9 @@ function NewAssetModal({ token, onClose, onCreated }: { token: string; onClose: 
         <h2 className="text-lg font-bold">Add a page</h2>
         <Field label="Instagram handle">
           <TextField required value={handle} onChange={setHandle} placeholder="e.g. demo.page (without @)" />
+        </Field>
+        <Field label="Category (optional)">
+          <CategoryPicker value={category} onChange={setCategory} />
         </Field>
         {createMutation.isError && (
           <ErrorNotice message={createMutation.error instanceof ApiError ? createMutation.error.message : "Couldn't add the page."} />

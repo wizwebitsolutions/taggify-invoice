@@ -16,7 +16,7 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-router.post("/", requireRole("CREATOR"), validateBody(createAssetSchema), async (req, res, next) => {
+router.post("/", requireRole("CREATOR", "ADMIN"), validateBody(createAssetSchema), async (req, res, next) => {
   try {
     res.status(201).json(await assetsService.createAsset(req.user, req.body));
   } catch (err) {
