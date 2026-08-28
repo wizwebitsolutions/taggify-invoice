@@ -24,7 +24,7 @@ const TABS = [
  */
 export function BottomNav({ active, user }: { active: string; user: SidebarUser }) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs";
+  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs" || active === "inventory";
 
   return (
     <>

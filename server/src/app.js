@@ -14,6 +14,7 @@ import invoicesRoutes from "./modules/invoices/routes.js";
 import billingRoutes from "./modules/billing/routes.js";
 import notificationsRoutes from "./modules/notifications/routes.js";
 import adminRoutes from "./modules/admin/routes.js";
+import plansRoutes from "./modules/plans/routes.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 
@@ -37,6 +38,7 @@ app.use("/invoices", invoicesRoutes);
 app.use("/billing-profiles", billingRoutes);
 app.use("/notifications", notificationsRoutes);
 app.use("/admin", adminRoutes);
+app.use("/plans", plansRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

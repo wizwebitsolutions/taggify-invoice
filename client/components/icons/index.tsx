@@ -46,6 +46,16 @@ export function CampaignIcon(props: IconProps) {
   );
 }
 
+export function InventoryIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m3 8 9-5 9 5-9 5-9-5Z" />
+      <path d="m3 12 9 5 9-5" />
+      <path d="m3 16 9 5 9-5" />
+    </svg>
+  );
+}
+
 export function AssetIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

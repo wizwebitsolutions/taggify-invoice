@@ -7,6 +7,7 @@ import {
   CampaignIcon,
   AssetIcon,
   InvoiceIcon,
+  InventoryIcon,
   TeamIcon,
   ClockIcon,
   ChevronDownIcon,
@@ -26,6 +27,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns" },
       { key: "assets", label: "Assets", icon: AssetIcon, href: "/assets" },
+      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory" },
     ],
   },
   { label: "Finance", items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices" }] },
