@@ -1,14 +1,15 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
-import { TableSkeleton, EmptyState } from "@/components/ui/table-parts";
+import { Button } from "@/components/ui/button";
+import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { ClockIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { admin as adminApi } from "@/lib/api-client";
+import { admin as adminApi, ApiError } from "@/lib/api-client";
 import { initialsOf, roleLabel } from "@/lib/format";
 
 const JOB_STATUS_TONE: Record<string, "emerald" | "rose" | "blue"> = {
@@ -27,6 +28,7 @@ export default function JobRunsPage() {
 
 function JobRunsContent() {
   const { user, accessToken } = useAuth();
+  const queryClient = useQueryClient();
   const token = accessToken!;
   const isAdmin = user?.role === "ADMIN";
 
@@ -36,11 +38,25 @@ function JobRunsContent() {
     enabled: isAdmin,
   });
 
+  // newTask.md #2 — same export the daily cron runs; exposed here so it can
+  // actually be tested/used without waiting for the schedule.
+  const financeExportMutation = useMutation({
+    mutationFn: () => adminApi.runFinanceExportNow(token),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["job-runs"] }),
+  });
+
   return (
     <AppShell
       active="job-runs"
       user={{ initials: initialsOf(user?.name), name: user?.name ?? "—", role: roleLabel(user?.role), tone: user?.role === "FINANCE" ? "blue" : "emerald" }}
       searchPlaceholder="Search job runs…"
+      topbarActions={
+        isAdmin ? (
+          <Button size="default" variant="secondary" onClick={() => financeExportMutation.mutate()} disabled={financeExportMutation.isPending}>
+            {financeExportMutation.isPending ? "Running…" : "Run finance export now"}
+          </Button>
+        ) : undefined
+      }
     >
       <div className="flex flex-col gap-7">
         <div>
@@ -50,6 +66,24 @@ function JobRunsContent() {
             node-cron execution history — the substitute for a job queue&apos;s built-in observability.
           </p>
         </div>
+
+        {isAdmin && financeExportMutation.isSuccess && (
+          <div className="rounded-md border border-accent/25 bg-accent-soft px-3.5 py-2.5 text-[0.8125rem] text-accent">
+            Finance export pushed.{" "}
+            {financeExportMutation.data.htmlUrl && (
+              <a href={financeExportMutation.data.htmlUrl} target="_blank" rel="noreferrer" className="underline">
+                View on GitHub
+              </a>
+            )}
+          </div>
+        )}
+        {isAdmin && financeExportMutation.isError && (
+          <ErrorNotice
+            message={
+              financeExportMutation.error instanceof ApiError ? financeExportMutation.error.message : "Couldn't run the finance export."
+            }
+          />
+        )}
 
         {!isAdmin ? (
           <div className="rounded-lg border border-border bg-surface p-8 text-center shadow-card">

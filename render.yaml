@@ -49,6 +49,25 @@ services:
         value: "0 */6 * * *"
       - key: INVOICE_AGING_SWEEP_CRON
         value: "0 9 * * *"
+      - key: FINANCE_EXPORT_CRON
+        value: "0 2 * * *"
+      # Daily finance export → GitHub (newTask.md #2). GITHUB_TOKEN needs a
+      # fine-grained PAT scoped to just this repo with Contents: Read and
+      # write — until it's filled in, finance_export runs on schedule but
+      # fails with a clear message in JobRun (see /job-runs), nothing else
+      # is affected. Pushes to GITHUB_FINANCE_BRANCH (auto-created if it
+      # doesn't exist), not `main` — a daily data-only commit shouldn't
+      # trigger this same blueprint's auto-deploy-on-push-to-main.
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO_OWNER
+        value: deepak007-star
+      - key: GITHUB_REPO_NAME
+        value: taggify-invoice
+      - key: GITHUB_FINANCE_BRANCH
+        value: finance-data
+      - key: GITHUB_FINANCE_PATH
+        value: finance-exports/finance-data.xlsx
 
 databases:
   - name: invoice-taggify-db

@@ -4,6 +4,7 @@ import { instagramRescrapeJob } from "./instagramRescrape.js";
 import { assetProfileRescrapeJob } from "./assetProfileRescrape.js";
 import { invoiceAgingSweepJob } from "./invoiceAgingSweep.js";
 import { screenshotReminderJob } from "./screenshotReminder.js";
+import { financeExportJob } from "./financeExport.js";
 
 /**
  * Registers all scheduled jobs in-process via node-cron (no Redis/BullMQ).
@@ -22,13 +23,19 @@ export function startCronJobs() {
   const assetProfileSchedule = process.env.ASSET_PROFILE_RESCRAPE_CRON || "0 3 * * *"; // 24h interval
   const invoiceSchedule = process.env.INVOICE_AGING_SWEEP_CRON || "0 9 * * *";
   const reminderSchedule = process.env.SCREENSHOT_REMINDER_CRON || "0 10 * * *";
+  const financeExportSchedule = process.env.FINANCE_EXPORT_CRON || "0 2 * * *"; // before the day's other sweeps
 
   cron.schedule(igSchedule, () => runTrackedJob("instagram_rescrape", instagramRescrapeJob));
   cron.schedule(assetProfileSchedule, () => runTrackedJob("asset_profile_rescrape", assetProfileRescrapeJob));
   cron.schedule(invoiceSchedule, () => runTrackedJob("invoice_aging_sweep", invoiceAgingSweepJob));
   cron.schedule(reminderSchedule, () => runTrackedJob("screenshot_reminder", screenshotReminderJob));
+  // Runs unconditionally like every other job — if GITHUB_TOKEN isn't
+  // configured yet, financeExportJob throws a specific, readable error that
+  // runTrackedJob records to JobRun (visible on /job-runs) instead of this
+  // silently never running with no trace of why.
+  cron.schedule(financeExportSchedule, () => runTrackedJob("finance_export", financeExportJob));
 
   console.log(
-    `Cron jobs scheduled — instagram_rescrape: "${igSchedule}", asset_profile_rescrape: "${assetProfileSchedule}", invoice_aging_sweep: "${invoiceSchedule}", screenshot_reminder: "${reminderSchedule}"`
+    `Cron jobs scheduled — instagram_rescrape: "${igSchedule}", asset_profile_rescrape: "${assetProfileSchedule}", invoice_aging_sweep: "${invoiceSchedule}", screenshot_reminder: "${reminderSchedule}", finance_export: "${financeExportSchedule}"`
   );
 }
