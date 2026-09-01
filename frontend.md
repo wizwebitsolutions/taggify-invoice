@@ -16,6 +16,18 @@ Built from your five reference screenshots in `snapshot/` (a light trading dashb
 
 ## 2. Design tokens
 
+> **Palette v2 (Aug 2026)**: the table and font list below are the *original*
+> v1 direction this section describes the reasoning for. The X/Spotify-
+> informed redesign that shipped after it changed the actual accent hue,
+> surface lightness, and font — **`styles/tokens.css` and `lib/fonts.ts` are
+> the literal current source of truth** (per §3's rule), not this table.
+> Current values in brief: `--accent` is a more saturated spring-green
+> (`oklch(82.2% 0.194 155)` dark / `oklch(58% 0.194 155)` light), `--accent-2`
+> is violet (`oklch(66.2% 0.189 286)`, hue 286 — not the gold or indigo this
+> table originally said), and the font is **Inter** everywhere (see below) —
+> both dark *and* light themes now exist (`lib/theme-context.tsx`), contrary
+> to "no light theme planned for v1" below.
+
 ### Color (all `oklch()`, dark-first — no light theme planned for v1)
 
 | Token | Value | Use |
@@ -33,7 +45,7 @@ Built from your five reference screenshots in `snapshot/` (a light trading dashb
 | `--rose` | `oklch(70% 0.16 15)` | "Rejected/overdue" |
 | `--slate` | `oklch(65% 0.01 255)` | "Submitted/neutral" |
 
-Accent and status hues deliberately share lightness (~75–78%) and chroma (~0.13–0.16), varying only hue — a harmonious family rather than arbitrary colors per status.
+Accent and status hues deliberately share lightness (~75–78%) and chroma (~0.13–0.16), varying only hue — a harmonious family rather than arbitrary colors per status. (This lightness/chroma-sharing rule is the part that's still true post-v2 — only the specific hue numbers moved; see the callout above.)
 
 ### Typography — two Google Fonts only
 
@@ -43,6 +55,8 @@ Accent and status hues deliberately share lightness (~75–78%) and chroma (~0.1
 Deliberately not Inter/Roboto/Arial or Fraunces — common defaults that read as generic/AI-templated.
 
 Type scale: display 48px (serif italic) · H1 28px/700 · H2 22px/600 · H3 17px/600 · KPI number 34px/800 tabular · body 15px/400 · small/label 13px/500 · micro/eyebrow 11px/700 uppercase, 0.08em tracking.
+
+**Superseded by palette v2**: the app now ships **Inter** (400–800, plus italic for the login headline) as the only face, everywhere — Manrope and Instrument Serif are gone from the codebase. Reasoning: the v2 redesign explicitly drew on X and Spotify's UI language, and Chirp (X) / Circular (Spotify) are both proprietary; Inter is the standard open substitute for both (same tall x-height, same small-size hinting) — see the comment in `lib/fonts.ts`. The "deliberately not Inter" line above was the v1 rationale and no longer reflects what's shipped; the type scale's pixel sizes are still roughly accurate, just rendered in Inter instead of Manrope/Instrument Serif.
 
 ### Spacing, radius, elevation
 
@@ -56,12 +70,12 @@ Inline SVG only, stroke-based, 24×24 viewBox, 1.6–1.8px stroke, rounded caps/
 
 ## 3. Single source of truth — every token lives in exactly one place
 
-Direct answer to "which font, and can it change in one place": **Manrope** (UI/body/numbers) + **Instrument Serif italic** (editorial headlines only) — and yes, fonts, colors, spacing, buttons, icons, and every other repeated value each get exactly one home. Nothing is hand-typed a second time anywhere else in the app:
+Direct answer to "which font, and can it change in one place": **Inter** for everything (UI, body, numbers, and the login headline) as of palette v2 — was Manrope (UI/body/numbers) + Instrument Serif italic (editorial headlines only) in v1, see the callout in §2. Either way, yes: fonts, colors, spacing, buttons, icons, and every other repeated value each get exactly one home. Nothing is hand-typed a second time anywhere else in the app:
 
 | What | Single home | Change it by |
 |---|---|---|
 | Every color/spacing/radius/shadow value | `styles/tokens.css` — one `:root{ --bg:...; --accent:...; --radius-lg:...; }` block | Editing this file only. The only place a literal `oklch()`/px value is ever typed. |
-| Fonts | `lib/fonts.ts` — loads Manrope + Instrument Serif once via `next/font/google`, exposes them as CSS variables applied on `<html>` in `app/layout.tsx` | Editing this one file (swap the import, `tokens.css`'s `--font-ui`/`--font-display` just point at the variable name and don't change). |
+| Fonts | `lib/fonts.ts` — loads Inter once via `next/font/google`, exposed as a CSS variable applied on `<html>` in `app/layout.tsx` | Editing this one file (swap the import, `tokens.css`'s `--font-ui`/`--font-display` just point at the variable name and don't change). |
 | Tailwind utilities (`bg-surface`, `text-accent`, `rounded-lg`, …) | `tailwind.config.ts` — `theme.extend` maps every utility to `var(--token-name)` from `tokens.css`, never a literal value | Editing `tokens.css`; Tailwind classes and raw CSS both read the same variable, so they can't drift apart. |
 | Buttons (primary/secondary/ghost/danger, all sizes) | `components/ui/button.tsx` — one `cva()` definition; every button in the app is `<Button variant="primary">`, never a hand-rolled `<button className="...">` | Editing this one component file — every instance app-wide updates. |
 | Status pills, KPI cards, table rows, the detail/timeline panel | `components/ui/status-pill.tsx`, `components/dashboard/kpi-card.tsx`, etc. — one component per repeated pattern | Editing that one component file. |

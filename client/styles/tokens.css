@@ -13,14 +13,22 @@
  * <html> (localStorage, falling back to prefers-color-scheme, falling
  * back to dark) via a blocking inline script in app/layout.tsx so there
  * is no flash of the wrong theme.
+ *
+ * Palette v2 (Aug 2026) — X/Spotify-informed redesign: surfaces lifted a
+ * step lighter than the original navy-black, accent pushed to a more
+ * saturated/luminous green with a real glow behind it, and a violet
+ * second hue replaces the old cool-indigo --accent-2. Every oklch()
+ * literal below was converted from the approved swatch hexes (see the
+ * "Taggify Preview — A2" artifact) rather than hand-tuned, so the shipped
+ * colors match what was actually signed off.
  */
 :root {
   /* Surfaces */
-  --bg: oklch(15% 0.006 255);
-  --sidebar: oklch(13% 0.006 255);
-  --surface: oklch(19% 0.007 255);
-  --surface-2: oklch(22% 0.008 255);
-  --surface-hover: oklch(25% 0.009 255);
+  --bg: oklch(18.9% 0.010 248);
+  --sidebar: oklch(15.7% 0.008 248);
+  --surface: oklch(24.2% 0.015 257);
+  --surface-2: oklch(29.4% 0.019 255);
+  --surface-hover: oklch(33% 0.021 254);
 
   /* Borders */
   --border: oklch(100% 0 0 / 0.08);
@@ -28,25 +36,28 @@
 
   /* Text */
   --text: oklch(97% 0.003 255);
-  --text-muted: oklch(72% 0.01 255);
-  --text-faint: oklch(50% 0.01 255);
+  --text-muted: oklch(76% 0.01 255);
+  --text-faint: oklch(54% 0.01 255);
 
-  /* Accent family — same lightness/chroma, hue varies. --accent-2 is a
-     second, cooler blue (hue 255, indigo) distinct from --blue (hue 230,
-     azure) — no warm/amber hue anywhere in the palette. */
-  --accent: oklch(78% 0.14 164);
-  --accent-ink: oklch(18% 0.02 164); /* text painted on top of --accent */
-  --accent-soft: oklch(78% 0.14 164 / 0.14);
-  --accent-2: oklch(74% 0.15 255);
-  --accent-2-soft: oklch(74% 0.15 255 / 0.14);
+  /* Accent family — --accent is the new luminous spring-green (was a
+     muted hue-164 emerald); --accent-2 is now a violet (hue 286) used
+     for the second status tone and ambient glow variety, replacing the
+     old cool-indigo. --blue/--rose/--slate all got a mild vividness
+     bump alongside it so the whole status family reads as one refreshed
+     family instead of one loud color next to three muted ones. */
+  --accent: oklch(82.2% 0.194 155);
+  --accent-ink: oklch(16% 0.03 155); /* text painted on top of --accent */
+  --accent-soft: oklch(82.2% 0.194 155 / 0.15);
+  --accent-2: oklch(66.2% 0.189 286);
+  --accent-2-soft: oklch(66.2% 0.189 286 / 0.15);
 
   /* Status */
-  --blue: oklch(75% 0.13 230);
-  --blue-soft: oklch(75% 0.13 230 / 0.14);
-  --rose: oklch(70% 0.16 15);
-  --rose-soft: oklch(70% 0.16 15 / 0.14);
-  --slate: oklch(65% 0.01 255);
-  --slate-soft: oklch(65% 0.01 255 / 0.14);
+  --blue: oklch(73.8% 0.145 245);
+  --blue-soft: oklch(73.8% 0.145 245 / 0.15);
+  --rose: oklch(69.5% 0.197 16);
+  --rose-soft: oklch(69.5% 0.197 16 / 0.15);
+  --slate: oklch(70.3% 0.02 258);
+  --slate-soft: oklch(70.3% 0.02 258 / 0.15);
 
   /* Radius */
   --radius-lg: 20px;
@@ -56,32 +67,41 @@
   /* Elevation — card shadow carries a faint accent-tinted rim + bloom
      (in addition to the black drop shadow) so every panel/box picks up a
      bit of ambient glow along its edge, not just buttons. */
-  --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6), 0 0 0 1px oklch(78% 0.14 164 / 0.05),
-    0 0 32px -12px oklch(78% 0.14 164 / 0.2);
-  --shadow-accent-glow: 0 10px 24px -8px oklch(78% 0.14 164 / 0.4);
+  --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6), 0 0 0 1px oklch(82.2% 0.194 155 / 0.06),
+    0 0 32px -12px oklch(82.2% 0.194 155 / 0.22);
+  --shadow-accent-glow: 0 10px 24px -8px oklch(82.2% 0.194 155 / 0.45);
 
   /* Glass buttons — translucent fill + backdrop-blur (Tailwind's
      backdrop-blur-* utility) + a layered glow. Sheen is a 1px inset
      highlight along the top edge that sells the "glass" read. */
   --glass-blur: 14px;
-  --btn-primary-bg: oklch(78% 0.14 164 / 0.82);
+  --btn-primary-bg: oklch(82.2% 0.194 155 / 0.85);
   --btn-primary-border: oklch(100% 0 0 / 0.22);
-  --btn-danger-bg: oklch(70% 0.16 15 / 0.16);
-  --btn-danger-border: oklch(70% 0.16 15 / 0.3);
-  --btn-secondary-bg: oklch(22% 0.008 255 / 0.6);
+  --btn-danger-bg: oklch(69.5% 0.197 16 / 0.16);
+  --btn-danger-border: oklch(69.5% 0.197 16 / 0.3);
+  --btn-secondary-bg: oklch(29.4% 0.019 255 / 0.6);
 
-  --shadow-glow: 0 0 0 1px oklch(78% 0.14 164 / 0.28), 0 10px 28px -6px oklch(78% 0.14 164 / 0.55),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.25);
-  --shadow-glow-hover: 0 0 0 1px oklch(78% 0.14 164 / 0.4), 0 16px 40px -6px oklch(78% 0.14 164 / 0.7),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.35);
-  --shadow-glow-rose: 0 0 0 1px oklch(70% 0.16 15 / 0.22), 0 8px 24px -6px oklch(70% 0.16 15 / 0.4),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.18);
-  --shadow-glow-rose-hover: 0 0 0 1px oklch(70% 0.16 15 / 0.32), 0 14px 36px -6px oklch(70% 0.16 15 / 0.55),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.25);
+  /* Button glow — was a 1px ring + a large blurred halo (0 10px 28px -6px
+     etc.) that visibly bled outside the button's own box, especially
+     noticeable since every button is a full pill. Down to just the ring +
+     inset top sheen, both contained within/at the button's own edge —
+     hover feedback is the sweep animation in button.tsx now, not a bigger
+     glow. -hover variants are unused now (button.tsx no longer swaps the
+     shadow on hover) but left defined in case another component wants them. */
+  --shadow-glow: 0 0 0 1px oklch(82.2% 0.194 155 / 0.3), inset 0 1px 0 0 oklch(100% 0 0 / 0.25);
+  --shadow-glow-hover: 0 0 0 1px oklch(82.2% 0.194 155 / 0.42), inset 0 1px 0 0 oklch(100% 0 0 / 0.35);
+  --shadow-glow-rose: 0 0 0 1px oklch(69.5% 0.197 16 / 0.24), inset 0 1px 0 0 oklch(100% 0 0 / 0.18);
+  --shadow-glow-rose-hover: 0 0 0 1px oklch(69.5% 0.197 16 / 0.34), inset 0 1px 0 0 oklch(100% 0 0 / 0.25);
 
-  /* Fonts — variable names populated by next/font in lib/fonts.ts */
-  --font-ui: var(--font-manrope), system-ui, -apple-system, sans-serif;
-  --font-display: var(--font-instrument-serif), Georgia, serif;
+  /* Fonts — variable name populated by next/font in lib/fonts.ts. Chirp
+     (X) and Circular (Spotify) are both proprietary/not embeddable;
+     Inter is the standard open substitute for both (same tall x-height,
+     same small-size hinting) — see lib/fonts.ts. --font-display now
+     resolves to the same face as --font-ui (no more Instrument Serif);
+     the token stays distinct so a future one-off display face doesn't
+     require touching every component that reads --font-ui. */
+  --font-ui: var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-inter), system-ui, -apple-system, sans-serif;
 }
 
 :root[data-theme="light"] {
@@ -89,8 +109,8 @@
   --bg: oklch(97% 0.004 255);
   --sidebar: oklch(99% 0.002 255);
   --surface: oklch(99.5% 0.002 255);
-  --surface-2: oklch(96% 0.005 255);
-  --surface-hover: oklch(93% 0.006 255);
+  --surface-2: oklch(96% 0.006 255);
+  --surface-hover: oklch(93% 0.007 255);
 
   /* Borders */
   --border: oklch(0% 0 0 / 0.08);
@@ -101,43 +121,38 @@
   --text-muted: oklch(42% 0.012 255);
   --text-faint: oklch(58% 0.012 255);
 
-  /* Accent family — hue/chroma unchanged from dark (brand-consistent),
-     lightness dropped so it reads on white as both text and a fill.
-     --accent-2 is the same cool indigo-blue as dark mode (hue 255) —
-     no warm/amber hue in either theme. */
-  --accent: oklch(52% 0.15 164);
-  --accent-ink: oklch(99% 0.004 164);
-  --accent-soft: oklch(52% 0.15 164 / 0.12);
-  --accent-2: oklch(52% 0.17 255);
-  --accent-2-soft: oklch(52% 0.17 255 / 0.14);
+  /* Accent family — same hue/chroma as dark (brand-consistent), lightness
+     dropped so it reads on white as both text and a fill. --accent-2 is
+     the same violet as dark mode (hue 286). */
+  --accent: oklch(58% 0.194 155);
+  --accent-ink: oklch(99% 0.01 155);
+  --accent-soft: oklch(58% 0.194 155 / 0.12);
+  --accent-2: oklch(52% 0.19 286);
+  --accent-2-soft: oklch(52% 0.19 286 / 0.14);
 
   /* Status */
-  --blue: oklch(50% 0.16 230);
-  --blue-soft: oklch(50% 0.16 230 / 0.12);
-  --rose: oklch(52% 0.2 15);
-  --rose-soft: oklch(52% 0.2 15 / 0.12);
-  --slate: oklch(46% 0.01 255);
-  --slate-soft: oklch(46% 0.01 255 / 0.1);
+  --blue: oklch(52% 0.16 245);
+  --blue-soft: oklch(52% 0.16 245 / 0.12);
+  --rose: oklch(54% 0.2 16);
+  --rose-soft: oklch(54% 0.2 16 / 0.12);
+  --slate: oklch(48% 0.015 258);
+  --slate-soft: oklch(48% 0.015 258 / 0.1);
 
   /* Elevation — softer, warmer-toned black shadow (heavy pure-black blur
      reads muddy on white) plus the same faint accent-tinted rim/bloom
      used in dark mode, tuned down so it doesn't overpower a light page. */
   --shadow-card: 0 16px 40px -20px oklch(0% 0 0 / 0.16), 0 4px 12px -4px oklch(0% 0 0 / 0.08),
-    0 0 0 1px oklch(52% 0.15 164 / 0.07), 0 0 24px -12px oklch(52% 0.15 164 / 0.16);
-  --shadow-accent-glow: 0 8px 20px -8px oklch(52% 0.15 164 / 0.35);
+    0 0 0 1px oklch(58% 0.194 155 / 0.08), 0 0 24px -12px oklch(58% 0.194 155 / 0.18);
+  --shadow-accent-glow: 0 8px 20px -8px oklch(58% 0.194 155 / 0.4);
 
-  --btn-primary-bg: oklch(52% 0.15 164 / 0.88);
+  --btn-primary-bg: oklch(58% 0.194 155 / 0.9);
   --btn-primary-border: oklch(100% 0 0 / 0.35);
-  --btn-danger-bg: oklch(52% 0.2 15 / 0.1);
-  --btn-danger-border: oklch(52% 0.2 15 / 0.25);
+  --btn-danger-bg: oklch(54% 0.2 16 / 0.1);
+  --btn-danger-border: oklch(54% 0.2 16 / 0.25);
   --btn-secondary-bg: oklch(99.5% 0.002 255 / 0.7);
 
-  --shadow-glow: 0 0 0 1px oklch(52% 0.15 164 / 0.24), 0 8px 22px -6px oklch(52% 0.15 164 / 0.4),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.4);
-  --shadow-glow-hover: 0 0 0 1px oklch(52% 0.15 164 / 0.36), 0 14px 32px -6px oklch(52% 0.15 164 / 0.5),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.5);
-  --shadow-glow-rose: 0 0 0 1px oklch(52% 0.2 15 / 0.16), 0 6px 18px -6px oklch(52% 0.2 15 / 0.22),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.3);
-  --shadow-glow-rose-hover: 0 0 0 1px oklch(52% 0.2 15 / 0.26), 0 10px 26px -6px oklch(52% 0.2 15 / 0.3),
-    inset 0 1px 0 0 oklch(100% 0 0 / 0.4);
+  --shadow-glow: 0 0 0 1px oklch(58% 0.194 155 / 0.26), inset 0 1px 0 0 oklch(100% 0 0 / 0.4);
+  --shadow-glow-hover: 0 0 0 1px oklch(58% 0.194 155 / 0.38), inset 0 1px 0 0 oklch(100% 0 0 / 0.5);
+  --shadow-glow-rose: 0 0 0 1px oklch(54% 0.2 16 / 0.17), inset 0 1px 0 0 oklch(100% 0 0 / 0.3);
+  --shadow-glow-rose-hover: 0 0 0 1px oklch(54% 0.2 16 / 0.27), inset 0 1px 0 0 oklch(100% 0 0 / 0.4);
 }

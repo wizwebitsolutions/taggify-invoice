@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { cn } from "@/lib/utils";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-pa
 import { PlusIcon, AssetIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Asset } from "@/lib/api-client";
-import { money, initialsOf, roleLabel } from "@/lib/format";
+import { money, initialsOf, roleLabel, compactNumber } from "@/lib/format";
 
 export default function AssetsPage() {
   return (
@@ -149,11 +150,12 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
           </div>
         </div>
         <span
-          className={
-            asset.approvalStatus === "approved"
-              ? "rounded-full bg-accent-soft px-2.5 py-1 text-[0.6875rem] font-bold text-accent"
-              : "rounded-full bg-slate-soft px-2.5 py-1 text-[0.6875rem] font-bold text-slate"
-          }
+          className={cn(
+            "shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-bold capitalize",
+            asset.approvalStatus === "approved" && "bg-accent-soft text-accent",
+            asset.approvalStatus === "pending" && "bg-slate-soft text-slate",
+            asset.approvalStatus === "rejected" && "bg-rose-soft text-rose"
+          )}
         >
           {asset.approvalStatus}
         </span>
@@ -262,8 +264,8 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
 
 function EngagementStat({ label, value }: { label: string; value: number | null }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-md bg-surface-2 px-2.5 py-2 text-center">
-      <span className="text-[0.9375rem] font-bold tabular-nums">{value === null ? "N/A" : value.toLocaleString()}</span>
+    <div className="flex flex-col gap-0.5 rounded-md bg-surface-2 px-2.5 py-2 text-center ring-1 ring-inset ring-border">
+      <span className="text-[0.9375rem] font-bold tabular-nums">{value === null ? "N/A" : compactNumber(value)}</span>
       <span className="text-[0.6875rem] text-text-faint">{label}</span>
     </div>
   );

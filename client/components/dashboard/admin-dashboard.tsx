@@ -8,12 +8,14 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
+import { DashboardHero } from "@/components/dashboard/dashboard-hero";
 import { LinkDetailPanel, STATUS_LABEL } from "@/components/dashboard/link-detail-panel";
 import { TrendAreaChart } from "@/components/charts/trend-area-chart";
 import { RankedBarList } from "@/components/charts/ranked-bar-list";
 import { StackedBar } from "@/components/charts/stacked-bar";
 import { TONE_COLOR } from "@/components/charts/tone-color";
 import { STATUS_CONFIG, StatusPill } from "@/components/ui/status-pill";
+import { Panel, PanelAction } from "@/components/ui/panel";
 import { Th, TableSkeleton, EmptyState } from "@/components/ui/table-parts";
 import { InvoiceIcon, AlertIcon, CheckCircleIcon, AssetIcon, CampaignIcon, ClockIcon, TeamIcon, ChevronRightIcon, ArrowRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
@@ -214,11 +216,12 @@ export function AdminDashboard() {
       searchPlaceholder="Search links, invoices, pages…"
     >
       <div className="flex flex-col gap-8">
-        <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Admin</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">Overview</h1>
-          <p className="text-[0.9375rem] text-text-muted">Finance, pipeline health, and pages — across every creator.</p>
-        </div>
+        <DashboardHero
+          eyebrow="Admin"
+          title={<span className="text-accent">Overview</span>}
+          subtitle="Finance, pipeline health, and pages — across every creator."
+          stat={{ value: String(opsKpis.campaigns), label: "Campaigns live" }}
+        />
 
         {/* Finance KPIs — horizontal-scroll strip on mobile, a 4-up grid at md+. */}
         <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
@@ -263,7 +266,7 @@ export function AdminDashboard() {
             label="Pending approvals"
             value={String(opsKpis.pendingApprovals)}
             foot="Pages + billing profiles"
-            tone={opsKpis.pendingApprovals > 0 ? "indigo" : undefined}
+            tone={opsKpis.pendingApprovals > 0 ? "violet" : undefined}
             onClick={() => scrollToId("pending-approvals")}
           />
           <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={CampaignIcon} label="Campaigns" value={String(opsKpis.campaigns)} onClick={() => router.push("/campaigns")} />
@@ -278,21 +281,17 @@ export function AdminDashboard() {
         </div>
 
         {/* Expenditure trend */}
-        <section className="rounded-lg border border-border bg-surface p-6 shadow-card">
+        <Panel>
           {invoicesQuery.isLoading ? (
             <TableSkeleton rows={1} />
           ) : (
             <TrendAreaChart data={expenditureTrend} label="Expenditure trend" subtitle="Last 6 months" formatValue={money} />
           )}
-        </section>
+        </Panel>
 
         {/* Link funnel + top pages */}
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          <section className="rounded-lg border border-border bg-surface p-6 shadow-card">
-            <div className="mb-5">
-              <h2 className="text-[0.9375rem] font-bold">Link pipeline</h2>
-              <p className="mt-0.5 text-[0.8125rem] text-text-faint">Where every submitted link sits right now — click a stage to inspect it.</p>
-            </div>
+          <Panel title="Link pipeline" subtitle="Where every submitted link sits right now — click a stage to inspect it.">
             {linksQuery.isLoading ? (
               <TableSkeleton />
             ) : (
@@ -301,13 +300,9 @@ export function AdminDashboard() {
                 onSelect={(key) => selectFunnelStatus(key)}
               />
             )}
-          </section>
+          </Panel>
 
-          <section className="rounded-lg border border-border bg-surface p-6 shadow-card">
-            <div className="mb-5">
-              <h2 className="text-[0.9375rem] font-bold">Top pages</h2>
-              <p className="mt-0.5 text-[0.8125rem] text-text-faint">Ranked by follower count.</p>
-            </div>
+          <Panel title="Top pages" subtitle="Ranked by follower count.">
             {assetsQuery.isLoading ? (
               <TableSkeleton />
             ) : topPages.length === 0 ? (
@@ -315,15 +310,11 @@ export function AdminDashboard() {
             ) : (
               <RankedBarList items={topPages} formatValue={(v) => v.toLocaleString()} onSelect={() => router.push("/assets")} />
             )}
-          </section>
+          </Panel>
         </div>
 
         {/* Invoice composition */}
-        <section className="rounded-lg border border-border bg-surface p-6 shadow-card">
-          <div className="mb-5">
-            <h2 className="text-[0.9375rem] font-bold">Invoice status</h2>
-            <p className="mt-0.5 text-[0.8125rem] text-text-faint">Every invoice ever raised, by current status — click one to open it filtered.</p>
-          </div>
+        <Panel title="Invoice status" subtitle="Every invoice ever raised, by current status — click one to open it filtered.">
           {invoicesQuery.isLoading ? (
             <TableSkeleton rows={1} />
           ) : invoices.length === 0 ? (
@@ -331,7 +322,7 @@ export function AdminDashboard() {
           ) : (
             <StackedBar segments={invoiceComposition} onSelect={(status) => router.push(`/invoices?status=${status}`)} />
           )}
-        </section>
+        </Panel>
 
         {/* Needs your review */}
         <section id="link-queue" className="scroll-mt-6">
@@ -414,7 +405,7 @@ export function AdminDashboard() {
             </div>
 
             {/* Desktop: persistent side panel. */}
-            <div className="hidden w-[320px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card md:flex">
+            <Panel className="hidden w-[320px] shrink-0 md:block" bodyClassName="flex h-full flex-col gap-5">
               {queueDetail && (
                 <LinkDetailPanel
                   link={queueDetail}
@@ -427,7 +418,7 @@ export function AdminDashboard() {
                   }}
                 />
               )}
-            </div>
+            </Panel>
           </div>
 
           {/* Mobile: detail opens as a bottom sheet. */}
@@ -451,13 +442,14 @@ export function AdminDashboard() {
 
         {/* Pending approvals */}
         <section id="pending-approvals" className="scroll-mt-6 grid grid-cols-1 gap-5 md:grid-cols-2">
-          <div className="rounded-lg border border-border bg-surface p-6 shadow-card">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-[0.9375rem] font-bold">Pages awaiting approval</h2>
-              <button onClick={() => router.push("/assets")} className="flex items-center gap-1 text-[0.8125rem] font-semibold text-accent hover:text-accent-2">
+          <Panel
+            title="Pages awaiting approval"
+            action={
+              <PanelAction onClick={() => router.push("/assets")}>
                 View all <ArrowRightIcon className="h-3 w-3" />
-              </button>
-            </div>
+              </PanelAction>
+            }
+          >
             {assetsQuery.isLoading ? (
               <TableSkeleton rows={3} />
             ) : pendingPages.length === 0 ? (
@@ -482,15 +474,16 @@ export function AdminDashboard() {
                 ))}
               </div>
             )}
-          </div>
+          </Panel>
 
-          <div className="rounded-lg border border-border bg-surface p-6 shadow-card">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-[0.9375rem] font-bold">Billing profiles awaiting approval</h2>
-              <button onClick={() => router.push("/profile?tab=billing")} className="flex items-center gap-1 text-[0.8125rem] font-semibold text-accent hover:text-accent-2">
+          <Panel
+            title="Billing profiles awaiting approval"
+            action={
+              <PanelAction onClick={() => router.push("/profile?tab=billing")}>
                 View all <ArrowRightIcon className="h-3 w-3" />
-              </button>
-            </div>
+              </PanelAction>
+            }
+          >
             {billingQuery.isLoading ? (
               <TableSkeleton rows={3} />
             ) : pendingBillingProfiles.length === 0 ? (
@@ -515,19 +508,20 @@ export function AdminDashboard() {
                 ))}
               </div>
             )}
-          </div>
+          </Panel>
         </section>
 
         {/* System health — ADMIN only, Finance can't reach /admin/* */}
         {isAdmin && (
           <section className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <div className="rounded-lg border border-border bg-surface p-6 shadow-card">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-[0.9375rem] font-bold">Recent job runs</h2>
-                <button onClick={() => router.push("/job-runs")} className="flex items-center gap-1 text-[0.8125rem] font-semibold text-accent hover:text-accent-2">
+            <Panel
+              title="Recent job runs"
+              action={
+                <PanelAction onClick={() => router.push("/job-runs")}>
                   View all <ArrowRightIcon className="h-3 w-3" />
-                </button>
-              </div>
+                </PanelAction>
+              }
+            >
               {jobRunsQuery.isLoading ? (
                 <TableSkeleton rows={3} />
               ) : recentJobRuns.length === 0 ? (
@@ -545,15 +539,16 @@ export function AdminDashboard() {
                   ))}
                 </div>
               )}
-            </div>
+            </Panel>
 
-            <div className="rounded-lg border border-border bg-surface p-6 shadow-card">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-[0.9375rem] font-bold">Team</h2>
-                <button onClick={() => router.push("/users")} className="flex items-center gap-1 text-[0.8125rem] font-semibold text-accent hover:text-accent-2">
+            <Panel
+              title="Team"
+              action={
+                <PanelAction onClick={() => router.push("/users")}>
                   View all <ArrowRightIcon className="h-3 w-3" />
-                </button>
-              </div>
+                </PanelAction>
+              }
+            >
               {usersQuery.isLoading ? (
                 <TableSkeleton rows={3} />
               ) : (
@@ -577,7 +572,7 @@ export function AdminDashboard() {
                   </div>
                 </div>
               )}
-            </div>
+            </Panel>
           </section>
         )}
       </div>

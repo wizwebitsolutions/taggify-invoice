@@ -4,6 +4,20 @@ export function money(v: string | number) {
   return `₹${Number(v).toLocaleString("en-IN")}`;
 }
 
+/** "10644" -> "10.6K", "51652" -> "51.7K" — for a stat headline where the
+ * exact count matters less than its scale (campaign cards' likes total).
+ * Leaves anything under 1,000 as an exact number. */
+export function compactNumber(v: number) {
+  if (v < 1000) return v.toLocaleString("en-IN");
+  // Branch on the *rounded* K value, not the raw one — a value like 99,980
+  // is under 100,000 (so a raw-value check would take the K branch), but
+  // (99980/1000).toFixed(1) rounds up to "100.0", which should read as
+  // "1L", not "100K".
+  const kValue = (v / 1000).toFixed(1).replace(/\.0$/, "");
+  if (v < 100_000 && kValue !== "100") return `${kValue}K`;
+  return `${(v / 100_000).toFixed(1).replace(/\.0$/, "")}L`; // lakh — matches en-IN grouping past 5 digits
+}
+
 export function initialsOf(name?: string | null) {
   if (!name) return "—";
   return name

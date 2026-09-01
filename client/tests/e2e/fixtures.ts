@@ -1,7 +1,12 @@
 import type { Page } from "@playwright/test";
 
-/** Must match client/.env.local's NEXT_PUBLIC_API_URL. */
-const API_URL = "http://localhost:4000";
+/** Must match client/.env.local's NEXT_PUBLIC_API_URL. Exported so a test
+ * that needs to override one endpoint beyond what mockApi() sends can scope
+ * its own page.route() to this origin — a bare "**\/campaigns"-style glob
+ * has no scheme/host and also matches the *page* navigation to
+ * localhost:3000/campaigns, replacing the whole document with the mocked
+ * JSON instead of just answering the API call. */
+export const API_URL = "http://localhost:4000";
 
 /** Must match client/lib/api-client.ts's AUTH_STORAGE_KEY. */
 const AUTH_STORAGE_KEY = "taggify_auth";

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { manrope, instrumentSerif } from "@/lib/fonts";
+import { inter } from "@/lib/fonts";
 import { THEME_BLOCKING_SCRIPT } from "@/lib/theme-context";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${manrope.variable} ${instrumentSerif.variable}`} suppressHydrationWarning>
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
       <head>
         {/* Sets data-theme before first paint — avoids a flash of the wrong
             theme. Must run synchronously, ahead of React hydration. */}

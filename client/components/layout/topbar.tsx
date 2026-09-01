@@ -69,15 +69,23 @@ export function Topbar({
           onClick={toggleTheme}
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           aria-label="Toggle color theme"
-          className="hidden h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-border bg-surface text-text-muted transition-colors hover:bg-surface-hover hover:text-text md:flex"
+          className="hidden h-[38px] w-[38px] items-center justify-center rounded-full border border-border bg-surface text-text-muted transition-all duration-150 hover:scale-105 hover:bg-surface-hover hover:text-text active:scale-95 md:flex"
         >
           {theme === "dark" ? <SunIcon className="h-[18px] w-[18px]" /> : <MoonIcon className="h-[18px] w-[18px]" />}
         </button>
 
-        <div className="relative">
+        {/* Desktop-only, like the theme toggle above — mobile gets notifications
+            through the bottom nav's "More" sheet instead (more-sheet.tsx), which
+            renders them as a full sheet view built for a narrow screen. This
+            dropdown is a small floating popover anchored to a 38px button; without
+            `hidden md:block` it also rendered on mobile, where its up-to-360px-wide
+            panel had nowhere correct to anchor in the condensed topbar and
+            overlapped the search/profile controls next to it. */}
+        <div className="relative hidden md:block">
           <button
             onClick={() => setOpen((v) => !v)}
-            className="relative flex h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-border bg-surface"
+            aria-label="Notifications"
+            className="relative flex h-[38px] w-[38px] items-center justify-center rounded-full border border-border bg-surface transition-all duration-150 hover:scale-105 hover:bg-surface-hover active:scale-95"
           >
             <BellIcon className="h-[18px] w-[18px] text-text-muted" />
             {unreadCount > 0 && (
@@ -88,7 +96,10 @@ export function Topbar({
           {open && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-              <div className="absolute right-0 top-[calc(100%+8px)] z-50 flex max-h-[420px] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-card">
+              <div
+                data-testid="notifications-panel"
+                className="absolute right-0 top-[calc(100%+8px)] z-50 flex max-h-[420px] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-card"
+              >
                 <div className="flex items-center justify-between border-b border-border px-4 py-3">
                   <p className="text-[0.875rem] font-bold">Notifications</p>
                   {unreadCount > 0 && (

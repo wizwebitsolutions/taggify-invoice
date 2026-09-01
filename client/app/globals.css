@@ -23,6 +23,85 @@ body {
     box-shadow 200ms ease !important;
 }
 
+/* Ambient glow blobs — two large blurred, low-opacity accent-colored
+   circles that drift slowly behind the app shell (AppShell renders the
+   elements; see components/layout/app-shell.tsx). Same trick used on the
+   login page's static radial-gradient background, made to move. Frozen
+   under prefers-reduced-motion instead of removed, since the blobs are
+   also just a static bit of color at rest. */
+.glow-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(70px);
+  pointer-events: none;
+  z-index: 0;
+}
+.glow-blob-a {
+  animation: glow-float-a 18s ease-in-out infinite alternate;
+}
+.glow-blob-b {
+  animation: glow-float-b 22s ease-in-out infinite alternate;
+}
+@keyframes glow-float-a {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    transform: translate(40px, 30px) scale(1.15);
+  }
+}
+@keyframes glow-float-b {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    transform: translate(-30px, -35px) scale(1.1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow-blob-a,
+  .glow-blob-b {
+    animation: none;
+  }
+}
+
+/* Scrollable regions that should still scroll (wheel/touch/keyboard) but
+   not show a visible scrollbar track — e.g. the sidebar nav column. */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge/IE */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/new Edge */
+}
+
+/* App-wide scrollbar skin — every other scrollable region (main content
+   area, modals, tables, ...) keeps a visible-but-quiet scrollbar instead
+   of the browser default: slim, transparent track, a pill thumb in the
+   border color that darkens/lightens on hover. Lower specificity than
+   `.no-scrollbar` above, which still wins where a scrollbar should be
+   hidden entirely (the sidebar). */
+* {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-faint);
+}
+
 /* Chrome/Safari paint autofilled inputs with a light background by
    default, which breaks the dark theme — override it to match. */
 input:-webkit-autofill,

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { cn } from "@/lib/utils";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { Field, TextField } from "@/components/ui/form-field";
 import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
+import { ProgressBar } from "@/components/ui/panel";
 import { PlusIcon, CampaignIcon, HeartIcon, AlertIcon, CheckCircleIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -25,7 +27,7 @@ import {
   type CampaignAssignment,
 } from "@/lib/api-client";
 import { parseAssignmentSheet, parseWorkImportSheet, type ParsedAssignmentRow, type ParsedWorkImportRow } from "@/lib/parseAssignmentSheet";
-import { initialsOf, roleLabel, money } from "@/lib/format";
+import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
 
 export default function CampaignsPage() {
   return (
@@ -97,70 +99,14 @@ function CampaignsContent() {
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((c) => (
-              <div key={c.id} className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card">
-                {/* One representative post's cover, picked server-side (campaigns/service.js)
-                    from whichever link under this campaign has been scraped — a campaign with
-                    several posts still only needs one preview here. Falls back to a plain
-                    icon tile until at least one post has a scraped thumbnail. */}
-                {c.representativePost?.thumbnailUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- Apify/Instagram-hosted, not a local/optimizable asset
-                  <img
-                    src={c.representativePost.thumbnailUrl}
-                    alt=""
-                    className="h-40 w-full rounded-md bg-surface-2 object-cover"
-                  />
-                ) : (
-                  <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-surface-2">
-                    <CampaignIcon className="h-4 w-4 text-text-muted" />
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs font-semibold text-text-faint">{c.brandName}</p>
-                  <p className="mt-1 text-[0.9375rem] font-bold leading-snug">{c.title}</p>
-                  {c.representativePost?.caption && (
-                    <p className="mt-1.5 line-clamp-2 text-[0.8125rem] text-text-muted">{c.representativePost.caption}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 text-xs text-text-faint">
-                  <HeartIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {c.totalLikes ? `${c.totalLikes.toLocaleString()} likes total` : "No engagement yet"}
-                    {c.postCount ? ` · ${c.postCount} post${c.postCount === 1 ? "" : "s"}` : ""}
-                  </span>
-                </div>
-                {/* Budget — newTask.md #9: remaining = cost cap - spent so far. Only shown when a cap was actually set. */}
-                {c.costCap != null && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-text-faint">Budget</span>
-                    <span className={c.remainingBudget != null && c.remainingBudget < 0 ? "font-semibold text-rose" : "font-semibold text-text-muted"}>
-                      {money(c.remainingBudget ?? 0)} left of {money(c.costCap)}
-                    </span>
-                  </div>
-                )}
-                {canCreate && !!c.pendingAssignmentCount && (
-                  <button
-                    type="button"
-                    onClick={() => setPendingResolution({ campaignId: c.id, campaignTitle: c.title })}
-                    className="flex items-center gap-1.5 rounded-md border border-rose/25 bg-rose-soft px-2.5 py-1.5 text-left text-[0.75rem] font-semibold text-rose"
-                  >
-                    <AlertIcon className="h-3.5 w-3.5 shrink-0" />
-                    {c.pendingAssignmentCount} page{c.pendingAssignmentCount === 1 ? "" : "s"} from the sheet still need{c.pendingAssignmentCount === 1 ? "s" : ""} creating
-                  </button>
-                )}
-                <div className="flex items-center justify-between text-xs text-text-faint">
-                  <span>Created {new Date(c.createdAt).toLocaleDateString()}</span>
-                  {c.deadline && (
-                    <span className={new Date(c.deadline) < new Date() ? "font-semibold text-rose" : "font-semibold text-text-muted"}>
-                      Deadline {new Date(c.deadline).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
-                {canUploadLinks && (
-                  <Button size="sm" variant="secondary" className="w-full" onClick={() => setUploadCampaign(c)}>
-                    Upload Links
-                  </Button>
-                )}
-              </div>
+              <CampaignCard
+                key={c.id}
+                campaign={c}
+                canCreate={canCreate}
+                canUploadLinks={canUploadLinks}
+                onResolvePending={() => setPendingResolution({ campaignId: c.id, campaignTitle: c.title })}
+                onUploadLinks={() => setUploadCampaign(c)}
+              />
             ))}
           </div>
         )}
@@ -212,6 +158,122 @@ function CampaignsContent() {
         />
       )}
     </AppShell>
+  );
+}
+
+function CampaignCard({
+  campaign: c,
+  canCreate,
+  canUploadLinks,
+  onResolvePending,
+  onUploadLinks,
+}: {
+  campaign: Campaign;
+  canCreate: boolean;
+  canUploadLinks: boolean;
+  onResolvePending: () => void;
+  onUploadLinks: () => void;
+}) {
+  const costCapNum = c.costCap != null ? Number(c.costCap) : null;
+  const spentPct = costCapNum && costCapNum > 0 ? ((c.spent ?? 0) / costCapNum) * 100 : null;
+  // Derived from spentPct rather than c.remainingBudget directly — they're
+  // both meant to agree (remainingBudget = costCap - spent server-side),
+  // but computing "over" from the same value the progress bar/percentage
+  // already render means the "Over" pill can never show without the budget
+  // row that explains it, or vice versa, even if that invariant ever slips.
+  const isOver = spentPct != null && spentPct > 100;
+
+  return (
+    <div
+      data-testid="campaign-card"
+      className={cn(
+        "flex flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card transition-colors",
+        isOver && "border-rose/35 bg-gradient-to-b from-rose-soft to-transparent"
+      )}
+    >
+      {/* One representative post's cover, picked server-side (campaigns/service.js)
+          from whichever link under this campaign has been scraped — a campaign with
+          several posts still only needs one preview here. Falls back to a plain
+          icon tile until at least one post has a scraped thumbnail. */}
+      {c.representativePost?.thumbnailUrl ? (
+        <div className="relative h-40 w-full overflow-hidden rounded-md bg-surface-2">
+          {/* eslint-disable-next-line @next/next/no-img-element -- Apify/Instagram-hosted, not a local/optimizable asset */}
+          <img src={c.representativePost.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+        </div>
+      ) : (
+        <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-surface-2">
+          <CampaignIcon className="h-4 w-4 text-text-muted" />
+        </div>
+      )}
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">{c.brandName}</p>
+          <p className="mt-1 text-[0.9375rem] font-bold leading-snug">{c.title}</p>
+        </div>
+        {isOver && (
+          <span className="shrink-0 rounded-full border border-rose/35 bg-rose-soft px-2.5 py-1 text-[0.625rem] font-extrabold uppercase tracking-[0.04em] text-rose">
+            Over
+          </span>
+        )}
+      </div>
+
+      {c.representativePost?.caption && (
+        <p className="-mt-2 line-clamp-2 text-[0.8125rem] text-text-muted">{c.representativePost.caption}</p>
+      )}
+
+      <div className="flex items-end justify-between">
+        <div className="flex items-center gap-1.5">
+          <HeartIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
+          <span className="text-[1.0625rem] font-extrabold tabular-nums leading-none">
+            {c.totalLikes ? compactNumber(c.totalLikes) : "0"}
+          </span>
+          <span className="text-[0.75rem] text-text-faint">likes</span>
+        </div>
+        {!!c.postCount && <span className="text-[0.8125rem] font-semibold text-text-muted">{c.postCount} post{c.postCount === 1 ? "" : "s"}</span>}
+      </div>
+
+      {/* Budget — newTask.md #9: remaining = cost cap - spent so far. Only shown when a cap was actually set. */}
+      {costCapNum != null && spentPct != null && (
+        <div>
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <span className="text-[0.8125rem] font-semibold text-text-muted tabular-nums">
+              {money(c.spent ?? 0)} / {money(costCapNum)}
+            </span>
+            <span className={cn("text-[0.8125rem] font-extrabold tabular-nums", isOver ? "text-rose" : "text-accent")}>
+              {Math.round(spentPct)}%
+            </span>
+          </div>
+          <ProgressBar pct={spentPct} tone={isOver ? "rose" : "accent"} />
+        </div>
+      )}
+
+      {canCreate && !!c.pendingAssignmentCount && (
+        <button
+          type="button"
+          onClick={onResolvePending}
+          className="flex items-center gap-1.5 rounded-md border border-rose/25 bg-rose-soft px-2.5 py-1.5 text-left text-[0.75rem] font-semibold text-rose"
+        >
+          <AlertIcon className="h-3.5 w-3.5 shrink-0" />
+          {c.pendingAssignmentCount} page{c.pendingAssignmentCount === 1 ? "" : "s"} from the sheet still need{c.pendingAssignmentCount === 1 ? "s" : ""} creating
+        </button>
+      )}
+
+      <div className="flex items-center justify-between text-xs text-text-faint">
+        <span>Created {new Date(c.createdAt).toLocaleDateString()}</span>
+        {c.deadline && (
+          <span className={new Date(c.deadline) < new Date() ? "font-semibold text-rose" : "font-semibold text-text-muted"}>
+            Deadline {new Date(c.deadline).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+
+      {canUploadLinks && (
+        <Button size="sm" variant="secondary" className="w-full" onClick={onUploadLinks}>
+          Upload Links
+        </Button>
+      )}
+    </div>
   );
 }
 

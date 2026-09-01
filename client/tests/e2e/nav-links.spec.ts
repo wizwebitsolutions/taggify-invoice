@@ -4,14 +4,15 @@ import { signIn, mockApi } from "./fixtures";
 
 /**
  * Connectivity smoke tests for the app's persistent chrome: the desktop
- * sidebar (components/layout/sidebar.tsx) and the mobile bottom nav +
- * "More" sheet (components/layout/bottom-nav.tsx, more-sheet.tsx).
+ * sidebar + topbar (components/layout/sidebar.tsx, topbar.tsx) and the
+ * mobile bottom nav + "More" sheet (components/layout/bottom-nav.tsx,
+ * more-sheet.tsx).
  *
  * These catch "the link is broken/goes nowhere/crashes the page" — they do
  * NOT catch "the link goes somewhere technically valid but semantically
- * wrong" (see the dedicated regression test at the bottom of this file for
- * an example of that category, which needs an assertion about intent, not
- * just about arriving somewhere without crashing).
+ * wrong" (see the dedicated regression tests further down for examples of
+ * that category, which need an assertion about intent, not just about
+ * arriving somewhere without crashing).
  */
 
 async function collectPageErrors(page: Page) {
@@ -58,6 +59,50 @@ test.describe("desktop sidebar navigation", () => {
 
     await expect(page).toHaveURL(/\/profile$/);
     expect(errors).toEqual([]);
+  });
+});
+
+test.describe("desktop topbar", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("notification bell opens the dropdown", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await page.goto("/dashboard");
+
+    await page.getByRole("button", { name: "Notifications" }).click();
+    await expect(page.getByText("No notifications yet.")).toBeVisible();
+  });
+
+  test("notification dropdown actually paints above the page content it overlaps", async ({ page }) => {
+    // Regression test for a real bug: AppShell gave the topbar and the page
+    // content sibling *equal* z-10 (components/layout/app-shell.tsx). On a
+    // z-index tie, siblings paint in DOM order — content came second, so it
+    // painted over the ENTIRE topbar subtree, including this dropdown's own
+    // z-50 (which only wins fights within topbar's own stacking context, not
+    // against a sibling context further out). Visually, the dashboard
+    // heading painted right through the open dropdown instead of being
+    // covered by it — passing this on visibility alone wouldn't have caught
+    // that, since the dropdown WAS visible, just underneath. Checking what
+    // element the browser actually hit-tests at that point is what pins it
+    // down: fixed by bumping topbar's wrapper to z-20.
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await page.goto("/dashboard");
+    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Notifications" }).click();
+    const panel = page.getByTestId("notifications-panel");
+    const box = await panel.boundingBox();
+    if (!box) throw new Error("notifications panel has no layout box");
+
+    // A point inside the panel that also sits over where the heading used
+    // to show through (the panel's top strip, right under the topbar).
+    const hit = await page.evaluate(
+      ([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="notifications-panel"]') !== null,
+      [box.x + box.width / 2, box.y + 10]
+    );
+    expect(hit, "topmost element at that point should be inside the notifications panel, not page content behind it").toBe(true);
   });
 });
 
@@ -124,5 +169,20 @@ test.describe("mobile bottom nav + More sheet", () => {
     await expect(page.getByText("No notifications yet.")).toBeVisible();
     // Stayed on the current page — no stray navigation to /profile.
     await expect(page).toHaveURL(/\/dashboard$/);
+  });
+
+  test("topbar notification bell doesn't render on mobile — only the More sheet's view does", async ({ page }) => {
+    // Regression test: components/layout/topbar.tsx's notification-bell dropdown
+    // used to render at every viewport width. Its floating panel (up to 360px
+    // wide, anchored to a 38px button) had nowhere correct to sit in the
+    // condensed mobile topbar and overlapped the search/profile controls next
+    // to it — on top of duplicating the More sheet's own notifications view
+    // (tested above). Fixed by hiding it below the `md` breakpoint, matching
+    // the theme-toggle button right next to it, which already did this.
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await page.goto("/dashboard");
+
+    await expect(page.getByRole("button", { name: "Notifications" })).toBeHidden();
   });
 });

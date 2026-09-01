@@ -13,26 +13,37 @@ import { cn } from "@/lib/utils";
  * frontend.md §3.
  */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap font-ui font-bold transition-[filter,box-shadow,background-color,transform] duration-200 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg active:scale-[0.98]",
+  // relative/isolate/overflow-hidden + the before: pseudo-element is the
+  // hover "sweep" — a diagonal highlight band that slides from fully
+  // off-canvas right to fully off-canvas left (before:translate-x-full at
+  // rest, hover:before:-translate-x-full), clipped to the button's own pill
+  // shape. -z-10 (inside `isolate`, so it's scoped to this button, not the
+  // page) keeps it under the label/icon and over the button's own fill.
+  // Replaces the old hover:-translate-y-px lift — the button no longer
+  // moves on hover, only the sweep does.
+  "relative isolate inline-flex items-center justify-center gap-2 overflow-hidden whitespace-nowrap font-ui font-bold transition-[background-color,border-color,transform] duration-200 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:translate-x-full before:bg-[linear-gradient(115deg,transparent_35%,oklch(100%_0_0/.35)_50%,transparent_65%)] before:transition-transform before:duration-500 before:ease-out before:content-[''] hover:before:-translate-x-full disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg active:scale-[0.98]",
   {
     variants: {
       variant: {
-        // Glass: translucent accent fill (--btn-primary-bg) + backdrop
-        // blur + a layered glow (outer glow + inset top sheen, both from
-        // styles/tokens.css) that intensifies on hover.
-        primary:
-          "bg-[var(--btn-primary-bg)] backdrop-blur-glass text-accent-ink border border-[var(--btn-primary-border)] shadow-glow hover:shadow-glow-hover hover:brightness-110",
-        secondary:
-          "bg-[var(--btn-secondary-bg)] backdrop-blur-glass text-text border border-border-strong hover:bg-surface-hover",
+        // Glass: translucent accent fill (--btn-primary-bg) + backdrop blur
+        // + a contained glow (a thin accent-tinted ring + inset top sheen,
+        // both from styles/tokens.css) — used to also blur outward well
+        // past the button's own edges on hover; now a fixed, contained
+        // amount at rest, so the hover sweep above is the only thing that
+        // moves or changes.
+        primary: "bg-[var(--btn-primary-bg)] backdrop-blur-glass text-accent-ink border border-[var(--btn-primary-border)] shadow-glow",
+        secondary: "bg-[var(--btn-secondary-bg)] backdrop-blur-glass text-text border border-border-strong hover:bg-surface-hover",
         ghost: "bg-transparent text-text-muted border border-border hover:bg-surface hover:text-text",
-        danger:
-          "bg-[var(--btn-danger-bg)] backdrop-blur-glass text-rose border border-[var(--btn-danger-border)] shadow-glow-rose hover:shadow-glow-rose-hover hover:brightness-110",
+        danger: "bg-[var(--btn-danger-bg)] backdrop-blur-glass text-rose border border-[var(--btn-danger-border)] shadow-glow-rose",
       },
       size: {
+        // Pill/circle throughout — the X/Spotify shape language: every
+        // button is a full pill, every icon-only button a true circle,
+        // never the old 12px-radius rectangle.
         sm: "h-8 rounded-full px-3 text-xs [&_svg]:size-3.5",
-        default: "h-10 rounded-md px-[18px] text-sm [&_svg]:size-4",
-        lg: "h-12 rounded-md px-6 text-[0.9375rem] [&_svg]:size-4",
-        icon: "h-10 w-10 rounded-md [&_svg]:size-4",
+        default: "h-10 rounded-full px-5 text-sm [&_svg]:size-4",
+        lg: "h-12 rounded-full px-7 text-[0.9375rem] [&_svg]:size-4",
+        icon: "h-10 w-10 rounded-full [&_svg]:size-4",
       },
     },
     defaultVariants: {

@@ -63,7 +63,7 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
     // nav groups it got pushed past the bottom edge and clipped by the
     // app shell's overflow-hidden instead of ever being reachable.
     <aside className="hidden h-full w-[260px] shrink-0 flex-col border-r border-border bg-sidebar md:flex">
-      <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto p-4">
+      <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto p-4">
         <div className="flex items-center gap-2.5 px-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-sm font-extrabold text-accent-ink">
             T
@@ -82,8 +82,8 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
               const content = (
                 <span
                   className={cn(
-                    "flex h-[38px] items-center gap-2.5 rounded-[10px] px-3 text-sm font-medium text-text-muted transition-colors",
-                    isActive && "bg-accent-soft font-semibold text-accent",
+                    "flex h-[38px] items-center gap-2.5 rounded-full px-3 text-sm font-medium text-text-muted transition-colors",
+                    isActive && "bg-accent-soft font-semibold text-accent shadow-[inset_0_0_0_1px_var(--accent-soft)]",
                     item.href && !isActive && "hover:bg-surface hover:text-text",
                     !item.href && "cursor-default opacity-50"
                   )}

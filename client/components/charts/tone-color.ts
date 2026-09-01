@@ -8,7 +8,7 @@ import type { Tone } from "@/components/ui/status-pill";
  */
 export const TONE_COLOR: Record<NonNullable<Tone>, string> = {
   slate: "var(--slate)",
-  indigo: "var(--accent-2)",
+  violet: "var(--accent-2)",
   rose: "var(--rose)",
   blue: "var(--blue)",
   emerald: "var(--accent)",

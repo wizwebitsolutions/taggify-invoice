@@ -7,8 +7,10 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
+import { DashboardHero } from "@/components/dashboard/dashboard-hero";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { StatusPill, type PillStatus } from "@/components/ui/status-pill";
+import { Panel } from "@/components/ui/panel";
 import { LinkIcon, CameraIcon, CheckCircleIcon, InvoiceIcon, AlertIcon, PlusIcon, ChevronRightIcon, HeartIcon, MessageIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
@@ -138,11 +140,16 @@ export function CreatorDashboard() {
       }
     >
       <div className="flex flex-col gap-7">
-        <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Overview</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">My Works</h1>
-          <p className="text-[0.9375rem] text-text-muted">Every submitted link, tracked from post to payout.</p>
-        </div>
+        <DashboardHero
+          eyebrow="Overview"
+          title={
+            <>
+              My <span className="text-accent">Works</span>
+            </>
+          }
+          subtitle="Every submitted link, tracked from post to payout."
+          stat={{ value: String(kpis.added), label: "Links tracked" }}
+        />
 
         {/* Horizontal-scroll strip on mobile, a 5-up grid at md+ — one render, the container switches layout. */}
         <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-5 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
@@ -183,7 +190,7 @@ export function CreatorDashboard() {
             icon={AlertIcon}
             label="Uninvoiced links"
             value={String(kpis.uninvoiced)}
-            tone={kpis.uninvoiced > 0 ? "indigo" : undefined}
+            tone={kpis.uninvoiced > 0 ? "violet" : undefined}
             onClick={() => setStatusFilter("INSIGHTS_APPROVED")}
             active={statusFilter === "INSIGHTS_APPROVED"}
           />
@@ -412,7 +419,7 @@ export function CreatorDashboard() {
           </div>
 
           {/* Desktop: persistent side panel. */}
-          <div className="hidden w-[320px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card md:flex">
+          <Panel className="hidden w-[320px] shrink-0 md:block" bodyClassName="flex h-full flex-col gap-5">
             {detailLink && (
               <LinkDetailPanel
                 link={detailLink}
@@ -425,7 +432,7 @@ export function CreatorDashboard() {
                 }}
               />
             )}
-          </div>
+          </Panel>
         </div>
       </div>
 

@@ -14,7 +14,10 @@ const statusPillVariants = cva(
     variants: {
       tone: {
         slate: "bg-slate-soft text-slate",
-        indigo: "bg-accent-2-soft text-accent-2",
+        // Was "indigo" — --accent-2 is now a violet hue (palette v2, see
+        // styles/tokens.css), renamed so the tone name matches what it
+        // actually renders.
+        violet: "bg-accent-2-soft text-accent-2",
         rose: "bg-rose-soft text-rose",
         blue: "bg-blue-soft text-blue",
         emerald: "bg-accent-soft text-accent",
@@ -47,24 +50,29 @@ export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | PaymentStatus 
 // exactly the same tone a pill for that status would use — one source of
 // truth for "what color is this status" instead of a second lookup drifting
 // from this one.
-export const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone }> = {
+//
+// `live: true` marks a status that's genuinely still in flight — waiting on
+// someone else's imminent action — and gets the pulsing dot below. Terminal/
+// resting states (rejected, approved, paid, draft, ...) don't pulse: motion
+// here is meant to mean something, not decorate every pill equally.
+export const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone; live?: boolean }> = {
   SUBMITTED: { label: "Submitted", tone: "slate" },
-  PENDING_SCREENSHOT_REVIEW: { label: "Pending review", tone: "indigo" },
+  PENDING_SCREENSHOT_REVIEW: { label: "Pending review", tone: "violet", live: true },
   SCREENSHOT_REJECTED: { label: "Rejected", tone: "rose" },
   SCREENSHOT_APPROVED: { label: "Approved", tone: "emerald" },
-  INSIGHTS_PENDING: { label: "Insights pending", tone: "blue" },
+  INSIGHTS_PENDING: { label: "Insights pending", tone: "blue", live: true },
   INSIGHTS_APPROVED: { label: "Insights approved", tone: "emerald" },
-  INVOICED: { label: "Invoiced", tone: "indigo" },
+  INVOICED: { label: "Invoiced", tone: "violet" },
   DRAFT: { label: "Draft", tone: "slate" },
-  RAISED: { label: "Raised", tone: "blue" },
+  RAISED: { label: "Raised", tone: "blue", live: true },
   APPROVED: { label: "Approved", tone: "emerald" },
   REJECTED: { label: "Rejected", tone: "rose" },
   PAID: { label: "Paid", tone: "emerald" },
-  PENDING: { label: "Pending", tone: "slate" },
-  SCHEDULED: { label: "Scheduled", tone: "indigo" },
+  PENDING: { label: "Pending", tone: "slate", live: true },
+  SCHEDULED: { label: "Scheduled", tone: "violet", live: true },
   COMPLETED: { label: "Completed", tone: "emerald" },
   CANCELLED: { label: "Cancelled", tone: "rose" },
-  OVERDUE: { label: "Overdue", tone: "rose" },
+  OVERDUE: { label: "Overdue", tone: "rose", live: true },
 };
 
 export interface StatusPillProps {
@@ -78,6 +86,13 @@ export function StatusPill({ status, detail, className }: StatusPillProps) {
   const config = STATUS_CONFIG[status];
   return (
     <span className={cn(statusPillVariants({ tone: config.tone }), className)}>
+      {config.live && (
+        <span
+          aria-hidden="true"
+          data-testid="status-pill-live-dot"
+          className="mr-1.5 inline-block h-[5px] w-[5px] shrink-0 rounded-full bg-current motion-safe:animate-pulse"
+        />
+      )}
       {detail ? `${config.label} · ${detail}` : config.label}
     </span>
   );
