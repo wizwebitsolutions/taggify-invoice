@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-import { signIn, mockApi } from "./fixtures";
+import { signIn, mockApi, type MockRole } from "./fixtures";
 
 /**
  * Connectivity smoke tests for the app's persistent chrome: the desktop
@@ -24,21 +24,26 @@ async function collectPageErrors(page: Page) {
 test.describe("desktop sidebar navigation", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
-  const SIDEBAR_LINKS = [
-    { label: "Dashboard", href: "/dashboard" },
-    { label: "Campaigns", href: "/campaigns" },
-    { label: "Assets", href: "/assets" },
-    { label: "Inventory", href: "/inventory" },
-    { label: "Invoices", href: "/invoices" },
-    { label: "Users", href: "/users" },
-    { label: "Team", href: "/team" },
-    { label: "Job runs", href: "/job-runs" },
+  // `role` picks who's signed in for that one link's test — since
+  // sidebar.tsx now hides Team from everyone but CREATOR (and
+  // Inventory/Users/Job runs from everyone but ADMIN, see the dedicated
+  // per-role visibility tests below), a link only shows up in the
+  // sidebar at all for a role that can actually see it.
+  const SIDEBAR_LINKS: { label: string; href: string; role: MockRole }[] = [
+    { label: "Dashboard", href: "/dashboard", role: "ADMIN" },
+    { label: "Campaigns", href: "/campaigns", role: "ADMIN" },
+    { label: "Assets", href: "/assets", role: "ADMIN" },
+    { label: "Inventory", href: "/inventory", role: "ADMIN" },
+    { label: "Invoices", href: "/invoices", role: "ADMIN" },
+    { label: "Users", href: "/users", role: "ADMIN" },
+    { label: "Team", href: "/team", role: "CREATOR" },
+    { label: "Job runs", href: "/job-runs", role: "ADMIN" },
   ];
 
-  for (const { label, href } of SIDEBAR_LINKS) {
+  for (const { label, href, role } of SIDEBAR_LINKS) {
     test(`"${label}" nav item goes to ${href} and renders`, async ({ page }) => {
       const errors = await collectPageErrors(page);
-      await signIn(page, "ADMIN"); // ADMIN so every sidebar item's page has content to render, not a permission wall
+      await signIn(page, role);
       await mockApi(page);
 
       await page.goto("/dashboard");
@@ -48,6 +53,41 @@ test.describe("desktop sidebar navigation", () => {
       expect(errors, `uncaught page error(s) after navigating to ${href}`).toEqual([]);
     });
   }
+
+  test.describe("per-role visibility", () => {
+    // Regression tests for a real bug: the sidebar rendered every item for
+    // every role regardless of whether that role could do anything on the
+    // destination page — a CREATOR saw "Inventory" (ADMIN-only server-side,
+    // requireRole("ADMIN") on the plans routes) and landed on a page that
+    // rendered nothing useful for them. Fixed in sidebar.tsx by giving
+    // NavItem an optional `roles` allowlist (canSeeNavItem).
+    const ADMIN_ONLY = ["Inventory", "Users", "Job runs"];
+    const CREATOR_ONLY = ["Team"];
+    const ALWAYS = ["Dashboard", "Campaigns", "Assets", "Invoices"];
+
+    const CASES: { role: MockRole; visible: string[]; hidden: string[] }[] = [
+      { role: "ADMIN", visible: [...ALWAYS, ...ADMIN_ONLY], hidden: CREATOR_ONLY },
+      { role: "CREATOR", visible: [...ALWAYS, ...CREATOR_ONLY], hidden: ADMIN_ONLY },
+      { role: "FINANCE", visible: ALWAYS, hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
+      { role: "TEAM_MEMBER", visible: ALWAYS, hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
+    ];
+
+    for (const { role, visible, hidden } of CASES) {
+      test(`${role} sees the right sidebar items`, async ({ page }) => {
+        await signIn(page, role);
+        await mockApi(page);
+        await page.goto("/dashboard");
+
+        const sidebar = page.getByRole("complementary");
+        for (const label of visible) {
+          await expect(sidebar.getByRole("link", { name: label, exact: true }), `${role} should see "${label}"`).toBeVisible();
+        }
+        for (const label of hidden) {
+          await expect(sidebar.getByRole("link", { name: label, exact: true }), `${role} should not see "${label}"`).toHaveCount(0);
+        }
+      });
+    }
+  });
 
   test("profile card link goes to /profile", async ({ page }) => {
     const errors = await collectPageErrors(page);
@@ -104,6 +144,41 @@ test.describe("desktop topbar", () => {
     );
     expect(hit, "topmost element at that point should be inside the notifications panel, not page content behind it").toBe(true);
   });
+
+  test("a Sheet modal (e.g. New campaign) paints above the topbar, not behind it", async ({ page }) => {
+    // Regression test for a real bug: AppShell's content pane carries its
+    // own `relative z-10` (needed so the topbar, at z-20, wins the tie
+    // against the notification dropdown above — see the test above this
+    // one). Every Sheet-based modal (components/ui/sheet.tsx — New
+    // campaign, New invoice, New asset, ...) is rendered from inside that
+    // z-10 pane, and `position: fixed` doesn't escape an ancestor's
+    // stacking context — so the modal's own z-50 only ever competed
+    // *inside* that z-10 subtree and always lost to the z-20 topbar.
+    // Visually, opening "New campaign" rendered the dialog merged into/
+    // behind the search bar, theme toggle, and log-out button instead of
+    // dimming them. Fixed by portaling Sheet to document.body, which
+    // escapes the content pane's stacking context entirely.
+    await signIn(page, "ADMIN"); // only ADMIN can create a campaign (canCreate)
+    await mockApi(page);
+    await page.goto("/campaigns");
+
+    await page.getByRole("button", { name: "New campaign", exact: true }).click();
+    const overlay = page.getByTestId("sheet-overlay");
+    await expect(overlay).toBeVisible();
+
+    // The topbar's log-out button sits well above the modal panel's
+    // typical top edge — exactly the region that used to render as
+    // "topbar showing through the dialog" instead of dimmed-over.
+    const logout = page.getByRole("button", { name: "Log out" });
+    const box = await logout.boundingBox();
+    if (!box) throw new Error("log out button has no layout box");
+
+    const hit = await page.evaluate(
+      ([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="sheet-overlay"]') !== null,
+      [box.x + box.width / 2, box.y + box.height / 2]
+    );
+    expect(hit, "topmost element over the topbar should be the modal overlay, not the log out button behind it").toBe(true);
+  });
 });
 
 test.describe("mobile bottom nav + More sheet", () => {
@@ -130,17 +205,17 @@ test.describe("mobile bottom nav + More sheet", () => {
     });
   }
 
-  const MORE_SHEET_ROWS = [
-    { label: "Inventory", href: "/inventory" },
-    { label: "Team", href: "/team" },
-    { label: "Users", href: "/users" },
-    { label: "Job runs", href: "/job-runs" },
+  const MORE_SHEET_ROWS: { label: string; href: string; role: MockRole }[] = [
+    { label: "Inventory", href: "/inventory", role: "ADMIN" },
+    { label: "Team", href: "/team", role: "CREATOR" },
+    { label: "Users", href: "/users", role: "ADMIN" },
+    { label: "Job runs", href: "/job-runs", role: "ADMIN" },
   ];
 
-  for (const { label, href } of MORE_SHEET_ROWS) {
+  for (const { label, href, role } of MORE_SHEET_ROWS) {
     test(`More sheet "${label}" row goes to ${href} and renders`, async ({ page }) => {
       const errors = await collectPageErrors(page);
-      await signIn(page, "ADMIN");
+      await signIn(page, role);
       await mockApi(page);
 
       await page.goto("/dashboard");
@@ -151,6 +226,20 @@ test.describe("mobile bottom nav + More sheet", () => {
       expect(errors, `uncaught page error(s) after navigating to ${href}`).toEqual([]);
     });
   }
+
+  test("More sheet hides rows the signed-in role can't use", async ({ page }) => {
+    // Same regression as the desktop sidebar's "per-role visibility" tests
+    // above, for the mobile overflow sheet (more-sheet.tsx).
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    await page.goto("/dashboard");
+    await page.getByRole("button", { name: "More" }).click();
+
+    await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
+    for (const label of ["Inventory", "Users", "Job runs"]) {
+      await expect(page.getByRole("link", { name: label, exact: true }), `CREATOR should not see "${label}"`).toHaveCount(0);
+    }
+  });
 
   test("More sheet 'Notifications' row shows notifications, not the profile page", async ({ page }) => {
     // Regression test for a real bug this suite caught on its first run:

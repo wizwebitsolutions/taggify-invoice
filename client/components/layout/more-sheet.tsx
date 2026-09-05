@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Sheet } from "@/components/ui/sheet";
-import { AVATAR_TONE, type SidebarUser } from "@/components/layout/sidebar";
+import { AVATAR_TONE, canSeeNavKey, type SidebarUser } from "@/components/layout/sidebar";
 import { BellIcon, TeamIcon, ClockIcon, InventoryIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
@@ -20,7 +20,8 @@ import { cn } from "@/lib/utils";
  * through a sheet instead of always-visible chrome.
  */
 export function MoreSheet({ onClose, user }: { onClose: () => void; user: SidebarUser }) {
-  const { accessToken, logout } = useAuth();
+  const { accessToken, logout, user: authUser } = useAuth();
+  const role = authUser?.role;
   const { theme, toggleTheme } = useTheme();
   const queryClient = useQueryClient();
 
@@ -132,10 +133,22 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
         )}
         <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
       </button>
-      <MenuRow href="/inventory" onClose={onClose} icon={<InventoryIcon className="h-4 w-4" />} label="Inventory" />
-      <MenuRow href="/team" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Team" />
-      <MenuRow href="/users" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Users" />
-      <MenuRow href="/job-runs" onClose={onClose} icon={<ClockIcon className="h-4 w-4" />} label="Job runs" />
+      {/* Same per-role visibility as the desktop sidebar — reuses
+          sidebar.tsx's NAV_GROUPS allowlist via canSeeNavKey rather than
+          re-declaring which roles see what a second time, which is exactly
+          how these two nav surfaces drifted out of sync before. */}
+      {canSeeNavKey("inventory", role) && (
+        <MenuRow href="/inventory" onClose={onClose} icon={<InventoryIcon className="h-4 w-4" />} label="Inventory" />
+      )}
+      {canSeeNavKey("team", role) && (
+        <MenuRow href="/team" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Team" />
+      )}
+      {canSeeNavKey("users", role) && (
+        <MenuRow href="/users" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Users" />
+      )}
+      {canSeeNavKey("job-runs", role) && (
+        <MenuRow href="/job-runs" onClose={onClose} icon={<ClockIcon className="h-4 w-4" />} label="Job runs" />
+      )}
 
       <div className="my-1 h-px bg-border" />
 

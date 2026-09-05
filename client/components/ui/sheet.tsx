@@ -1,4 +1,7 @@
+"use client";
+
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/utils";
 
@@ -17,6 +20,18 @@ import { cn } from "@/lib/utils";
  * `overlayClassName="md:hidden" panelClassName="md:hidden"` so the
  * sheet never mounts visibly at `md`+, and render the desktop version
  * separately as ordinary inline content.
+ *
+ * Portals to `document.body` rather than rendering in place. Every call
+ * site lives inside AppShell's content pane, which carries its own
+ * `relative z-10` (needed so the topbar's notification dropdown, at
+ * z-20, reliably paints above page content — see app-shell.tsx). A
+ * `position: fixed` element is still confined to the stacking context
+ * of a z-indexed ancestor, so without the portal this sheet's z-50
+ * only ever competed *inside* that z-10 subtree and always lost to the
+ * topbar, rendering the whole dialog visually behind/merged into the
+ * search bar, theme toggle, and log-out button. Portaling escapes that
+ * ancestor entirely, so z-50 is compared where it's actually meant to
+ * be: against the rest of the page.
  */
 export function Sheet({
   onClose,
@@ -29,8 +44,11 @@ export function Sheet({
   panelClassName?: string;
   children: ReactNode;
 }) {
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <div
+      data-testid="sheet-overlay"
       className={cn(
         "fixed inset-0 z-50 flex items-end justify-center bg-black/60 md:items-center md:p-6",
         overlayClassName
@@ -49,6 +67,7 @@ export function Sheet({
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

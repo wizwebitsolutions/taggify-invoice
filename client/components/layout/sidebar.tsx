@@ -2,6 +2,8 @@ import Link from "next/link";
 import type { ComponentType } from "react";
 
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import type { Role } from "@/lib/api-client";
 import {
   GridIcon,
   CampaignIcon,
@@ -18,6 +20,9 @@ type NavItem = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   href?: string; // omitted = not built yet, rendered inert
+  /** Omitted = every role. Matched against the signed-in user's raw role
+   *  (not the humanized `SidebarUser.role` label) — see canSeeNavItem. */
+  roles?: Role[];
 };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -27,19 +32,42 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns" },
       { key: "assets", label: "Assets", icon: AssetIcon, href: "/assets" },
-      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory" },
+      // ADMIN-only server-side (plans routes: requireRole("ADMIN")) and the
+      // page itself renders nothing for anyone else — see inventory/page.tsx.
+      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory", roles: ["ADMIN"] },
     ],
   },
   { label: "Finance", items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices" }] },
   {
     label: "Admin",
     items: [
-      { key: "users", label: "Users", icon: TeamIcon, href: "/users" },
-      { key: "team", label: "Team", icon: TeamIcon, href: "/team" },
-      { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs" },
+      // ADMIN-only server-side (admin routes: requireRole("ADMIN")).
+      { key: "users", label: "Users", icon: TeamIcon, href: "/users", roles: ["ADMIN"] },
+      // CREATOR-only — this is a creator managing their own team, not an
+      // admin function despite living in this group (see team/page.tsx's
+      // "Team management is available to Creator accounts" fallback and
+      // users routes: GET/POST /users/me/team both requireRole("CREATOR")).
+      { key: "team", label: "Team", icon: TeamIcon, href: "/team", roles: ["CREATOR"] },
+      // ADMIN-only server-side (admin routes: requireRole("ADMIN")).
+      { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs", roles: ["ADMIN"] },
     ],
   },
 ];
+
+function canSeeNavItem(item: NavItem, role: Role | undefined) {
+  return !item.roles || (!!role && item.roles.includes(role));
+}
+
+/** Same per-role visibility as the sidebar, keyed by NavItem.key, for the
+ * mobile "More" sheet (more-sheet.tsx) — a second nav surface for the same
+ * destinations that can't render NavItem/NAV_GROUPS directly (its own
+ * icons/labels/layout), but must not re-derive the roles allowlist itself:
+ * that drifted silently before (e.g. Team going CREATOR-only here without
+ * the sheet following). */
+export function canSeeNavKey(key: string, role: Role | undefined) {
+  const item = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.key === key);
+  return !item || canSeeNavItem(item, role);
+}
 
 export interface SidebarUser {
   initials: string;
@@ -55,6 +83,17 @@ export const AVATAR_TONE = {
 } as const;
 
 export function Sidebar({ active, user }: { active: string; user: SidebarUser }) {
+  // The `user` prop only carries a humanized label ("Admin") built per
+  // call-site via roleLabel() — pull the raw role straight from auth
+  // state here rather than threading it through every page that renders
+  // AppShell (Topbar does the same for logout/accessToken).
+  const { user: authUser } = useAuth();
+  const role = authUser?.role;
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => canSeeNavItem(item, role)),
+  })).filter((group) => group.items.length > 0);
+
   return (
     // h-full + its own flex-col (rather than relying on the parent row to
     // stretch it) so this column can carve out a non-scrolling footer for
@@ -71,7 +110,7 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
           <span className="text-[1rem] font-bold tracking-tight">Taggify</span>
         </div>
 
-        {NAV_GROUPS.map((group) => (
+        {visibleGroups.map((group) => (
           <nav key={group.label} className="flex flex-col gap-0.5">
             <p className="mb-2 px-3 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">
               {group.label}
