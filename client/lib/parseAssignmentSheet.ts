@@ -16,8 +16,17 @@ export interface ParsedAssignmentRow {
 const HANDLE_HEADERS = ["handle", "page", "page handle", "instagram", "instagram handle", "username"];
 const PHONE_HEADERS = ["phone", "phone number", "creator phone", "creator", "owner"];
 
-export async function parseAssignmentSheet(file: File): Promise<ParsedAssignmentRow[]> {
-  const text = await file.text();
+/** A File (from an <input type="file">) or raw CSV text (fetched
+ * server-side from a pasted Google Sheet link — see campaigns.importSheetUrl
+ * and bugs.md #6) — either way, from here on it's just CSV text. */
+type CsvSource = File | string;
+
+async function readText(source: CsvSource): Promise<string> {
+  return typeof source === "string" ? source : source.text();
+}
+
+export async function parseAssignmentSheet(source: CsvSource): Promise<ParsedAssignmentRow[]> {
+  const text = await readText(source);
   const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
 
   const rows: ParsedAssignmentRow[] = [];
@@ -52,8 +61,8 @@ const URL_HEADERS = ["url", "link", "post url", "post link"];
 const FORMAT_HEADERS = ["format", "type", "post type"];
 const COST_HEADERS = ["cost", "amount", "rate", "price", "finance"];
 
-export async function parseWorkImportSheet(file: File): Promise<ParsedWorkImportRow[]> {
-  const text = await file.text();
+export async function parseWorkImportSheet(source: CsvSource): Promise<ParsedWorkImportRow[]> {
+  const text = await readText(source);
   const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
 
   const rows: ParsedWorkImportRow[] = [];

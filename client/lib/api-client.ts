@@ -421,6 +421,7 @@ export const assets = {
 // ── Campaigns ───────────────────────────────────────────────────────
 export const campaigns = {
   list: (token: string) => request<Campaign[]>("/campaigns", { token }),
+  get: (token: string, id: string) => request<Campaign>(`/campaigns/${id}`, { token }),
   create: (
     token: string,
     body: {
@@ -447,6 +448,11 @@ export const campaigns = {
       token,
       body: { assetId },
     }),
+  // bugs.md #6 — fetches a public Google Sheet's CSV export server-side
+  // (avoids the browser CORS restriction a direct client-side fetch to
+  // docs.google.com would hit) so it can be parsed exactly like an
+  // uploaded CSV file.
+  importSheetUrl: (token: string, url: string) => request<{ csv: string }>("/campaigns/import-sheet-url", { method: "POST", token, body: { url } }),
 };
 
 // ── Links ───────────────────────────────────────────────────────────

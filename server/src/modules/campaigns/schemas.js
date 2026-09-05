@@ -26,3 +26,11 @@ export const updateCampaignSchema = z.object({
 export const resolveAssignmentSchema = z.object({
   assetId: z.string().min(1),
 });
+
+// bugs.md #6 — admin pastes a Google Sheet link (in place of downloading +
+// re-uploading a CSV export) for either the New campaign assignment sheet
+// or the Import work sheet; the server fetches it, the client parses the
+// returned CSV with the exact same code path as a file upload.
+export const importSheetUrlSchema = z.object({
+  url: z.string().url().max(500),
+});

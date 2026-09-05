@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "@/lib/utils";
@@ -9,23 +10,13 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { Field, TextField } from "@/components/ui/form-field";
-import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
+import { ResolvePendingAssignmentsModal } from "@/components/campaigns/resolve-pending-assignments-modal";
 import { ProgressBar } from "@/components/ui/panel";
-import { PlusIcon, CampaignIcon, HeartIcon, AlertIcon, CheckCircleIcon } from "@/components/icons";
+import { PlusIcon, CampaignIcon, HeartIcon, AlertIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import {
-  campaigns as campaignsApi,
-  assets as assetsApi,
-  auth as authApi,
-  admin as adminApi,
-  links as linksApi,
-  LINK_FORMATS,
-  ApiError,
-  type Campaign,
-  type CampaignAssignment,
-} from "@/lib/api-client";
+import { campaigns as campaignsApi, assets as assetsApi, links as linksApi, ApiError, type Campaign } from "@/lib/api-client";
 import { parseAssignmentSheet, parseWorkImportSheet, type ParsedAssignmentRow, type ParsedWorkImportRow } from "@/lib/parseAssignmentSheet";
 import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
 
@@ -174,6 +165,7 @@ function CampaignCard({
   onResolvePending: () => void;
   onUploadLinks: () => void;
 }) {
+  const router = useRouter();
   const costCapNum = c.costCap != null ? Number(c.costCap) : null;
   const spentPct = costCapNum && costCapNum > 0 ? ((c.spent ?? 0) / costCapNum) * 100 : null;
   // Derived from spentPct rather than c.remainingBudget directly — they're
@@ -186,8 +178,14 @@ function CampaignCard({
   return (
     <div
       data-testid="campaign-card"
+      role="link"
+      tabIndex={0}
+      onClick={() => router.push(`/campaigns/${c.id}`)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") router.push(`/campaigns/${c.id}`);
+      }}
       className={cn(
-        "flex flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card transition-colors",
+        "flex cursor-pointer flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card transition-colors hover:border-border-strong",
         isOver && "border-rose/35 bg-gradient-to-b from-rose-soft to-transparent"
       )}
     >
@@ -251,7 +249,10 @@ function CampaignCard({
       {canCreate && !!c.pendingAssignmentCount && (
         <button
           type="button"
-          onClick={onResolvePending}
+          onClick={(e) => {
+            e.stopPropagation();
+            onResolvePending();
+          }}
           className="flex items-center gap-1.5 rounded-md border border-rose/25 bg-rose-soft px-2.5 py-1.5 text-left text-[0.75rem] font-semibold text-rose"
         >
           <AlertIcon className="h-3.5 w-3.5 shrink-0" />
@@ -269,7 +270,15 @@ function CampaignCard({
       </div>
 
       {canUploadLinks && (
-        <Button size="sm" variant="secondary" className="w-full" onClick={onUploadLinks}>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="w-full"
+          onClick={(e) => {
+            e.stopPropagation();
+            onUploadLinks();
+          }}
+        >
           Upload Links
         </Button>
       )}
@@ -315,6 +324,23 @@ function NewCampaignModal({
     }
   }
 
+  // bugs.md #6 — the "reference link" field already existed (stored as-is
+  // on the campaign for humans to click later); this reuses it to also
+  // fetch + parse rows, same rows/error state as the file upload above,
+  // so admins don't need to separately download and re-upload a CSV.
+  const importSheetMutation = useMutation({
+    mutationFn: async () => {
+      const { csv } = await campaignsApi.importSheetUrl(token, sheetLink);
+      return parseAssignmentSheet(csv);
+    },
+    onSuccess: (rows) => {
+      setSheetFileName("");
+      setSheetError(rows.length === 0 ? "No rows found — check the sheet has a header row (e.g. \"handle\", \"phone\")." : "");
+      setSheetRows(rows);
+    },
+    onError: (err) => setSheetError(err instanceof ApiError ? err.message : "Couldn't fetch that sheet."),
+  });
+
   const createMutation = useMutation({
     mutationFn: () =>
       campaignsApi.create(token, {
@@ -354,16 +380,32 @@ function NewCampaignModal({
         <div className="border-t border-border pt-4">
           <p className="mb-1 text-[0.8125rem] font-semibold">Pages / creators this campaign is for</p>
           <p className="mb-3 text-[0.75rem] text-text-faint">
-            Optional — attach a reference link and/or upload a CSV export of the pages (and creator phone numbers) this
-            campaign should go to. Any handle not already in Taggify shows up as pending after creating the campaign,
-            with the option to create it right then.
+            Optional — a Google Sheet link (shared as "Anyone with the link can view") or a CSV export of the pages
+            (and creator phone numbers) this campaign should go to. Any handle not already in Taggify shows up as
+            pending after creating the campaign, with the option to create it right then.
           </p>
           <Field label="Reference link (e.g. a Google Sheet)">
-            <TextField type="url" value={sheetLink} onChange={setSheetLink} placeholder="https://docs.google.com/spreadsheets/…" />
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <TextField type="url" value={sheetLink} onChange={setSheetLink} placeholder="https://docs.google.com/spreadsheets/…" />
+              </div>
+              {/* Only meaningful for a Google Sheet — a plain reference link (e.g. a
+                  Notion doc) can still be saved above without ever clicking this;
+                  the sheet only needs to be shared as "Anyone with the link can view". */}
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!sheetLink.trim() || importSheetMutation.isPending}
+                onClick={() => importSheetMutation.mutate()}
+              >
+                {importSheetMutation.isPending ? "Fetching…" : "Fetch rows"}
+              </Button>
+            </div>
           </Field>
           <div className="mt-3">
             <label className="flex h-10 cursor-pointer items-center justify-center rounded-md border border-dashed border-border-strong text-[0.8125rem] font-semibold text-text-muted hover:bg-surface-2">
-              {sheetFileName || "Upload CSV of pages…"}
+              {sheetFileName || "…or upload a CSV of pages instead"}
               <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
             </label>
             {sheetError && <p className="mt-1.5 text-[0.75rem] text-rose">{sheetError}</p>}
@@ -390,205 +432,6 @@ function NewCampaignModal({
 }
 
 /**
- * "Next step" from newTask.md #8: rows from the attached sheet that didn't
- * match an existing page, with the option to create each one right here.
- * Reachable again later too (the campaign card's pending badge reopens
- * this), so nothing has to be resolved in one sitting.
- */
-function ResolvePendingAssignmentsModal({
-  token,
-  campaignId,
-  campaignTitle,
-  onClose,
-  onResolved,
-}: {
-  token: string;
-  campaignId: string;
-  campaignTitle: string;
-  onClose: () => void;
-  onResolved: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const assignmentsQuery = useQuery({
-    queryKey: ["campaignAssignments", campaignId],
-    queryFn: () => campaignsApi.listAssignments(token, campaignId),
-  });
-
-  const pending = (assignmentsQuery.data ?? []).filter((a) => a.status === "pending");
-  const matchedCount = (assignmentsQuery.data ?? []).length - pending.length;
-
-  return (
-    <Sheet onClose={onClose} panelClassName="md:max-w-[520px]">
-      <div className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto p-6 pt-1">
-        <div>
-          <h2 className="text-lg font-bold">Pending pages · {campaignTitle}</h2>
-          <p className="text-[0.8125rem] text-text-faint">
-            {matchedCount} row{matchedCount === 1 ? "" : "s"} matched an existing page. {pending.length} still need
-            one created.
-          </p>
-        </div>
-
-        {assignmentsQuery.isLoading ? (
-          <TableSkeleton />
-        ) : pending.length === 0 ? (
-          <EmptyState label="All rows are matched." />
-        ) : (
-          <div className="flex flex-col gap-3">
-            {pending.map((a) => (
-              <PendingAssignmentRow
-                key={a.id}
-                token={token}
-                campaignId={campaignId}
-                assignment={a}
-                onResolved={() => {
-                  queryClient.invalidateQueries({ queryKey: ["campaignAssignments", campaignId] });
-                  onResolved();
-                }}
-              />
-            ))}
-          </div>
-        )}
-
-        <Button variant="ghost" onClick={onClose}>
-          Done for now
-        </Button>
-      </div>
-    </Sheet>
-  );
-}
-
-function PendingAssignmentRow({
-  token,
-  campaignId,
-  assignment,
-  onResolved,
-}: {
-  token: string;
-  campaignId: string;
-  assignment: CampaignAssignment;
-  onResolved: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [phone, setPhone] = useState(assignment.creatorPhone?.replace(/^\+91/, "") ?? "");
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState("");
-  const [rates, setRates] = useState<Record<string, string>>({});
-
-  const resolveMutation = useMutation({
-    mutationFn: async () => {
-      // The phone might already belong to an existing creator (this page's
-      // owner just hadn't registered this particular handle yet) — reuse
-      // them instead of erroring, rather than forcing a duplicate account.
-      let ownerId: string;
-      let generatedPassword: string | null = null;
-      try {
-        const signupResult = await authApi.signup(token, {
-          phoneNumber: `+91${phone.replace(/\D/g, "")}`,
-          name: name || undefined,
-          role: "CREATOR",
-        });
-        ownerId = signupResult.user.id;
-        generatedPassword = signupResult.generatedPassword;
-      } catch (err) {
-        if (err instanceof ApiError && err.code === "PHONE_ALREADY_REGISTERED") {
-          const allUsers = await adminApi.users(token);
-          const existing = allUsers.find((u) => u.phoneNumber === `+91${phone.replace(/\D/g, "")}`);
-          if (!existing) throw err;
-          ownerId = existing.id;
-        } else {
-          throw err;
-        }
-      }
-
-      const asset = await assetsApi.create(token, assignment.pageHandle, "instagram", {
-        category: category || undefined,
-        ownerId,
-      });
-      const rateCards = Object.entries(rates)
-        .filter(([, amount]) => amount.trim())
-        .map(([format, amount]) => ({ format, amount: Number(amount) }));
-      if (rateCards.length > 0) await assetsApi.updateRateCard(token, asset.id, rateCards);
-      await campaignsApi.resolveAssignment(token, campaignId, assignment.id, asset.id);
-      return generatedPassword;
-    },
-    onSuccess: onResolved,
-  });
-
-  if (resolveMutation.isSuccess) {
-    return (
-      <div className="flex items-center gap-2.5 rounded-md border border-accent/25 bg-accent-soft px-3.5 py-3 text-[0.8125rem]">
-        <CheckCircleIcon className="h-4 w-4 shrink-0 text-accent" />
-        <span>
-          @{assignment.pageHandle} created.
-          {resolveMutation.data && (
-            <>
-              {" "}
-              Password: <span className="font-mono font-bold">{resolveMutation.data}</span> — share it now, it can't be shown again.
-            </>
-          )}
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2.5 rounded-md border border-border p-3.5">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-[0.8125rem] font-bold">@{assignment.pageHandle}</p>
-          {assignment.creatorPhone && <p className="text-[0.75rem] text-text-faint">{assignment.creatorPhone}</p>}
-        </div>
-        <Button size="sm" variant="secondary" onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "Cancel" : "Create"}
-        </Button>
-      </div>
-
-      {expanded && (
-        <div className="flex flex-col gap-2.5 border-t border-border pt-3">
-          <div className="flex h-9 items-center gap-2 rounded-md border border-border-strong bg-surface-2 px-2.5">
-            <span className="text-[0.8125rem] text-text-faint">+91</span>
-            <input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Creator's phone number"
-              className="w-full bg-transparent text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none"
-            />
-          </div>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Creator's name (optional)"
-            className="h-9 w-full rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          />
-          <CategoryPicker value={category} onChange={setCategory} />
-          <div className="grid grid-cols-2 gap-2">
-            {LINK_FORMATS.map((format) => (
-              <div key={format} className="flex items-center justify-between gap-2">
-                <span className="text-[0.75rem] capitalize text-text-faint">{format}</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={rates[format] ?? ""}
-                  onChange={(e) => setRates((prev) => ({ ...prev, [format]: e.target.value }))}
-                  placeholder="₹ rate"
-                  className="h-7 w-20 rounded-md border border-border-strong bg-surface-2 px-2 text-right text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                />
-              </div>
-            ))}
-          </div>
-          {resolveMutation.isError && (
-            <ErrorNotice message={resolveMutation.error instanceof ApiError ? resolveMutation.error.message : "Couldn't create this page."} />
-          )}
-          <Button size="sm" onClick={() => resolveMutation.mutate()} disabled={!phone.trim() || resolveMutation.isPending}>
-            {resolveMutation.isPending ? "Creating…" : "Create page"}
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * newTask.md #8's second sheet upload: admin imports already-done work
  * (which page posted for which campaign, optionally at what cost) and it's
  * reflected as real Links — same status machine, same downstream invoicing,
@@ -600,6 +443,12 @@ function BulkImportWorkModal({ token, onClose, onImported }: { token: string; on
   const [rows, setRows] = useState<ParsedWorkImportRow[]>([]);
   const [fileName, setFileName] = useState("");
   const [parseError, setParseError] = useState("");
+  const [sheetUrl, setSheetUrl] = useState("");
+
+  function applyParsed(parsed: ParsedWorkImportRow[], emptyMessage: string) {
+    setParseError(parsed.length === 0 ? emptyMessage : "");
+    setRows(parsed);
+  }
 
   async function handleFile(file: File | undefined) {
     if (!file) return;
@@ -607,15 +456,33 @@ function BulkImportWorkModal({ token, onClose, onImported }: { token: string; on
     setParseError("");
     try {
       const parsed = await parseWorkImportSheet(file);
-      if (parsed.length === 0) {
-        setParseError('No usable rows found — needs columns for campaign, page, url, and format (e.g. "campaign", "handle", "url", "format").');
-      }
-      setRows(parsed);
+      applyParsed(
+        parsed,
+        'No usable rows found — needs columns for campaign, page, url, and format (e.g. "campaign", "handle", "url", "format").'
+      );
     } catch {
       setParseError("Couldn't read that file — make sure it's a CSV export.");
       setRows([]);
     }
   }
+
+  // bugs.md #6 — paste a Google Sheet link instead of downloading +
+  // re-uploading a CSV export; server fetches it (avoids browser CORS),
+  // client parses the CSV text exactly as it would an uploaded file.
+  const importSheetMutation = useMutation({
+    mutationFn: async () => {
+      const { csv } = await campaignsApi.importSheetUrl(token, sheetUrl);
+      return parseWorkImportSheet(csv);
+    },
+    onSuccess: (parsed) => {
+      setFileName("");
+      applyParsed(
+        parsed,
+        'No usable rows found — needs columns for campaign, page, url, and format (e.g. "campaign", "handle", "url", "format").'
+      );
+    },
+    onError: (err) => setParseError(err instanceof ApiError ? err.message : "Couldn't fetch that sheet."),
+  });
 
   const importMutation = useMutation({
     mutationFn: () => linksApi.bulkImport(token, rows),
@@ -628,11 +495,26 @@ function BulkImportWorkModal({ token, onClose, onImported }: { token: string; on
         <div>
           <h2 className="text-lg font-bold">Import work</h2>
           <p className="text-[0.8125rem] text-text-faint">
-            Upload a CSV of posts that already went out — one row each, with the campaign title, page handle, post URL,
-            format, and optionally the cost (falls back to the page's rate card if left blank).
+            Paste a Google Sheet link (shared as "Anyone with the link can view") or upload a CSV of posts that already
+            went out — one row each, with the campaign title, page handle, post URL, format, and optionally the cost
+            (falls back to the page's rate card if left blank).
           </p>
         </div>
 
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <TextField type="url" value={sheetUrl} onChange={setSheetUrl} placeholder="Or paste a Google Sheet link…" />
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!sheetUrl.trim() || importSheetMutation.isPending}
+            onClick={() => importSheetMutation.mutate()}
+          >
+            {importSheetMutation.isPending ? "Fetching…" : "Fetch rows"}
+          </Button>
+        </div>
         <label className="flex h-10 cursor-pointer items-center justify-center rounded-md border border-dashed border-border-strong text-[0.8125rem] font-semibold text-text-muted hover:bg-surface-2">
           {fileName || "Upload CSV of work…"}
           <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />

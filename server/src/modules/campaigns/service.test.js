@@ -2,14 +2,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ApiError } from "../../middleware/errorHandler.js";
 
 const mockPrisma = {
-  campaign: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+  campaign: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
   link: { findMany: vi.fn() },
-  campaignAssignment: { findMany: vi.fn(), createMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+  campaignAssignment: { findMany: vi.fn(), createMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), count: vi.fn() },
   asset: { findMany: vi.fn(), findUnique: vi.fn() },
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
-const { listCampaigns, createCampaign, resolveAssignment } = await import("./service.js");
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
+
+const { listCampaigns, createCampaign, resolveAssignment, googleSheetCsvExportUrl, fetchSheetCsv, getCampaignById } = await import(
+  "./service.js"
+);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -17,6 +22,7 @@ beforeEach(() => {
   // have to stub every call — override per-test where it matters.
   mockPrisma.link.findMany.mockResolvedValue([]);
   mockPrisma.campaignAssignment.findMany.mockResolvedValue([]);
+  mockPrisma.campaignAssignment.count.mockResolvedValue(0);
 });
 
 const baseCampaign = {
@@ -130,6 +136,33 @@ describe("listCampaigns — budget (newTask.md #9: remaining budget)", () => {
   });
 });
 
+describe("getCampaignById — single-campaign detail page (bugs.md #7)", () => {
+  it("annotates the same way listCampaigns does, for just one campaign", async () => {
+    mockPrisma.campaign.findUnique.mockResolvedValue({ ...baseCampaign, costCap: 10000 });
+    mockPrisma.link.findMany.mockResolvedValue([
+      { campaignId: "c1", cost: 3000, status: "SCREENSHOT_APPROVED", postedAt: new Date("2026-01-01"), createdAt: new Date("2026-01-01"), postSnapshots: [{ thumbnailUrl: "a.jpg", caption: "hi", likeCount: 15 }] },
+    ]);
+    mockPrisma.campaignAssignment.count.mockResolvedValue(2);
+
+    const campaign = await getCampaignById("c1");
+
+    expect(mockPrisma.campaign.findUnique).toHaveBeenCalledWith({ where: { id: "c1" } });
+    expect(mockPrisma.link.findMany).toHaveBeenCalledWith({ where: { campaignId: "c1" }, select: expect.any(Object) });
+    expect(mockPrisma.campaignAssignment.count).toHaveBeenCalledWith({ where: { campaignId: "c1", status: "pending" } });
+    expect(campaign.spent).toBe(3000);
+    expect(campaign.remainingBudget).toBe(7000);
+    expect(campaign.totalLikes).toBe(15);
+    expect(campaign.postCount).toBe(1);
+    expect(campaign.pendingAssignmentCount).toBe(2);
+  });
+
+  it("rejects a nonexistent campaign id", async () => {
+    mockPrisma.campaign.findUnique.mockResolvedValue(null);
+
+    await expect(getCampaignById("missing")).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
 describe("createCampaign — attaching a page/creator sheet (newTask.md #8)", () => {
   beforeEach(() => {
     mockPrisma.campaign.create.mockResolvedValue({ id: "c1", ...baseCampaign });
@@ -206,5 +239,82 @@ describe("resolveAssignment — admin points a pending row at a page (newTask.md
     mockPrisma.asset.findUnique.mockResolvedValue(null);
 
     await expect(resolveAssignment("c1", "a1", "missing-asset")).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("googleSheetCsvExportUrl — turns a share link into its CSV export URL (bugs.md #6)", () => {
+  it("extracts the id and defaults gid to 0 for a plain edit link", () => {
+    expect(googleSheetCsvExportUrl("https://docs.google.com/spreadsheets/d/abc123/edit?usp=sharing")).toBe(
+      "https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=0"
+    );
+  });
+
+  it("reads gid from the hash, the shape a link copied from the address bar actually has", () => {
+    expect(googleSheetCsvExportUrl("https://docs.google.com/spreadsheets/d/abc123/edit#gid=456")).toBe(
+      "https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=456"
+    );
+  });
+
+  it("reads gid from a query param when present there instead", () => {
+    expect(googleSheetCsvExportUrl("https://docs.google.com/spreadsheets/d/abc123/edit?gid=789")).toBe(
+      "https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=789"
+    );
+  });
+
+  it("rejects a non-Google-Sheets host", () => {
+    expect(() => googleSheetCsvExportUrl("https://evil.example.com/spreadsheets/d/abc123/edit")).toThrow(ApiError);
+  });
+
+  it("rejects a docs.google.com URL that isn't a spreadsheet link", () => {
+    expect(() => googleSheetCsvExportUrl("https://docs.google.com/document/d/abc123/edit")).toThrow(ApiError);
+  });
+
+  it("rejects a string that isn't a URL at all", () => {
+    expect(() => googleSheetCsvExportUrl("not a url")).toThrow(ApiError);
+  });
+});
+
+describe("fetchSheetCsv — fetches a public sheet's CSV export (bugs.md #6)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns the CSV text on a successful fetch", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      headers: new Map([["content-type", "text/csv; charset=utf-8"]]),
+      text: async () => "handle,phone\n@page1,9876543210\n",
+    });
+
+    const csv = await fetchSheetCsv("https://docs.google.com/spreadsheets/d/abc123/edit");
+
+    expect(csv).toBe("handle,phone\n@page1,9876543210\n");
+    expect(mockFetch).toHaveBeenCalledWith("https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=0");
+  });
+
+  it("rejects with a clear message when the sheet isn't link-shared (Google returns an HTML page, not CSV)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      headers: new Map([["content-type", "text/html; charset=utf-8"]]),
+      text: async () => "<html>Sign in</html>",
+    });
+
+    await expect(fetchSheetCsv("https://docs.google.com/spreadsheets/d/abc123/edit")).rejects.toMatchObject({
+      code: "SHEET_NOT_SHARED",
+    });
+  });
+
+  it("rejects when the fetch itself fails", async () => {
+    mockFetch.mockRejectedValue(new Error("network down"));
+
+    await expect(fetchSheetCsv("https://docs.google.com/spreadsheets/d/abc123/edit")).rejects.toMatchObject({
+      code: "SHEET_FETCH_FAILED",
+    });
+  });
+
+  it("rejects a non-ok response", async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 404, headers: new Map() });
+
+    await expect(fetchSheetCsv("https://docs.google.com/spreadsheets/d/abc123/edit")).rejects.toMatchObject({
+      code: "SHEET_FETCH_FAILED",
+    });
   });
 });

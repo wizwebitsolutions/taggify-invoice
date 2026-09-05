@@ -61,12 +61,20 @@ export async function mockApi(page: Page) {
     if (method !== "GET") return route.fulfill({ status: 204, body: "" });
 
     if (path === "/users/me") return route.fulfill({ json: userFor() });
-    if (path.startsWith("/links") || path.startsWith("/invoices")) {
+    // Exactly "/links" or "/invoices" (the list endpoints) only — a sub-path
+    // like "/links/:id/timeline" or "/links/:id/cost-revisions" also starts
+    // with "/links" but returns a bare array, not this paginated shape.
+    // Matching on startsWith() here used to hand LinkDetailPanel's timeline
+    // query this {items, total, ...} object instead, which its `.map()`
+    // then threw on — no test happened to open a link's detail panel under
+    // plain mockApi() until campaign-detail.spec.ts did.
+    if (path === "/links" || path === "/invoices") {
       return route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 100 } });
     }
     // Everything else the app reads on nav destinations (/campaigns, /assets,
     // /billing-profiles, /admin/users, /admin/job-runs, /users/me/team,
-    // /notifications) is a plain array.
+    // /notifications, /links/:id/timeline, /links/:id/cost-revisions) is a
+    // plain array.
     return route.fulfill({ json: [] });
   });
 }

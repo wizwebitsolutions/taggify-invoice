@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createCampaignSchema, updateCampaignSchema, resolveAssignmentSchema } from "./schemas.js";
+import { createCampaignSchema, updateCampaignSchema, resolveAssignmentSchema, importSheetUrlSchema } from "./schemas.js";
 import * as campaignsService from "./service.js";
 
 const router = Router();
@@ -11,6 +11,15 @@ router.use(requireAuth);
 router.get("/", async (req, res, next) => {
   try {
     res.json(await campaignsService.listCampaigns({ search: req.query.search }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Full campaign detail — bugs.md #7's edit/view page.
+router.get("/:id", async (req, res, next) => {
+  try {
+    res.json(await campaignsService.getCampaignById(req.params.id));
   } catch (err) {
     next(err);
   }
@@ -54,5 +63,18 @@ router.put(
     }
   }
 );
+
+// bugs.md #6 — admin pastes a Google Sheet link instead of downloading +
+// re-uploading a CSV; used by both the New campaign assignment sheet and
+// the Import work sheet on the client, which parse the returned CSV text
+// exactly as they would a file upload.
+router.post("/import-sheet-url", requireRole("ADMIN"), validateBody(importSheetUrlSchema), async (req, res, next) => {
+  try {
+    const csv = await campaignsService.fetchSheetCsv(req.body.url);
+    res.json({ csv });
+  } catch (err) {
+    next(err);
+  }
+});
 
 export default router;
