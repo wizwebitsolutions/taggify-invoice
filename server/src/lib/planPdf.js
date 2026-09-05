@@ -69,7 +69,7 @@ function renderPlan(doc, plan) {
     const row = {
       page: `@${asset.handle ?? "—"}`,
       category: asset.category ?? "—",
-      followers: (asset.followers ?? 0).toLocaleString(),
+      followers: (asset.followers ?? 0).toLocaleString("en-IN"),
       format: cap(item.format),
       cost: money(item.cost),
     };
@@ -100,7 +100,7 @@ function renderPlan(doc, plan) {
     .font("Helvetica")
     .fontSize(10)
     .fillColor("#111111")
-    .text(`${plan.expectedEngagement.likes.toLocaleString()} likes  ·  ${plan.expectedEngagement.views.toLocaleString()} views`, left, y);
+    .text(`${plan.expectedEngagement.likes.toLocaleString("en-IN")} likes  ·  ${plan.expectedEngagement.views.toLocaleString("en-IN")} views`, left, y);
   y += 26;
 
   doc.font("Helvetica-Bold").fontSize(11).fillColor("#111111").text("Total cost", left, y);

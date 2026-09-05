@@ -29,7 +29,7 @@ import {
   type Link,
   type Invoice,
 } from "@/lib/api-client";
-import { money, initialsOf, roleLabel } from "@/lib/format";
+import { money, count, initialsOf, roleLabel } from "@/lib/format";
 
 const LINK_PIPELINE_ORDER: Link["status"][] = [
   "SUBMITTED",
@@ -308,7 +308,7 @@ export function AdminDashboard() {
             ) : topPages.length === 0 ? (
               <EmptyState label="No pages registered yet." />
             ) : (
-              <RankedBarList items={topPages} formatValue={(v) => v.toLocaleString()} onSelect={() => router.push("/assets")} />
+              <RankedBarList items={topPages} formatValue={(v) => count(v)} onSelect={() => router.push("/assets")} />
             )}
           </Panel>
         </div>
@@ -460,7 +460,7 @@ export function AdminDashboard() {
                   <div key={a.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5">
                     <div className="min-w-0">
                       <p className="truncate text-[0.8438rem] font-semibold">@{a.handle}</p>
-                      <p className="text-xs text-text-faint">{a.followers.toLocaleString()} followers</p>
+                      <p className="text-xs text-text-faint">{count(a.followers)} followers</p>
                     </div>
                     <div className="flex shrink-0 gap-1.5">
                       <Button size="sm" onClick={() => approveAssetMutation.mutate({ id: a.id, approvalStatus: "approved" })} disabled={approveAssetMutation.isPending}>

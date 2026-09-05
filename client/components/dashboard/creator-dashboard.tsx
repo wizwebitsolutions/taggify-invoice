@@ -23,7 +23,7 @@ import {
   ApiError,
   INVOICEABLE_LINK_STATUSES,
 } from "@/lib/api-client";
-import { money, initialsOf, roleLabel } from "@/lib/format";
+import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // Matches kpis.approved's definition below (everything past screenshot
@@ -324,10 +324,10 @@ export function CreatorDashboard() {
                         {snapshot ? (
                           <>
                             <span className="flex items-center gap-1">
-                              <HeartIcon className="h-[13px] w-[13px]" /> {snapshot.likeCount.toLocaleString()}
+                              <HeartIcon className="h-[13px] w-[13px]" /> {count(snapshot.likeCount)}
                             </span>
                             <span className="flex items-center gap-1">
-                              <MessageIcon className="h-[13px] w-[13px]" /> {snapshot.commentsCount.toLocaleString()}
+                              <MessageIcon className="h-[13px] w-[13px]" /> {count(snapshot.commentsCount)}
                             </span>
                           </>
                         ) : (
@@ -400,10 +400,10 @@ export function CreatorDashboard() {
                         {snapshot ? (
                           <>
                             <span className="flex items-center gap-1">
-                              <HeartIcon className="h-[13px] w-[13px]" /> {snapshot.likeCount.toLocaleString()}
+                              <HeartIcon className="h-[13px] w-[13px]" /> {count(snapshot.likeCount)}
                             </span>
                             <span className="flex items-center gap-1">
-                              <MessageIcon className="h-[13px] w-[13px]" /> {snapshot.commentsCount.toLocaleString()}
+                              <MessageIcon className="h-[13px] w-[13px]" /> {count(snapshot.commentsCount)}
                             </span>
                           </>
                         ) : (

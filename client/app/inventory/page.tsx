@@ -21,7 +21,7 @@ import {
   type Asset,
   type PlanItemInput,
 } from "@/lib/api-client";
-import { money, initialsOf, roleLabel } from "@/lib/format";
+import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default function InventoryPage() {
@@ -109,11 +109,11 @@ function InventoryContent() {
                 <div className="flex items-center gap-3 text-xs text-text-faint">
                   <span className="flex items-center gap-1">
                     <HeartIcon className="h-3.5 w-3.5" />
-                    {plan.expectedEngagement.likes.toLocaleString()}
+                    {count(plan.expectedEngagement.likes)}
                   </span>
                   <span className="flex items-center gap-1">
                     <EyeIcon className="h-3.5 w-3.5" />
-                    {plan.expectedEngagement.views.toLocaleString()}
+                    {count(plan.expectedEngagement.views)}
                   </span>
                   <span>
                     {plan.items.length} page{plan.items.length === 1 ? "" : "s"}
@@ -331,7 +331,7 @@ function PlanFormModal({
                         className="h-4 w-4 rounded accent-[var(--accent)]"
                       />
                       <span className="text-[0.8125rem] font-semibold">@{asset.handle}</span>
-                      <span className="text-[0.75rem] text-text-faint">{asset.followers.toLocaleString()} followers</span>
+                      <span className="text-[0.75rem] text-text-faint">{count(asset.followers)} followers</span>
                       {asset.category && <span className="text-[0.75rem] text-text-faint">· {asset.category}</span>}
                     </label>
                     {selected && item && (
@@ -368,7 +368,7 @@ function PlanFormModal({
           <div className="flex items-center justify-between text-text-muted">
             <span>Expected engagement (avg.)</span>
             <span>
-              {expectedLikes.toLocaleString()} likes · {expectedViews.toLocaleString()} views
+              {count(expectedLikes)} likes · {count(expectedViews)} views
             </span>
           </div>
           <div className="flex items-center justify-between font-bold">

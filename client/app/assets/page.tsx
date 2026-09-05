@@ -14,7 +14,7 @@ import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-pa
 import { PlusIcon, AssetIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Asset } from "@/lib/api-client";
-import { money, initialsOf, roleLabel, compactNumber } from "@/lib/format";
+import { money, count, initialsOf, roleLabel, compactNumber } from "@/lib/format";
 
 export default function AssetsPage() {
   return (
@@ -144,7 +144,7 @@ function AssetCard({ asset, token, editable }: { asset: Asset; token: string; ed
           <div>
             <p className="text-[0.9375rem] font-bold">@{asset.handle}</p>
             <p className="text-xs text-text-faint">
-              {asset.followers.toLocaleString()} followers
+              {count(asset.followers)} followers
               {asset.category && <span> · {asset.category}</span>}
             </p>
           </div>
