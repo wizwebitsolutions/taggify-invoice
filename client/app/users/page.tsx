@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { cn } from "@/lib/utils";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -241,7 +242,25 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
 
   const requiresPage = role === ROLE_REQUIRES_PAGE;
   const validPages = pages.filter((p) => p.handle.trim());
-  const canSubmit = phoneNumber.trim().length > 0 && (!requiresPage || validPages.length > 0);
+  // What actually gets submitted — not just `validPages`, which stays
+  // populated in state even after switching Role away from CREATOR (only
+  // the Pages section's *visibility* is gated on requiresPage). Used by
+  // both the mutation and the post-submit summary below so they can't
+  // disagree about how many pages were attempted.
+  const submittedPages = requiresPage ? validPages : [];
+  const phoneDigits = phoneNumber.replace(/\D/g, "");
+  // Indian mobile numbers are 10 digits after the fixed +91 prefix (see
+  // system design.md's phone-only auth model). canSubmit used to only check
+  // "non-empty", so e.g. "123" silently reached the server as "+91123" and
+  // failed there with a generic error instead of a clear one here — see
+  // bugs.md #3.
+  const [phoneBlurred, setPhoneBlurred] = useState(false);
+  const phoneValid = phoneDigits.length === 10;
+  // Only surface the error once the field's been left (blur), not on every
+  // keystroke — otherwise typing a correct number one digit at a time shows
+  // an "invalid" state for all 9 digits before it.
+  const showPhoneError = phoneBlurred && !phoneValid;
+  const canSubmit = phoneValid && (!requiresPage || validPages.length > 0);
 
   function updatePage(index: number, patch: Partial<DraftPage>) {
     setPages((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
@@ -255,9 +274,9 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const result = await authApi.signup(token, { phoneNumber: `+91${phoneNumber.replace(/\D/g, "")}`, name: name || undefined, role });
+      const result = await authApi.signup(token, { phoneNumber: `+91${phoneDigits}`, name: name || undefined, role });
       const failures: string[] = [];
-      for (const page of validPages) {
+      for (const page of submittedPages) {
         try {
           const asset = await assetsApi.create(token, page.handle, "instagram", {
             category: page.category || undefined,
@@ -303,9 +322,9 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
             <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-bold tracking-wide">
               {created.generatedPassword}
             </div>
-            {validPages.length > 0 && (
+            {submittedPages.length > 0 && (
               <p className="text-[0.8125rem] text-text-muted">
-                {validPages.length - pageFailures.length} of {validPages.length} page{validPages.length === 1 ? "" : "s"} created.
+                {submittedPages.length - pageFailures.length} of {submittedPages.length} page{submittedPages.length === 1 ? "" : "s"} created.
               </p>
             )}
             {pageFailures.length > 0 && (
@@ -315,17 +334,25 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
         ) : (
           <>
             <Field label="Phone number">
-              <div className="flex h-11 items-center gap-2 rounded-md border border-border-strong bg-surface-2 px-3.5 focus-within:ring-2 focus-within:ring-accent">
+              <div
+                className={cn(
+                  "flex h-11 items-center gap-2 rounded-md border bg-surface-2 px-3.5 focus-within:ring-2 focus-within:ring-accent",
+                  showPhoneError ? "border-rose" : "border-border-strong"
+                )}
+              >
                 <span className="text-[0.9375rem] text-text-faint">+91</span>
                 <input
                   required
                   type="tel"
                   value={phoneNumber}
                   onChange={(e) => setPhoneNumber(e.target.value)}
+                  onBlur={() => setPhoneBlurred(true)}
                   placeholder="98765 43210"
+                  aria-invalid={showPhoneError}
                   className="w-full bg-transparent text-[0.9375rem] text-text placeholder:text-text-faint focus:outline-none"
                 />
               </div>
+              {showPhoneError && <p className="mt-1 text-[0.75rem] text-rose">Enter a valid 10-digit mobile number.</p>}
             </Field>
             <Field label="Name (optional)">
               <TextField value={name} onChange={setName} placeholder="Their name" />
