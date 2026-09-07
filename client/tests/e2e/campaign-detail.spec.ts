@@ -52,7 +52,7 @@ test.describe("Campaign detail page", () => {
     await mockApi(page);
     await mockCampaignRoutes(page);
 
-    await page.goto("/campaigns/camp-1");
+    await page.goto("/campaigns/view?id=camp-1");
 
     await expect(page.getByRole("heading", { name: "Launch Week" })).toBeVisible();
     await expect(page.getByText("SOLMATE COFFEE")).toBeVisible();
@@ -78,7 +78,7 @@ test.describe("Campaign detail page", () => {
       return route.fulfill({ json: campaign });
     });
 
-    await page.goto("/campaigns/camp-1");
+    await page.goto("/campaigns/view?id=camp-1");
     await page.getByRole("button", { name: "Edit campaign" }).click();
     const titleInput = page.getByRole("textbox", { name: "Campaign title" });
     await titleInput.fill("Launch Week — Extended");
@@ -93,7 +93,7 @@ test.describe("Campaign detail page", () => {
     await mockApi(page);
     await mockCampaignRoutes(page);
 
-    await page.goto("/campaigns/camp-1");
+    await page.goto("/campaigns/view?id=camp-1");
 
     await expect(page.getByRole("heading", { name: "Launch Week" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit campaign" })).toHaveCount(0);
@@ -107,7 +107,7 @@ test.describe("Campaign detail page", () => {
     await mockApi(page);
     await mockCampaignRoutes(page);
 
-    await page.goto("/campaigns/camp-1");
+    await page.goto("/campaigns/view?id=camp-1");
     await page.getByTestId("campaign-link-row").click();
 
     // Two "Revise cost" buttons exist in the DOM at this viewport — the
@@ -123,7 +123,7 @@ test.describe("Campaign detail page", () => {
       route.fulfill({ status: 404, json: { error: { code: "CAMPAIGN_NOT_FOUND", message: "Campaign not found" } } })
     );
 
-    await page.goto("/campaigns/missing");
+    await page.goto("/campaigns/view?id=missing");
 
     await expect(page.getByText("Campaign not found.")).toBeVisible();
   });
@@ -136,6 +136,6 @@ test.describe("Campaign detail page", () => {
     await page.goto("/campaigns");
     await page.getByTestId("campaign-card").click();
 
-    await expect(page).toHaveURL(/\/campaigns\/camp-1$/);
+    await expect(page).toHaveURL(/\/campaigns\/view\?id=camp-1$/);
   });
 });

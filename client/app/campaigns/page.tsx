@@ -180,9 +180,9 @@ function CampaignCard({
       data-testid="campaign-card"
       role="link"
       tabIndex={0}
-      onClick={() => router.push(`/campaigns/${c.id}`)}
+      onClick={() => router.push(`/campaigns/view?id=${c.id}`)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") router.push(`/campaigns/${c.id}`);
+        if (e.key === "Enter") router.push(`/campaigns/view?id=${c.id}`);
       }}
       className={cn(
         "flex cursor-pointer flex-col gap-4 rounded-lg border border-border bg-surface p-5 shadow-card transition-colors hover:border-border-strong",

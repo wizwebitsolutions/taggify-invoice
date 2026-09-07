@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
  * has no scheme/host and also matches the *page* navigation to
  * localhost:3000/campaigns, replacing the whole document with the mocked
  * JSON instead of just answering the API call. */
-export const API_URL = "http://localhost:4000";
+export const API_URL = "http://localhost:4000/api";
 
 /** Must match client/lib/api-client.ts's AUTH_STORAGE_KEY. */
 const AUTH_STORAGE_KEY = "taggify_auth";
@@ -60,21 +60,21 @@ export async function mockApi(page: Page) {
 
     if (method !== "GET") return route.fulfill({ status: 204, body: "" });
 
-    if (path === "/users/me") return route.fulfill({ json: userFor() });
-    // Exactly "/links" or "/invoices" (the list endpoints) only — a sub-path
-    // like "/links/:id/timeline" or "/links/:id/cost-revisions" also starts
-    // with "/links" but returns a bare array, not this paginated shape.
-    // Matching on startsWith() here used to hand LinkDetailPanel's timeline
-    // query this {items, total, ...} object instead, which its `.map()`
-    // then threw on — no test happened to open a link's detail panel under
-    // plain mockApi() until campaign-detail.spec.ts did.
-    if (path === "/links" || path === "/invoices") {
+    if (path === "/api/users/me") return route.fulfill({ json: userFor() });
+    // Exactly "/api/links" or "/api/invoices" (the list endpoints) only — a
+    // sub-path like "/api/links/:id/timeline" or "/api/links/:id/cost-revisions"
+    // also starts with "/api/links" but returns a bare array, not this
+    // paginated shape. Matching on startsWith() here used to hand
+    // LinkDetailPanel's timeline query this {items, total, ...} object
+    // instead, which its `.map()` then threw on — no test happened to open
+    // a link's detail panel under plain mockApi() until campaign-detail.spec.ts did.
+    if (path === "/api/links" || path === "/api/invoices") {
       return route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 100 } });
     }
-    // Everything else the app reads on nav destinations (/campaigns, /assets,
-    // /billing-profiles, /admin/users, /admin/job-runs, /users/me/team,
-    // /notifications, /links/:id/timeline, /links/:id/cost-revisions) is a
-    // plain array.
+    // Everything else the app reads on nav destinations (/api/campaigns,
+    // /api/assets, /api/billing-profiles, /api/admin/users, /api/admin/job-runs,
+    // /api/users/me/team, /api/notifications, /api/links/:id/timeline,
+    // /api/links/:id/cost-revisions) is a plain array.
     return route.fulfill({ json: [] });
   });
 }

@@ -1,4 +1,6 @@
 import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -18,30 +20,57 @@ import plansRoutes from "./modules/plans/routes.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// client/ builds to a static export (next.config.js: output: "export") that
+// this server hosts directly, so one Render service owns the whole app —
+// no separate Vercel deploy. See CLAUDE.md.
+const CLIENT_DIST = path.join(__dirname, "../../client/out");
+
 const app = express();
 
-app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(morgan(process.env.NODE_ENV === "development" ? "dev" : "combined"));
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+// helmet() (full defaults, CSP included) is scoped per-section below rather
+// than applied globally, so the CSP relaxation the static frontend needs
+// doesn't also weaken /api/* JSON responses.
+app.get("/health", helmet(), (req, res) => res.json({ ok: true }));
 
-app.use("/auth", authRoutes);
-app.use("/users", usersRoutes);
-app.use("/assets", assetsRoutes);
-app.use("/campaigns", campaignsRoutes);
-app.use("/links", linksRoutes);
+// All backend routes live under /api — client/app has its own top-level
+// routes with the same names (campaigns, assets, invoices, users), so API
+// and frontend paths must not collide on a shared origin.
+const apiRouter = express.Router();
+apiRouter.use(helmet());
+apiRouter.use("/auth", authRoutes);
+apiRouter.use("/users", usersRoutes);
+apiRouter.use("/assets", assetsRoutes);
+apiRouter.use("/campaigns", campaignsRoutes);
+apiRouter.use("/links", linksRoutes);
 // nested under /links/:linkId/screenshot — issuing upload URLs and confirming uploads
-app.use("/links/:linkId/screenshot", screenshotsRoutes);
-app.use("/invoices", invoicesRoutes);
-app.use("/billing-profiles", billingRoutes);
-app.use("/notifications", notificationsRoutes);
-app.use("/admin", adminRoutes);
-app.use("/plans", plansRoutes);
+apiRouter.use("/links/:linkId/screenshot", screenshotsRoutes);
+apiRouter.use("/invoices", invoicesRoutes);
+apiRouter.use("/billing-profiles", billingRoutes);
+apiRouter.use("/notifications", notificationsRoutes);
+apiRouter.use("/admin", adminRoutes);
+apiRouter.use("/plans", plansRoutes);
+apiRouter.use(notFoundHandler);
+apiRouter.use(errorHandler);
+app.use("/api", apiRouter);
 
-app.use(notFoundHandler);
-app.use(errorHandler);
+// Static frontend + SPA fallback. CSP off here only: Next's static export
+// ships inline hydration/theme-init scripts it can't hash/nonce per-request,
+// and helmet's default CSP would silently block them. `extensions: ["html"]`
+// lets a request for e.g. /campaigns/view resolve to the exported
+// campaigns/view.html.
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.static(CLIENT_DIST, { extensions: ["html"] }));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(CLIENT_DIST, "index.html"), (err) => {
+    if (err) res.status(500).send("Frontend build not found — run `npm run build` in client/ first.");
+  });
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

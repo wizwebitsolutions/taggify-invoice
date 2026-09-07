@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { RequireAuth } from "@/components/auth/require-auth";
@@ -31,18 +31,21 @@ import { initialsOf, roleLabel, money, count } from "@/lib/format";
 export default function CampaignDetailPage() {
   return (
     <RequireAuth>
-      <CampaignDetailContent />
+      {/* useSearchParams() requires a Suspense boundary for static export */}
+      <Suspense fallback={null}>
+        <CampaignDetailContent />
+      </Suspense>
     </RequireAuth>
   );
 }
 
 function CampaignDetailContent() {
   const { user, accessToken } = useAuth();
-  const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
   const token = accessToken!;
-  const campaignId = params.id;
+  const campaignId = searchParams.get("id") ?? "";
   const isAdmin = user?.role === "ADMIN";
 
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -52,10 +55,12 @@ function CampaignDetailContent() {
   const campaignQuery = useQuery({
     queryKey: ["campaign", campaignId],
     queryFn: () => campaignsApi.get(token, campaignId),
+    enabled: Boolean(campaignId), // no ?id= → skip the fetch and fall through to the not-found panel below
   });
   const linksQuery = useQuery({
     queryKey: ["links", { campaignId }],
     queryFn: () => linksApi.list(token, { campaignId, pageSize: 100 }),
+    enabled: Boolean(campaignId),
   });
 
   const campaign = campaignQuery.data;

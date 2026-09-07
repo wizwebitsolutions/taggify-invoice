@@ -16,10 +16,10 @@ npm run db:seed               # creates an ADMIN, FINANCE and demo CREATOR + ass
 npm run dev
 ```
 
-Server starts on `http://localhost:4000`. `GET /health` for a liveness check.
+Server starts on `http://localhost:4000`. `GET /health` for a liveness check. All other routes are namespaced under `/api` (e.g. `/api/auth/login`) — see `src/app.js` — since in production this same server also hosts `client/`'s static export at the bare paths (`/campaigns`, `/users`, etc.), so the API can't live at those paths too.
 
 ## Auth model
-No OTP. `POST /auth/signup` takes only a phone number (+ optional name/role); the server generates a random password and returns it once in the response — that's the only place it's ever visible in plaintext. Login is `POST /auth/login` with phone + password, returning a short-lived access JWT and a longer-lived refresh JWT (refresh tokens are hashed and stored in Postgres for revocation — no Redis).
+No OTP. `POST /api/auth/signup` takes only a phone number (+ optional name/role); the server generates a random password and returns it once in the response — that's the only place it's ever visible in plaintext. Login is `POST /api/auth/login` with phone + password, returning a short-lived access JWT and a longer-lived refresh JWT (refresh tokens are hashed and stored in Postgres for revocation — no Redis).
 
 ## Roles
 `CREATOR`, `TEAM_MEMBER`, `ADMIN`, `FINANCE` — see `system design.md` §0 and the roles discussion in `recommend.md`.
@@ -41,9 +41,9 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
 
 ## Link status machine
 `SUBMITTED → PENDING_SCREENSHOT_REVIEW → SCREENSHOT_APPROVED → INSIGHTS_PENDING → INSIGHTS_APPROVED → INVOICED`
-(or `SCREENSHOT_REJECTED` if an admin rejects the proof). Every transition is recorded in `LinkStatusEvent`, exposed via `GET /links/:id/timeline`.
+(or `SCREENSHOT_REJECTED` if an admin rejects the proof). Every transition is recorded in `LinkStatusEvent`, exposed via `GET /api/links/:id/timeline`.
 
 ## Not implemented (by design, see recommend.md / system design.md)
-- No payment gateway — `POST /invoices/:id/mark-paid` is a manual admin/finance action.
+- No payment gateway — `POST /api/invoices/:id/mark-paid` is a manual admin/finance action.
 - No OTP — password is system-generated.
 - No Redis/queue — cron runs in-process; add a `pg_advisory_lock` if this ever scales to multiple instances (noted in `system design.md` §2.11).
