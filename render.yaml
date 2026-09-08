@@ -11,7 +11,15 @@ services:
     plan: starter
     region: oregon
     branch: main
-    buildCommand: cd server && npm install && npx prisma migrate deploy && cd ../client && npm install && npm run build
+    # --include=dev on both installs: NODE_ENV=production below is exported
+    # during the build step too (not just at runtime), which makes a plain
+    # `npm install` silently skip devDependencies. server needs its `prisma`
+    # devDependency (the migrate/generate CLI); client needs `typescript` —
+    # without it, Next can't read tsconfig.json's "paths" alias, so every
+    # `@/...` import in the app fails to resolve at build time. Root-caused
+    # and reproduced exactly (byte-for-byte) via a clean Linux container
+    # build with NODE_ENV=production set, matching the Render deploy logs.
+    buildCommand: cd server && npm install --include=dev && npx prisma migrate deploy && cd ../client && npm install --include=dev && npm run build
     startCommand: cd server && npm start
     healthCheckPath: /health
     envVars:
