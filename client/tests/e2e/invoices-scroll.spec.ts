@@ -3,17 +3,14 @@ import { test, expect } from "@playwright/test";
 import { signIn, mockApi, API_URL } from "./fixtures";
 
 /**
- * bugs.md — "scroll invoice not working": the row list, its column header,
- * and the persistent detail panel all just grew to full content height
- * with nothing actually bounding/scrolling them — the *page* scrolled
- * instead, carrying the header and detail panel away with the rows. Fixed
- * by giving the page root a real height (app/invoices/page.tsx) so the row
- * list and detail panel each get their own independent scroll region while
- * the header stays sticky and the panel stays put.
+ * Supersedes the earlier "bounded box + its own scrollbar" fix for
+ * bugs.md's "scroll invoice not working": user feedback (9 Sep) was that a
+ * capped-height table/detail-panel with an internal scrollbar felt small
+ * regardless of window size — "full scrollable, no fixed size of height".
+ * The table and detail panel now grow to fit their content and the page
+ * itself scrolls, same as any other page in the app.
  */
-test.describe("Invoices — scrollable list with a fixed header and detail panel", () => {
-  // Short viewport so 30 rows can't possibly fit without scrolling —
-  // this is what makes the bug reproduce reliably.
+test.describe("Invoices — table and detail panel grow with content; the page scrolls", () => {
   test.use({ viewport: { width: 1280, height: 700 } });
 
   const invoices = Array.from({ length: 30 }, (_, i) => ({
@@ -36,7 +33,7 @@ test.describe("Invoices — scrollable list with a fixed header and detail panel
     items: [],
   }));
 
-  test("column header and detail panel stay fixed while the row list scrolls", async ({ page }) => {
+  test("no internal scroll container clips the row list — every row is reachable by scrolling the page", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/invoices?*`, (route) =>
@@ -45,26 +42,19 @@ test.describe("Invoices — scrollable list with a fixed header and detail panel
 
     await page.goto("/invoices");
 
-    const header = page.getByTestId("invoice-table-header");
-    await expect(header).toBeVisible();
-    const headerBoxBefore = await header.boundingBox();
-
     const rowList = page.getByTestId("invoice-row-list");
+    await expect(rowList).toHaveCSS("overflow-y", "visible");
+
     const firstRow = rowList.getByText("INV-000", { exact: true });
     const lastRow = rowList.getByText("INV-029", { exact: true });
-    await expect(firstRow).toBeInViewport();
-    await expect(lastRow).not.toBeInViewport();
+    await expect(firstRow).toBeVisible();
 
-    // Scroll the row list itself, not the page — the whole point of the fix.
-    await rowList.evaluate((el) => el.scrollBy(0, 100000));
-
+    // Reached by scrolling the whole page, not a nested region.
+    await lastRow.scrollIntoViewIfNeeded();
     await expect(lastRow).toBeInViewport();
-
-    const headerBoxAfter = await header.boundingBox();
-    expect(Math.round(headerBoxAfter!.y)).toBe(Math.round(headerBoxBefore!.y));
   });
 
-  test("selected invoice's detail panel doesn't scroll away with the list", async ({ page }) => {
+  test("selecting an invoice shows its detail panel, sized to its own content", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/invoices?*`, (route) =>
@@ -75,13 +65,7 @@ test.describe("Invoices — scrollable list with a fixed header and detail panel
     await page.getByTestId("invoice-row-list").getByText("INV-000", { exact: true }).click();
 
     const panel = page.getByTestId("invoice-detail-panel");
-    const panelInvoiceNumber = panel.getByText("INV-000", { exact: true });
-    await expect(panelInvoiceNumber).toBeInViewport();
-
-    await page.getByTestId("invoice-row-list").evaluate((el) => el.scrollBy(0, 100000));
-
-    // Still selected, still visible — the panel has its own scroll region
-    // and isn't carried off by the list's.
-    await expect(panelInvoiceNumber).toBeInViewport();
+    await expect(panel).toHaveCSS("overflow-y", "visible");
+    await expect(panel.getByText("INV-000", { exact: true })).toBeVisible();
   });
 });
