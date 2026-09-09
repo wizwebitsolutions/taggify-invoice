@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Sheet } from "@/components/ui/sheet";
 import { AVATAR_TONE, canSeeNavKey, type SidebarUser } from "@/components/layout/sidebar";
-import { BellIcon, TeamIcon, ClockIcon, InventoryIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
+import { BellIcon, TeamIcon, ClockIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { notifications as notificationsApi } from "@/lib/api-client";
@@ -21,7 +21,6 @@ import { cn } from "@/lib/utils";
  */
 export function MoreSheet({ onClose, user }: { onClose: () => void; user: SidebarUser }) {
   const { accessToken, logout, user: authUser } = useAuth();
-  const role = authUser?.role;
   const { theme, toggleTheme } = useTheme();
   const queryClient = useQueryClient();
 
@@ -133,20 +132,19 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
         )}
         <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
       </button>
-      {/* Same per-role visibility as the desktop sidebar — reuses
+      {/* Inventory isn't here — it's one of the four primary bottom-nav
+          tabs now (newTask.md, 8 Sep), not an overflow item.
+          Same per-role visibility as the desktop sidebar — reuses
           sidebar.tsx's NAV_GROUPS allowlist via canSeeNavKey rather than
           re-declaring which roles see what a second time, which is exactly
           how these two nav surfaces drifted out of sync before. */}
-      {canSeeNavKey("inventory", role) && (
-        <MenuRow href="/inventory" onClose={onClose} icon={<InventoryIcon className="h-4 w-4" />} label="Inventory" />
-      )}
-      {canSeeNavKey("team", role) && (
+      {canSeeNavKey("team", authUser) && (
         <MenuRow href="/team" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Team" />
       )}
-      {canSeeNavKey("users", role) && (
+      {canSeeNavKey("users", authUser) && (
         <MenuRow href="/users" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Users" />
       )}
-      {canSeeNavKey("job-runs", role) && (
+      {canSeeNavKey("job-runs", authUser) && (
         <MenuRow href="/job-runs" onClose={onClose} icon={<ClockIcon className="h-4 w-4" />} label="Job runs" />
       )}
 

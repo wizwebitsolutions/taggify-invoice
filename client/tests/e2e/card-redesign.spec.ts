@@ -5,11 +5,12 @@ import type { Campaign, Asset } from "@/lib/api-client";
 
 /**
  * Regression tests for the campaign/asset card redesign
- * (app/campaigns/page.tsx's CampaignCard, app/assets/page.tsx's AssetCard).
- * Covers the two genuinely new behaviors, not just that the cards render:
- * the over-budget "Over" pill + rose progress bar, and the asset approval
- * pill now distinguishing "Rejected" from "Pending" (previously both
- * rendered identically in slate — see assets/page.tsx).
+ * (app/campaigns/page.tsx's CampaignCard, app/inventory/page.tsx's
+ * AssetCard — moved here from the retired app/assets/page.tsx, newTask.md
+ * 8 Sep). Covers the two genuinely new behaviors, not just that the cards
+ * render: the over-budget "Over" pill + rose progress bar, and the asset
+ * approval pill now distinguishing "Rejected" from "Pending" (previously
+ * both rendered identically in slate).
  */
 
 test.use({ viewport: { width: 1280, height: 900 } });
@@ -108,7 +109,9 @@ test("asset approval pill distinguishes Rejected from Pending", async ({ page })
       ],
     })
   );
-  await page.goto("/assets");
+  // Pages now live on /inventory (newTask.md, 8 Sep — Assets folded in);
+  // Pages is the default tab, so no extra click is needed to see them.
+  await page.goto("/inventory");
 
   // JSX renders the raw lowercase status text, styled capitalized via CSS
   // (`capitalize`) — match case-insensitively rather than depend on which

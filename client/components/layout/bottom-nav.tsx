@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { GridIcon, CampaignIcon, InvoiceIcon, AssetIcon, MoreIcon } from "@/components/icons";
+import { GridIcon, CampaignIcon, InvoiceIcon, InventoryIcon, MoreIcon } from "@/components/icons";
 import { MoreSheet } from "@/components/layout/more-sheet";
 import type { SidebarUser } from "@/components/layout/sidebar";
 
@@ -12,7 +12,9 @@ const TABS = [
   { key: "dashboard", label: "Home", href: "/dashboard", icon: GridIcon },
   { key: "campaigns", label: "Campaigns", href: "/campaigns", icon: CampaignIcon },
   { key: "invoices", label: "Invoices", href: "/invoices", icon: InvoiceIcon },
-  { key: "assets", label: "Assets", href: "/assets", icon: AssetIcon },
+  // Everyone's Pages registry lives here now (newTask.md, 8 Sep — Assets
+  // folded into Inventory), so it keeps Assets' old primary-tab slot.
+  { key: "inventory", label: "Inventory", href: "/inventory", icon: InventoryIcon },
 ] as const;
 
 /**
@@ -24,7 +26,7 @@ const TABS = [
  */
 export function BottomNav({ active, user }: { active: string; user: SidebarUser }) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs" || active === "inventory";
+  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs";
 
   return (
     <>

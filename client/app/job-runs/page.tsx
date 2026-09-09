@@ -44,6 +44,14 @@ function JobRunsContent() {
     mutationFn: () => adminApi.runFinanceExportNow(token),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["job-runs"] }),
   });
+  // newTask.md, 8 Sep — same daily finance data, also written to a live
+  // Google Sheet. A separate button/mutation, not a combined one, since
+  // the two exports can succeed/fail independently (e.g. GitHub configured
+  // but Google Sheets isn't yet) and the admin should be able to tell which.
+  const financeGoogleSheetExportMutation = useMutation({
+    mutationFn: () => adminApi.runFinanceGoogleSheetExportNow(token),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["job-runs"] }),
+  });
 
   return (
     <AppShell
@@ -52,9 +60,19 @@ function JobRunsContent() {
       searchPlaceholder="Search job runs…"
       topbarActions={
         isAdmin ? (
-          <Button size="default" variant="secondary" onClick={() => financeExportMutation.mutate()} disabled={financeExportMutation.isPending}>
-            {financeExportMutation.isPending ? "Running…" : "Run finance export now"}
-          </Button>
+          <div className="flex gap-2">
+            <Button size="default" variant="secondary" onClick={() => financeExportMutation.mutate()} disabled={financeExportMutation.isPending}>
+              {financeExportMutation.isPending ? "Running…" : "Run finance export now"}
+            </Button>
+            <Button
+              size="default"
+              variant="secondary"
+              onClick={() => financeGoogleSheetExportMutation.mutate()}
+              disabled={financeGoogleSheetExportMutation.isPending}
+            >
+              {financeGoogleSheetExportMutation.isPending ? "Running…" : "Run Sheet export now"}
+            </Button>
+          </div>
         ) : undefined
       }
     >
@@ -81,6 +99,26 @@ function JobRunsContent() {
           <ErrorNotice
             message={
               financeExportMutation.error instanceof ApiError ? financeExportMutation.error.message : "Couldn't run the finance export."
+            }
+          />
+        )}
+
+        {isAdmin && financeGoogleSheetExportMutation.isSuccess && (
+          <div className="rounded-md border border-accent/25 bg-accent-soft px-3.5 py-2.5 text-[0.8125rem] text-accent">
+            Google Sheet export pushed.{" "}
+            {financeGoogleSheetExportMutation.data.spreadsheetUrl && (
+              <a href={financeGoogleSheetExportMutation.data.spreadsheetUrl} target="_blank" rel="noreferrer" className="underline">
+                View sheet
+              </a>
+            )}
+          </div>
+        )}
+        {isAdmin && financeGoogleSheetExportMutation.isError && (
+          <ErrorNotice
+            message={
+              financeGoogleSheetExportMutation.error instanceof ApiError
+                ? financeGoogleSheetExportMutation.error.message
+                : "Couldn't run the Google Sheet export."
             }
           />
         )}

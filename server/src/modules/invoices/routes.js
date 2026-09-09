@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
+import { requirePermission } from "../../middleware/requirePermission.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import {
   bulkInvoiceSchema,
@@ -23,7 +24,7 @@ router.get("/", validateQuery(listInvoicesQuerySchema), async (req, res, next) =
   }
 });
 
-router.post("/bulk", requireRole("CREATOR", "ADMIN"), validateBody(bulkInvoiceSchema), async (req, res, next) => {
+router.post("/bulk", requireRole("CREATOR", "ADMIN"), requirePermission("finance.manage"), validateBody(bulkInvoiceSchema), async (req, res, next) => {
   try {
     res.status(201).json(await invoicesService.bulkCreateInvoice(req.user, req.body));
   } catch (err) {
@@ -31,7 +32,7 @@ router.post("/bulk", requireRole("CREATOR", "ADMIN"), validateBody(bulkInvoiceSc
   }
 });
 
-router.post("/:id/mark-paid", requireRole("FINANCE", "ADMIN"), async (req, res, next) => {
+router.post("/:id/mark-paid", requireRole("FINANCE", "ADMIN"), requirePermission("finance.manage"), async (req, res, next) => {
   try {
     res.json(await invoicesService.markPaid(req.params.id, req.user));
   } catch (err) {
@@ -39,7 +40,7 @@ router.post("/:id/mark-paid", requireRole("FINANCE", "ADMIN"), async (req, res, 
   }
 });
 
-router.put("/:id/gst-status", requireRole("FINANCE", "ADMIN"), validateBody(gstStatusSchema), async (req, res, next) => {
+router.put("/:id/gst-status", requireRole("FINANCE", "ADMIN"), requirePermission("finance.manage"), validateBody(gstStatusSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.updateGstStatus(req.params.id, req.body.gstStatus));
   } catch (err) {
@@ -47,7 +48,7 @@ router.put("/:id/gst-status", requireRole("FINANCE", "ADMIN"), validateBody(gstS
   }
 });
 
-router.put("/:id/payment-status", requireRole("FINANCE", "ADMIN"), validateBody(paymentStatusSchema), async (req, res, next) => {
+router.put("/:id/payment-status", requireRole("FINANCE", "ADMIN"), requirePermission("finance.manage"), validateBody(paymentStatusSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.updatePaymentStatus(req.params.id, req.body.paymentStatus));
   } catch (err) {
@@ -55,7 +56,7 @@ router.put("/:id/payment-status", requireRole("FINANCE", "ADMIN"), validateBody(
   }
 });
 
-router.post("/:id/reject", requireRole("FINANCE", "ADMIN"), validateBody(rejectInvoiceSchema), async (req, res, next) => {
+router.post("/:id/reject", requireRole("FINANCE", "ADMIN"), requirePermission("finance.manage"), validateBody(rejectInvoiceSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.rejectInvoice(req.params.id, req.user, req.body));
   } catch (err) {

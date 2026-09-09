@@ -128,7 +128,23 @@ async function request<T>(
 }
 
 // ── Types (fields the UI actually reads) ──────────────────────────────
-export type Role = "CREATOR" | "TEAM_MEMBER" | "ADMIN" | "FINANCE";
+export type Role = "CREATOR" | "TEAM_MEMBER" | "ADMIN" | "FINANCE" | "PLAN_MAKER";
+
+// Sub-admin permission overlay (newTask.md, 8 Sep) — see server's
+// lib/permissions.js for the canonical key list. Always the *effective*
+// map (role defaults merged with any override), never the raw overlay —
+// a plain ADMIN has every key true, a restricted sub-admin has some false,
+// and every other role has every key false (their access comes from role
+// alone, not this map — see canSeeNavItem/sidebar.tsx for where a role
+// check is still the right tool).
+export interface Permissions {
+  "users.manage": boolean;
+  "campaigns.manage": boolean;
+  "inventory.manage": boolean;
+  "links.review": boolean;
+  "finance.manage": boolean;
+  "plans.manage": boolean;
+}
 
 export interface User {
   id: string;
@@ -143,6 +159,10 @@ export interface User {
   state?: string | null;
   pincode?: string | null;
   createdAt?: string;
+  /** Only populated on login/refresh and the admin Users list — see Permissions. */
+  permissions?: Permissions;
+  /** Which admin created this account, if it was created via the sub-admin flow (admin Users list only). */
+  createdByAdminId?: string | null;
 }
 
 export interface BillingProfile {
@@ -221,6 +241,14 @@ export interface Campaign {
   remainingBudget?: number | null;
   /** Rows from an attached sheet still waiting on a page/creator to be created for them. */
   pendingAssignmentCount?: number;
+  /** Set when this campaign is a phase (2+) of another — points at phase 1's id. Null/undefined for a standalone campaign or phase 1 itself. */
+  parentCampaignId?: string | null;
+  /** 1 for a standalone campaign or the first phase; 2+ for later phases. */
+  phaseNumber?: number;
+  /** The whole phase group (including this campaign), phase-1-first. Only present on getCampaignById's response, not the list. */
+  phases?: { id: string; phaseNumber: number; title: string; createdAt: string }[];
+  /** Only present on listCampaigns' response — how many phases (including this root) exist. 1 for a campaign with no phases. */
+  phaseCount?: number;
 }
 
 export interface CampaignAssignment {
@@ -229,9 +257,16 @@ export interface CampaignAssignment {
   assetId: string | null;
   pageHandle: string;
   creatorPhone: string | null;
+  /** Set when this row's sheet entry already named a posted link (newTask.md, 8 Sep) — kept even after auto-attaching, same as pageHandle/creatorPhone. */
+  postUrl: string | null;
+  format: string | null;
+  cost: string | null;
+  /** Set once postUrl has been auto-attached to a real Link — never unset, so a row is only ever auto-attached once. */
+  linkId: string | null;
   status: "pending" | "matched";
   createdAt: string;
   asset?: { id: string; handle: string; category: string | null; approvalStatus: string } | null;
+  link?: { id: string; status: Link["status"] } | null;
 }
 
 export interface LinkCostRevision {
@@ -274,7 +309,8 @@ export interface Link {
     | "SCREENSHOT_APPROVED"
     | "INSIGHTS_PENDING"
     | "INSIGHTS_APPROVED"
-    | "INVOICED";
+    | "INVOICED"
+    | "INVALID";
   postedAt: string | null;
   createdAt: string;
   campaign?: Campaign;
@@ -343,6 +379,10 @@ export interface PlanItem {
   assetId: string;
   format: string;
   cost: string;
+  /** Client-facing price for this line when it differs from `cost` — null shows `cost` as-is. Never rendered in the PDF directly; the server resolves the fallback once. */
+  clientCost: string | null;
+  /** How many posts on this page this line covers — cost/clientCost above are per-post. */
+  postsPerProfile: number;
   asset?: { id: string; handle: string; category: string | null; followers: number };
 }
 
@@ -352,15 +392,31 @@ export interface Plan {
   clientName: string;
   clientContact: string | null;
   budget: string | null;
+  /** Whether the PDF/overview adds 18% GST on top of the client subtotal. */
+  isGstPlan: boolean;
+  /** Approval workflow (newTask.md, 8 Sep — Plan → Approve step). New plans start DRAFT. */
+  status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED";
+  approvedBy?: { id: string; name: string | null } | null;
+  approvedAt: string | null;
   createdAt: string;
   updatedAt: string;
   items: PlanItem[];
-  /** Sum of every item's cost. */
+  /** Internal — sum of every item's real cost × postsPerProfile. Admin-eyes-only; never shown to the client. */
   totalCost: number;
   /** budget - totalCost. Positive = under budget, negative = over. Null if no budget was set. */
   budgetVariance: number | null;
   /** Summed avg. likes/views across the plan's distinct pages. */
   expectedEngagement: { likes: number; views: number };
+  /** Client-facing totals — matches the "CAMPAIGN OVERVIEW" block on the PDF. */
+  overview: {
+    totalFollowers: number;
+    totalPosts: number;
+    /** Estimated from avg. views per post — there's no real impressions metric captured anywhere. */
+    expectedImpressions: number;
+    subtotal: number;
+    gstAmount: number;
+    total: number;
+  };
   createdBy?: { id: string; name: string | null };
 }
 
@@ -384,7 +440,9 @@ export const auth = {
   changePassword: (token: string, currentPassword: string, newPassword: string) =>
     request<void>("/auth/change-password", { method: "POST", token, body: { currentPassword, newPassword } }),
   // Admin-only — creates the account and returns a system-generated password, shown once.
-  signup: (token: string, body: { phoneNumber: string; name?: string; role: Role }) =>
+  // `permissions` (only meaningful when role is "ADMIN") is the sub-admin
+  // creation path (newTask.md, 8 Sep) — omit it, or leave every key true, for a plain admin.
+  signup: (token: string, body: { phoneNumber: string; name?: string; role: Role; permissions?: Partial<Permissions> }) =>
     request<{ user: User; generatedPassword: string }>("/auth/signup", { method: "POST", token, body }),
 };
 
@@ -430,10 +488,13 @@ export const campaigns = {
       deadline?: string;
       costCap?: number;
       sheetLink?: string;
-      assignments?: { handle: string; phone?: string }[];
+      // postUrl/format/cost (newTask.md, 8 Sep) — a row naming an already-
+      // posted link gets it auto-attached to the matched creator's posts
+      // straight away; see server's autoAttachLinkIfPossible.
+      assignments?: { handle: string; phone?: string; postUrl?: string; format?: string; cost?: number }[];
     }
   ) =>
-    request<{ campaign: Campaign; matchedCount: number; pendingCount: number }>("/campaigns", {
+    request<{ campaign: Campaign; matchedCount: number; pendingCount: number; autoAttachedCount: number }>("/campaigns", {
       method: "POST",
       token,
       body,
@@ -453,6 +514,10 @@ export const campaigns = {
   // docs.google.com would hit) so it can be parsed exactly like an
   // uploaded CSV file.
   importSheetUrl: (token: string, url: string) => request<{ csv: string }>("/campaigns/import-sheet-url", { method: "POST", token, body: { url } }),
+  // newTask.md, 8 Sep — more posts under the same brand deal become a new
+  // phase, not a brand-new campaign; campaignId can be any phase's id.
+  createPhase: (token: string, campaignId: string, title?: string) =>
+    request<Campaign>(`/campaigns/${campaignId}/phases`, { method: "POST", token, body: { title } }),
 };
 
 // ── Links ───────────────────────────────────────────────────────────
@@ -501,6 +566,8 @@ export const links = {
     request<Link>(`/links/${linkId}/cost`, { method: "PUT", token, body: { cost, note } }),
   costRevisions: (token: string, linkId: string) =>
     request<LinkCostRevision[]>(`/links/${linkId}/cost-revisions`, { token }),
+  markInvalid: (token: string, linkId: string, note: string) =>
+    request<Link>(`/links/${linkId}/mark-invalid`, { method: "POST", token, body: { note } }),
 };
 
 // ── Screenshots ─────────────────────────────────────────────────────
@@ -602,9 +669,17 @@ export const admin = {
   // the cron runs, reported back synchronously so it's actually testable.
   runFinanceExportNow: (token: string) =>
     request<{ ok: true; commitSha?: string; htmlUrl?: string }>("/admin/finance-export/run-now", { method: "POST", token }),
+  // Same, for the Google Sheet export (newTask.md, 8 Sep) — runs alongside
+  // the GitHub export above, not instead of it.
+  runFinanceGoogleSheetExportNow: (token: string) =>
+    request<{ ok: true; spreadsheetUrl?: string }>("/admin/finance-google-sheet-export/run-now", { method: "POST", token }),
   // Reset-and-reveal, not a stored/recoverable password — see admin/service.js.
   resetPassword: (token: string, userId: string) =>
     request<{ generatedPassword: string }>(`/admin/users/${userId}/reset-password`, { method: "POST", token }),
+  // Sub-admin permission edits (newTask.md, 8 Sep) — only the keys being
+  // changed need to be sent; the server merges onto the existing overlay.
+  updatePermissions: (token: string, userId: string, permissions: Partial<Permissions>) =>
+    request<User>(`/admin/users/${userId}/permissions`, { method: "PUT", token, body: { permissions } }),
 };
 
 // ── Plans ("Inventory") ────────────────────────────────────────────
@@ -613,6 +688,10 @@ export interface PlanItemInput {
   format: string;
   /** Omit to fall back to the page's rate card for that format. */
   cost?: number;
+  /** Client-facing price for this line, when it differs from cost — omit to show cost as-is. */
+  clientCost?: number;
+  /** How many posts on this page this line covers. Defaults to 1 server-side. */
+  postsPerProfile?: number;
 }
 
 export const plans = {
@@ -620,14 +699,20 @@ export const plans = {
   get: (token: string, id: string) => request<Plan>(`/plans/${id}`, { token }),
   create: (
     token: string,
-    body: { name: string; clientName: string; clientContact?: string; budget?: number; items?: PlanItemInput[] }
+    body: { name: string; clientName: string; clientContact?: string; budget?: number; isGstPlan?: boolean; items?: PlanItemInput[] }
   ) => request<Plan>("/plans", { method: "POST", token, body }),
   update: (
     token: string,
     id: string,
-    body: Partial<{ name: string; clientName: string; clientContact: string | null; budget: number | null; items: PlanItemInput[] }>
+    body: Partial<{ name: string; clientName: string; clientContact: string | null; budget: number | null; isGstPlan: boolean; items: PlanItemInput[] }>
   ) => request<Plan>(`/plans/${id}`, { method: "PUT", token, body }),
   remove: (token: string, id: string) => request<void>(`/plans/${id}`, { method: "DELETE", token }),
+  // Approval workflow (newTask.md, 8 Sep) — submit moves DRAFT → PENDING_APPROVAL;
+  // approve/reject only work from PENDING_APPROVAL. Server enforces who can
+  // call which: Admin on any plan, Plan Maker only on their own.
+  submit: (token: string, id: string) => request<Plan>(`/plans/${id}/submit`, { method: "POST", token }),
+  approve: (token: string, id: string) => request<Plan>(`/plans/${id}/approve`, { method: "POST", token }),
+  reject: (token: string, id: string) => request<Plan>(`/plans/${id}/reject`, { method: "POST", token }),
   // Binary response, same pattern as invoices.downloadPdf.
   downloadPdf: async (token: string, id: string, name?: string) => {
     const res = await fetch(`${API_URL}/plans/${id}/pdf`, { headers: { Authorization: `Bearer ${token}` } });

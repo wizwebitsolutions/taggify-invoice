@@ -69,6 +69,38 @@ export async function bulkCreateLink(user, { campaignId, assetId, format, urls }
 }
 
 /**
+ * Creates a Link on behalf of the *asset's owner*, not the caller — used
+ * when a campaign assignment sheet already names a posted link (newTask.md,
+ * 8 Sep: "if a post link is already mentioned in the attached sheet, it
+ * should get added directly to that creator's posts"). Cost resolution
+ * mirrors a normal submission (rate card, or an explicit `cost` from the
+ * sheet) — the caller is always an admin already gated by
+ * campaigns.manage, the same trust level bulkImportLinks' sheet-supplied
+ * cost already runs at, so no extra role check is needed here. Returns
+ * null (not an error) for a duplicate URL on this asset — a sheet
+ * re-uploaded or re-resolved shouldn't create a second Link for the same
+ * post, same skip behavior bulkCreateLink/bulkImportLinks already use.
+ */
+export async function autoAttachLink(asset, { campaignId, url, format, cost }) {
+  const existing = await prisma.link.findFirst({ where: { url, assetId: asset.id } });
+  if (existing) return null;
+
+  let resolvedCost = cost;
+  let customRate = cost != null;
+  if (resolvedCost == null) {
+    const rateCard = asset.rateCards?.find((rc) => rc.format === format);
+    if (!rateCard) throw new ApiError(400, "NO_RATE_CARD", `No rate card set for format "${format}" on @${asset.handle}`);
+    resolvedCost = rateCard.amount;
+  }
+
+  const link = await prisma.link.create({
+    data: { campaignId, assetId: asset.id, submittedById: asset.ownerId, url, format, cost: resolvedCost, customRate, status: "SUBMITTED" },
+  });
+  await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: asset.ownerId } });
+  return link;
+}
+
+/**
  * Admin bulk-import of already-completed work from a sheet (newTask.md #8:
  * "which page posted it, their finance part"). Unlike bulkCreateLink (one
  * campaign/page for many URLs), each row here can name a different
@@ -270,6 +302,33 @@ export async function reviseLinkCost(linkId, admin, { cost, note }) {
     }),
   ]);
   return updated;
+}
+
+/**
+ * Admin confirms a submitted post is dead/broken (newTask.md, 8 Sep —
+ * "posted link not working") — wrong URL, deleted post, private account,
+ * whatever's unrecoverable. A soft flag, not a delete: the row and its
+ * LinkStatusEvent history stay for audit (same reasoning as reviseLinkCost
+ * below), it's just excluded from campaign spend and every "needs action"/
+ * "uninvoiced" count from here on (see campaigns/service.js's `spent` and
+ * client/components/dashboard/creator-dashboard.tsx's `approved` KPI).
+ * Blocked once INVOICED for the same reason cost revision is — reject the
+ * invoice first if a billed link turns out to be broken.
+ */
+export async function markLinkInvalid(linkId, admin, { note }) {
+  const link = await prisma.link.findUnique({ where: { id: linkId } });
+  if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  if (link.status === "INVOICED") {
+    throw new ApiError(409, "ALREADY_INVOICED", "Reject the invoice this link is on before marking it invalid");
+  }
+  if (link.status === "INVALID") return link;
+
+  return transitionLinkStatus(linkId, "INVALID", {
+    actedById: admin.id,
+    note,
+    notifyUserId: link.submittedById,
+    notifyType: "link_marked_invalid",
+  });
 }
 
 export async function getLinkCostRevisions(linkId) {

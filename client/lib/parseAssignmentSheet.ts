@@ -11,10 +11,21 @@ import Papa from "papaparse";
 export interface ParsedAssignmentRow {
   handle: string;
   phone?: string;
+  /** newTask.md, 8 Sep — a row can also already name a posted link; when
+   *  it does (and carries a format), that post gets attached directly to
+   *  the matched creator instead of waiting for them to submit it. */
+  postUrl?: string;
+  format?: string;
+  cost?: number;
 }
 
 const HANDLE_HEADERS = ["handle", "page", "page handle", "instagram", "instagram handle", "username"];
 const PHONE_HEADERS = ["phone", "phone number", "creator phone", "creator", "owner"];
+// Shared with parseWorkImportSheet below — the same column names mean the
+// same thing whichever of the two sheets they show up on.
+const URL_HEADERS = ["url", "link", "post url", "post link"];
+const FORMAT_HEADERS = ["format", "type", "post type"];
+const COST_HEADERS = ["cost", "amount", "rate", "price", "finance"];
 
 /** A File (from an <input type="file">) or raw CSV text (fetched
  * server-side from a pasted Google Sheet link — see campaigns.importSheetUrl
@@ -32,12 +43,31 @@ export async function parseAssignmentSheet(source: CsvSource): Promise<ParsedAss
   const rows: ParsedAssignmentRow[] = [];
   for (const row of data) {
     const keys = Object.keys(row);
-    const handleKey = keys.find((k) => HANDLE_HEADERS.includes(k.trim().toLowerCase())) ?? keys[0];
-    const phoneKey = keys.find((k) => PHONE_HEADERS.includes(k.trim().toLowerCase()));
+    const find = (headers: string[]) => keys.find((k) => headers.includes(k.trim().toLowerCase()));
+    const handleKey = find(HANDLE_HEADERS) ?? keys[0];
+    const phoneKey = find(PHONE_HEADERS);
     const handle = handleKey ? row[handleKey]?.trim() : "";
     if (!handle) continue;
     const phone = phoneKey ? row[phoneKey]?.trim() : undefined;
-    rows.push({ handle, phone: phone || undefined });
+
+    // Optional (newTask.md, 8 Sep) — a row can also already name a posted
+    // link. format is required alongside it (same rule the server
+    // validates) since a URL with no format has nothing to price against.
+    const urlKey = find(URL_HEADERS);
+    const formatKey = find(FORMAT_HEADERS);
+    const costKey = find(COST_HEADERS);
+    const postUrl = urlKey ? row[urlKey]?.trim() : "";
+    const format = (formatKey ? row[formatKey]?.trim() : "")?.toLowerCase();
+    const rawCost = costKey ? row[costKey]?.trim() : "";
+    const cost = rawCost ? Number(rawCost.replace(/[^\d.]/g, "")) : undefined;
+
+    rows.push({
+      handle,
+      phone: phone || undefined,
+      postUrl: postUrl && format ? postUrl : undefined,
+      format: postUrl && format ? format : undefined,
+      cost: postUrl && format && cost && !Number.isNaN(cost) ? cost : undefined,
+    });
   }
   return rows;
 }
@@ -57,9 +87,6 @@ export interface ParsedWorkImportRow {
 }
 
 const CAMPAIGN_HEADERS = ["campaign", "campaign title", "campaign name"];
-const URL_HEADERS = ["url", "link", "post url", "post link"];
-const FORMAT_HEADERS = ["format", "type", "post type"];
-const COST_HEADERS = ["cost", "amount", "rate", "price", "finance"];
 
 export async function parseWorkImportSheet(source: CsvSource): Promise<ParsedWorkImportRow[]> {
   const text = await readText(source);

@@ -179,6 +179,12 @@ function PendingAssignmentRow({
         <div>
           <p className="text-[0.8125rem] font-bold">@{assignment.pageHandle}</p>
           {assignment.creatorPhone && <p className="text-[0.75rem] text-text-faint">{assignment.creatorPhone}</p>}
+          {/* newTask.md, 8 Sep — the row already names a posted link; once
+              this page is created and matched, resolveAssignment attaches
+              it automatically, no separate submission needed. */}
+          {assignment.postUrl && !assignment.linkId && (
+            <p className="mt-0.5 text-[0.75rem] text-accent">Also names a post — attached automatically once created.</p>
+          )}
         </div>
         <Button size="sm" variant="secondary" onClick={() => setExpanded((v) => !v)}>
           {expanded ? "Cancel" : "Create"}

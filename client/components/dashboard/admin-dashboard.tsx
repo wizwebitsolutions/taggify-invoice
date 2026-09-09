@@ -39,6 +39,10 @@ const LINK_PIPELINE_ORDER: Link["status"][] = [
   "INSIGHTS_PENDING",
   "INSIGHTS_APPROVED",
   "INVOICED",
+  // Included in the funnel chart (so a broken link is actually *visible*,
+  // not just silently excluded — newTask.md, 8 Sep) but treated as a
+  // terminal outcome everywhere else below, same as INVOICED.
+  "INVALID",
 ];
 const INVOICE_STATUS_ORDER: Invoice["status"][] = ["DRAFT", "RAISED", "APPROVED", "REJECTED", "PAID"];
 
@@ -46,10 +50,10 @@ const INVOICE_STATUS_ORDER: Invoice["status"][] = ["DRAFT", "RAISED", "APPROVED"
 // waiting on the creator or the scrape cron — this is the default slice the
 // review queue below shows.
 const ACTIONABLE_STATUSES = "PENDING_SCREENSHOT_REVIEW,INSIGHTS_PENDING";
-// Everything the "Links in pipeline" KPI counts (not yet invoiced) — so
-// clicking that tile shows exactly what it counted, not just the narrower
-// actionable-only default.
-const IN_PIPELINE_STATUSES = LINK_PIPELINE_ORDER.filter((s) => s !== "INVOICED").join(",");
+// Everything the "Links in pipeline" KPI counts (not yet invoiced, not
+// confirmed dead) — so clicking that tile shows exactly what it counted,
+// not just the narrower actionable-only default.
+const IN_PIPELINE_STATUSES = LINK_PIPELINE_ORDER.filter((s) => s !== "INVOICED" && s !== "INVALID").join(",");
 
 function lastNMonths(n: number) {
   const now = new Date();
@@ -121,7 +125,7 @@ export function AdminDashboard() {
       activePages: assets.filter((a) => a.approvalStatus === "approved").length,
       pendingApprovals: pendingPages + pendingBilling,
       campaigns: campaignsQuery.data?.length ?? 0,
-      inPipeline: links.filter((l) => l.status !== "INVOICED").length,
+      inPipeline: links.filter((l) => l.status !== "INVOICED" && l.status !== "INVALID").length,
     };
   }, [assets, billingProfiles, campaignsQuery.data, links]);
 
@@ -259,7 +263,7 @@ export function AdminDashboard() {
 
         {/* Ops KPIs — same horizontal-scroll/grid switch. */}
         <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
-          <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={AssetIcon} label="Active pages" value={String(opsKpis.activePages)} foot={`${assets.length} registered total`} onClick={() => router.push("/assets")} />
+          <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={AssetIcon} label="Active pages" value={String(opsKpis.activePages)} foot={`${assets.length} registered total`} onClick={() => router.push("/inventory")} />
           <KpiCard
             className="w-[150px] shrink-0 md:w-auto"
             icon={AlertIcon}
@@ -308,7 +312,7 @@ export function AdminDashboard() {
             ) : topPages.length === 0 ? (
               <EmptyState label="No pages registered yet." />
             ) : (
-              <RankedBarList items={topPages} formatValue={(v) => count(v)} onSelect={() => router.push("/assets")} />
+              <RankedBarList items={topPages} formatValue={(v) => count(v)} onSelect={() => router.push("/inventory")} />
             )}
           </Panel>
         </div>
@@ -445,7 +449,7 @@ export function AdminDashboard() {
           <Panel
             title="Pages awaiting approval"
             action={
-              <PanelAction onClick={() => router.push("/assets")}>
+              <PanelAction onClick={() => router.push("/inventory")}>
                 View all <ArrowRightIcon className="h-3 w-3" />
               </PanelAction>
             }

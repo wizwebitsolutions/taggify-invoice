@@ -8,9 +8,10 @@ import { signIn, mockApi, API_URL } from "./fixtures";
  * locale. lib/format.ts's money()/count() both explicitly pass "en-IN" to
  * toLocaleString() — this test exists because it's easy to reintroduce the
  * bug one call site at a time by reaching for a bare `n.toLocaleString()`
- * again (see admin-dashboard.tsx, creator-dashboard.tsx, inventory/page.tsx,
- * assets/page.tsx, all fixed alongside this test), which silently falls
- * back to the runtime's default locale instead.
+ * again (see admin-dashboard.tsx, creator-dashboard.tsx, and
+ * inventory/page.tsx — which absorbed the former assets/page.tsx, newTask.md
+ * 8 Sep — all fixed alongside this test), which silently falls back to the
+ * runtime's default locale instead.
  */
 test.describe("Indian number grouping", () => {
   test("a follower count over one lakh renders as 1,50,000, not 150,000", async ({ page }) => {
@@ -35,7 +36,8 @@ test.describe("Indian number grouping", () => {
       })
     );
 
-    await page.goto("/assets");
+    // Pages now live on /inventory (newTask.md, 8 Sep — Assets folded in).
+    await page.goto("/inventory");
     await expect(page.getByText("1,50,000 followers")).toBeVisible();
     await expect(page.getByText("150,000 followers")).toHaveCount(0);
   });

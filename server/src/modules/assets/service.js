@@ -3,11 +3,13 @@ import { ApiError } from "../../middleware/errorHandler.js";
 import { refreshAssetMetrics } from "../scraping/service.js";
 
 /**
- * Creators see only their own assets; Admin/Finance see everything —
- * mirrors the scoping used across links/invoices.
+ * Creators see only their own assets; Admin/Finance/Plan Maker see
+ * everything — Plan Maker needs the full catalogue to build a Plan from
+ * (newTask.md, 8 Sep: their dashboard is "Dashboard + Inventory +
+ * Plan-create"), and doesn't own pages the way a Creator does.
  */
 export async function listAssets(user) {
-  const where = ["ADMIN", "FINANCE"].includes(user.role) ? {} : { ownerId: user.id };
+  const where = ["ADMIN", "FINANCE", "PLAN_MAKER"].includes(user.role) ? {} : { ownerId: user.id };
   const assets = await prisma.asset.findMany({
     where,
     include: { rateCards: true },

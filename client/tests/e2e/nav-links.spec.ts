@@ -25,14 +25,14 @@ test.describe("desktop sidebar navigation", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
   // `role` picks who's signed in for that one link's test — since
-  // sidebar.tsx now hides Team from everyone but CREATOR (and
-  // Inventory/Users/Job runs from everyone but ADMIN, see the dedicated
-  // per-role visibility tests below), a link only shows up in the
-  // sidebar at all for a role that can actually see it.
+  // sidebar.tsx now hides Team from everyone but CREATOR (and Users/Job
+  // runs from everyone but ADMIN, see the dedicated per-role visibility
+  // tests below), a link only shows up in the sidebar at all for a role
+  // that can actually see it. Inventory (folded Assets + Plans, newTask.md
+  // 8 Sep) is visible to every role, same as it always was for Assets.
   const SIDEBAR_LINKS: { label: string; href: string; role: MockRole }[] = [
     { label: "Dashboard", href: "/dashboard", role: "ADMIN" },
     { label: "Campaigns", href: "/campaigns", role: "ADMIN" },
-    { label: "Assets", href: "/assets", role: "ADMIN" },
     { label: "Inventory", href: "/inventory", role: "ADMIN" },
     { label: "Invoices", href: "/invoices", role: "ADMIN" },
     { label: "Users", href: "/users", role: "ADMIN" },
@@ -57,19 +57,30 @@ test.describe("desktop sidebar navigation", () => {
   test.describe("per-role visibility", () => {
     // Regression tests for a real bug: the sidebar rendered every item for
     // every role regardless of whether that role could do anything on the
-    // destination page — a CREATOR saw "Inventory" (ADMIN-only server-side,
-    // requireRole("ADMIN") on the plans routes) and landed on a page that
-    // rendered nothing useful for them. Fixed in sidebar.tsx by giving
-    // NavItem an optional `roles` allowlist (canSeeNavItem).
-    const ADMIN_ONLY = ["Inventory", "Users", "Job runs"];
+    // destination page — a CREATOR saw a then-ADMIN-only nav item and
+    // landed on a page that rendered nothing useful for them. Fixed in
+    // sidebar.tsx by giving NavItem an optional `roles` allowlist
+    // (canSeeNavItem). Inventory itself is ALWAYS now (newTask.md, 8 Sep —
+    // Plans within it, not the nav entry, is what stays admin-gated).
+    const ADMIN_ONLY = ["Users", "Job runs"];
     const CREATOR_ONLY = ["Team"];
-    const ALWAYS = ["Dashboard", "Campaigns", "Assets", "Invoices"];
+    // Everyone gets Dashboard + Inventory; Campaigns/Invoices are their own
+    // bucket now (newTask.md, 8 Sep — Plan Maker's dashboard is deliberately
+    // just "Dashboard + Inventory + Plan-create", so those two are the one
+    // pair PLAN_MAKER doesn't see even though every other role does).
+    const ALWAYS = ["Dashboard", "Inventory"];
+    const CAMPAIGNS_AND_INVOICES = ["Campaigns", "Invoices"];
 
     const CASES: { role: MockRole; visible: string[]; hidden: string[] }[] = [
-      { role: "ADMIN", visible: [...ALWAYS, ...ADMIN_ONLY], hidden: CREATOR_ONLY },
-      { role: "CREATOR", visible: [...ALWAYS, ...CREATOR_ONLY], hidden: ADMIN_ONLY },
-      { role: "FINANCE", visible: ALWAYS, hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
-      { role: "TEAM_MEMBER", visible: ALWAYS, hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
+      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...ADMIN_ONLY], hidden: CREATOR_ONLY },
+      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY], hidden: ADMIN_ONLY },
+      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
+      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
+      {
+        role: "PLAN_MAKER",
+        visible: ALWAYS,
+        hidden: [...ADMIN_ONLY, ...CREATOR_ONLY, ...CAMPAIGNS_AND_INVOICES],
+      },
     ];
 
     for (const { role, visible, hidden } of CASES) {
@@ -188,7 +199,9 @@ test.describe("mobile bottom nav + More sheet", () => {
     { label: "Home", href: "/dashboard" },
     { label: "Campaigns", href: "/campaigns" },
     { label: "Invoices", href: "/invoices" },
-    { label: "Assets", href: "/assets" },
+    // Everyone's Pages registry lives here now (newTask.md, 8 Sep —
+    // Assets folded into Inventory) — kept Assets' old primary-tab slot.
+    { label: "Inventory", href: "/inventory" },
   ];
 
   for (const { label, href } of TABS) {
@@ -205,8 +218,9 @@ test.describe("mobile bottom nav + More sheet", () => {
     });
   }
 
+  // Inventory isn't here — it's a primary bottom tab now, not an overflow
+  // item (see the TABS list above).
   const MORE_SHEET_ROWS: { label: string; href: string; role: MockRole }[] = [
-    { label: "Inventory", href: "/inventory", role: "ADMIN" },
     { label: "Team", href: "/team", role: "CREATOR" },
     { label: "Users", href: "/users", role: "ADMIN" },
     { label: "Job runs", href: "/job-runs", role: "ADMIN" },
@@ -236,7 +250,7 @@ test.describe("mobile bottom nav + More sheet", () => {
     await page.getByRole("button", { name: "More" }).click();
 
     await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
-    for (const label of ["Inventory", "Users", "Job runs"]) {
+    for (const label of ["Users", "Job runs"]) {
       await expect(page.getByRole("link", { name: label, exact: true }), `CREATOR should not see "${label}"`).toHaveCount(0);
     }
   });

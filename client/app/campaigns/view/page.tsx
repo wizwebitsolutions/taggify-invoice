@@ -13,12 +13,13 @@ import { Field, TextField } from "@/components/ui/form-field";
 import { Panel, ProgressBar } from "@/components/ui/panel";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { StatusPill } from "@/components/ui/status-pill";
-import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
+import { LinkDetailPanel, STATUS_LABEL } from "@/components/dashboard/link-detail-panel";
 import { ResolvePendingAssignmentsModal } from "@/components/campaigns/resolve-pending-assignments-modal";
 import { ChevronRightIcon, HeartIcon, AlertIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { campaigns as campaignsApi, links as linksApi, ApiError, type Campaign } from "@/lib/api-client";
 import { initialsOf, roleLabel, money, count } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 /**
  * Campaign detail — bugs.md #7: a real view/edit page for one campaign
@@ -47,6 +48,7 @@ function CampaignDetailContent() {
   const token = accessToken!;
   const campaignId = searchParams.get("id") ?? "";
   const isAdmin = user?.role === "ADMIN";
+  const isPrivileged = user?.role === "ADMIN" || user?.role === "FINANCE";
 
   const [detailId, setDetailId] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
@@ -62,9 +64,20 @@ function CampaignDetailContent() {
     queryFn: () => linksApi.list(token, { campaignId, pageSize: 100 }),
     enabled: Boolean(campaignId),
   });
+  // newTask.md, 8 Sep — "attached sheet/links for a campaign should be
+  // visible to all creators listed in that sheet, not just admin/finance".
+  // No extra role branching needed here: the server itself scopes what
+  // comes back (everyone's rows for Admin/Finance, only your own matched
+  // row(s) otherwise) — see campaigns/service.js's listAssignments.
+  const assignmentsQuery = useQuery({
+    queryKey: ["campaignAssignments", campaignId],
+    queryFn: () => campaignsApi.listAssignments(token, campaignId),
+    enabled: Boolean(campaignId),
+  });
 
   const campaign = campaignQuery.data;
   const items = linksQuery.data?.items ?? [];
+  const assignments = assignmentsQuery.data ?? [];
   const detail = items.find((l) => l.id === detailId) ?? null;
   const mobileDetail = detailId ? detail : null;
 
@@ -72,6 +85,17 @@ function CampaignDetailContent() {
     queryClient.invalidateQueries({ queryKey: ["campaign", campaignId] });
     queryClient.invalidateQueries({ queryKey: ["links", { campaignId }] });
   };
+
+  // newTask.md, 8 Sep — more posts under the same brand deal become a new
+  // phase; jump straight to it so admin lands where the new phase's own
+  // (empty) link list is, not back on the phase they were just viewing.
+  const createPhaseMutation = useMutation({
+    mutationFn: () => campaignsApi.createPhase(token, campaignId),
+    onSuccess: (newPhase) => {
+      queryClient.invalidateQueries({ queryKey: ["campaign"] });
+      router.push(`/campaigns/view?id=${newPhase.id}`);
+    },
+  });
 
   const costCapNum = campaign?.costCap != null ? Number(campaign.costCap) : null;
   const spentPct = costCapNum && costCapNum > 0 ? ((campaign?.spent ?? 0) / costCapNum) * 100 : null;
@@ -123,6 +147,36 @@ function CampaignDetailContent() {
               )}
             </div>
 
+            {/* Phases (newTask.md, 8 Sep) — more posts under the same brand
+                deal, not a new campaign. Chips only once a 2nd phase exists;
+                "Add phase" itself is always available to admin so there's a
+                way to create the first one. */}
+            {((campaign.phases?.length ?? 0) > 1 || isAdmin) && (
+              <div className="flex flex-wrap items-center gap-2">
+                {(campaign.phases?.length ?? 0) > 1 &&
+                  campaign.phases!.map((p) => (
+                    <Link
+                      key={p.id}
+                      href={`/campaigns/view?id=${p.id}`}
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-[0.8125rem] font-semibold",
+                        p.id === campaign.id ? "border-accent bg-accent-soft text-accent" : "border-border text-text-faint hover:text-text-muted"
+                      )}
+                    >
+                      Phase {p.phaseNumber}
+                    </Link>
+                  ))}
+                {isAdmin && (
+                  <Button variant="ghost" size="sm" onClick={() => createPhaseMutation.mutate()} disabled={createPhaseMutation.isPending}>
+                    {createPhaseMutation.isPending ? "Adding…" : "+ Add phase"}
+                  </Button>
+                )}
+                {createPhaseMutation.isError && (
+                  <ErrorNotice message={createPhaseMutation.error instanceof ApiError ? createPhaseMutation.error.message : "Couldn't add a phase."} />
+                )}
+              </div>
+            )}
+
             {isAdmin && !!campaign.pendingAssignmentCount && (
               <button
                 type="button"
@@ -133,6 +187,46 @@ function CampaignDetailContent() {
                 {campaign.pendingAssignmentCount} page{campaign.pendingAssignmentCount === 1 ? "" : "s"} from the sheet still need
                 {campaign.pendingAssignmentCount === 1 ? "s" : ""} creating
               </button>
+            )}
+
+            {/* Attached sheet (newTask.md, 8 Sep) — Admin/Finance see every
+                row; a Creator/Team member sees only the row(s) matched to
+                a page they own (server-scoped, see listAssignments above).
+                Hidden entirely when there's nothing relevant to this
+                viewer, rather than an empty-state panel for a feature most
+                creators will never encounter. */}
+            {assignments.length > 0 && (
+              <Panel
+                title="Attached sheet"
+                subtitle={isPrivileged ? "Every page/creator listed for this campaign." : "Your page(s) listed for this campaign."}
+              >
+                <div className="flex flex-col gap-2.5">
+                  {assignments.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-[0.8438rem] font-semibold">@{a.pageHandle}</p>
+                        {isPrivileged && a.creatorPhone && <p className="text-xs text-text-faint">{a.creatorPhone}</p>}
+                        {/* newTask.md, 8 Sep — "if a post link is already
+                            mentioned in the attached sheet, it should get
+                            added directly to that creator's posts". */}
+                        {a.postUrl && (
+                          <p className="mt-0.5 truncate text-xs text-accent">
+                            {a.linkId ? `Post attached${a.link ? ` · ${STATUS_LABEL[a.link.status] ?? a.link.status}` : ""}` : "Post named — attaches once matched"}
+                          </p>
+                        )}
+                      </div>
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-[0.04em]",
+                          a.status === "matched" ? "bg-accent-soft text-accent" : "bg-surface-2 text-text-faint"
+                        )}
+                      >
+                        {a.status === "matched" ? "Matched" : "Pending"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
             )}
 
             {costCapNum != null && spentPct != null && (

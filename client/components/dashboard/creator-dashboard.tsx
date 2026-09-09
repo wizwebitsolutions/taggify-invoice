@@ -45,6 +45,10 @@ const STATUS_FILTERS: { label: string; value: string | undefined }[] = [
   // "IN" match (see listLinks). Mirrors the "Links approved" KPI tile's
   // definition below: everything past screenshot review.
   { label: "Approved (all stages)", value: APPROVED_GROUP_FILTER },
+  // So a creator can actually find the broken links an admin has flagged,
+  // not just have them silently drop out of every other count (newTask.md,
+  // 8 Sep — "posted link not working").
+  { label: "Broken", value: "INVALID" },
 ];
 
 /** A creator/team member's own link-tracking workspace — "My Works". */
@@ -85,7 +89,10 @@ export function CreatorDashboard() {
     return {
       added: allLinksQuery.data?.total ?? 0,
       pendingScreenshots: items.filter((l) => l.status === "PENDING_SCREENSHOT_REVIEW").length,
-      approved: items.filter((l) => !["SUBMITTED", "PENDING_SCREENSHOT_REVIEW", "SCREENSHOT_REJECTED"].includes(l.status)).length,
+      // INVALID excluded too — an admin-confirmed dead/broken link never
+      // did valid work, same reasoning as SCREENSHOT_REJECTED (newTask.md,
+      // 8 Sep) — it just arrives at "doesn't count" from a different path.
+      approved: items.filter((l) => !["SUBMITTED", "PENDING_SCREENSHOT_REVIEW", "SCREENSHOT_REJECTED", "INVALID"].includes(l.status)).length,
       invoiced: items.filter((l) => l.status === "INVOICED").length,
       uninvoiced: items.filter((l) => INVOICEABLE_STATUSES.has(l.status)).length,
     };

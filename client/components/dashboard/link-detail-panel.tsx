@@ -189,6 +189,19 @@ export function LinkDetailPanel({
           )}
         </div>
       )}
+
+      {isAdmin && link.status !== "INVOICED" && (
+        <div className="border-t border-border pt-4">
+          <MarkInvalidControl
+            link={link}
+            token={token}
+            onChanged={() => {
+              queryClient.invalidateQueries({ queryKey: ["linkTimeline", link.id] });
+              onChanged();
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -287,6 +300,68 @@ function CostRevisionControl({ link, token, onChanged }: { link: Link; token: st
   );
 }
 
+/**
+ * Admin confirms a submitted post is dead/broken (newTask.md, 8 Sep —
+ * "posted link not working") — a soft flag, not a delete: the reason is
+ * required and shows up in the status timeline above via
+ * LinkStatusEvent.note, same as a screenshot-rejection reason does.
+ * Blocked once INVOICED, same guard as CostRevisionControl above.
+ */
+function MarkInvalidControl({ link, token, onChanged }: { link: Link; token: string; onChanged: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState("");
+
+  const markInvalidMutation = useMutation({
+    mutationFn: () => linksApi.markInvalid(token, link.id, note),
+    onSuccess: () => {
+      setConfirming(false);
+      setNote("");
+      onChanged();
+    },
+  });
+
+  if (link.status === "INVALID") {
+    return <p className="text-[0.8125rem] text-rose">Marked broken — see the reason in the timeline above.</p>;
+  }
+
+  if (!confirming) {
+    return (
+      <button onClick={() => setConfirming(true)} className="text-[0.75rem] font-semibold text-rose hover:brightness-110">
+        Mark as broken
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border-strong bg-surface-2 p-2.5">
+      <p className="text-[0.75rem] text-text-faint">Why is this link broken? This excludes it from campaign spend and can't be undone from here.</p>
+      <input
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="e.g. Post was deleted"
+        className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      />
+      {markInvalidMutation.isError && (
+        <ErrorNotice message={markInvalidMutation.error instanceof ApiError ? markInvalidMutation.error.message : "Couldn't mark this link invalid."} />
+      )}
+      <div className="flex gap-2">
+        <Button size="sm" variant="ghost" className="flex-1" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          className="flex-1"
+          onClick={() => markInvalidMutation.mutate()}
+          disabled={markInvalidMutation.isPending || note.trim().length === 0}
+        >
+          {markInvalidMutation.isPending ? "Marking…" : "Confirm"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   SUBMITTED: "Submitted",
   PENDING_SCREENSHOT_REVIEW: "Screenshot submitted",
@@ -295,4 +370,5 @@ export const STATUS_LABEL: Record<string, string> = {
   INSIGHTS_PENDING: "Insights pending",
   INSIGHTS_APPROVED: "Insights approved",
   INVOICED: "Invoiced",
+  INVALID: "Marked invalid",
 };

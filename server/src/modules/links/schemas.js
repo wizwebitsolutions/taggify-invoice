@@ -63,3 +63,11 @@ export const reviseCostSchema = z.object({
   cost: z.number().min(0),
   note: z.string().max(500).optional(),
 });
+
+// Admin marks a submitted post dead/broken (newTask.md, 8 Sep — "posted
+// link not working"). Required, unlike reviseCostSchema's note — this
+// removes the link from active work, so whoever reads the timeline later
+// needs to know why.
+export const markInvalidSchema = z.object({
+  note: z.string().min(1).max(500),
+});

@@ -11,7 +11,7 @@ export const API_URL = "http://localhost:4000/api";
 /** Must match client/lib/api-client.ts's AUTH_STORAGE_KEY. */
 const AUTH_STORAGE_KEY = "taggify_auth";
 
-export type MockRole = "CREATOR" | "ADMIN" | "FINANCE" | "TEAM_MEMBER";
+export type MockRole = "CREATOR" | "ADMIN" | "FINANCE" | "TEAM_MEMBER" | "PLAN_MAKER";
 
 export function userFor(role: MockRole = "CREATOR") {
   return {

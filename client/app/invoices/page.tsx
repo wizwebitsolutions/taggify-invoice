@@ -233,7 +233,7 @@ function InvoicesContent() {
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-7">
+      <div className="flex h-full min-h-0 flex-col gap-7">
         <div>
           <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Finance</p>
           <h1 className="mb-1.5 text-[1.625rem] font-bold">Invoices</h1>
@@ -296,8 +296,17 @@ function InvoicesContent() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row md:gap-5">
-          <div className="hidden flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card md:block">
-            <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.1fr)] gap-3 border-b border-border px-5 py-3.5">
+          <div className="hidden flex-1 flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-card md:flex">
+            {/* Sticky so the column labels stay put while the row list
+                below scrolls in its own region — this whole area used to
+                just grow to full content height with nothing to actually
+                scroll it (the outer page scrolled instead, taking the
+                header and the persistent detail panel along with it).
+                Reported as "scroll invoice not working" (newTask.md, 8 Sep). */}
+            <div
+              data-testid="invoice-table-header"
+              className="sticky top-0 z-10 grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.1fr)] gap-3 border-b border-border bg-surface px-5 py-3.5"
+            >
               <Th>Invoice</Th>
               <Th>Creator</Th>
               <Th>Amount</Th>
@@ -313,7 +322,7 @@ function InvoicesContent() {
             ) : items.length === 0 ? (
               <EmptyState label="No invoices raised yet — bulk-invoice approved links from My Works." />
             ) : (
-              <div>
+              <div className="flex-1 overflow-y-auto" data-testid="invoice-row-list">
                 {items.map((inv) => {
                   const isOverdue = inv.overdueDays > 0;
                   const isPaid = inv.status === "PAID";
@@ -457,8 +466,13 @@ function InvoicesContent() {
             )}
           </div>
 
-          {/* Desktop: persistent side panel. */}
-          <div className="hidden w-[340px] shrink-0 flex-col gap-5 rounded-lg border border-border bg-surface p-6 shadow-card md:flex">
+          {/* Desktop: persistent side panel — its own scroll so a
+              long-lined-item invoice can't force the whole row to grow
+              past its bounded height (same fix as the table above). */}
+          <div
+            data-testid="invoice-detail-panel"
+            className="hidden w-[340px] shrink-0 flex-col gap-5 overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-card md:flex"
+          >
             {selected && renderInvoiceDetail(selected)}
           </div>
         </div>

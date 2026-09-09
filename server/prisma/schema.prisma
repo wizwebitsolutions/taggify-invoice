@@ -12,6 +12,22 @@ enum Role {
   TEAM_MEMBER
   ADMIN
   FINANCE
+  // Phase 4 (newTask.md, 8 Sep) — "Planner (POC)": makes/approves their own
+  // Plans and reads Inventory, but can't create Campaigns, review Links, or
+  // manage Users/Finance. See lib/permissions.js for the exact split.
+  PLAN_MAKER
+}
+
+// Plan approval workflow (newTask.md, 8 Sep: "Plan Maker... approves plans
+// he created as well" / "Admin... even approving plans"). New plans start
+// DRAFT (still being assembled); a Plan Maker submits one for approval, then
+// either they themselves or an Admin approves/rejects it — see
+// plans/service.js's submitPlan/approvePlan/rejectPlan for who can do which.
+enum PlanStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
 }
 
 enum LinkStatus {
@@ -22,6 +38,12 @@ enum LinkStatus {
   INSIGHTS_PENDING
   INSIGHTS_APPROVED
   INVOICED
+  // Admin-confirmed dead/broken post (newTask.md, 8 Sep — "posted link not
+  // working"). Terminal, like INVOICED: a soft flag, not a delete, so the
+  // record and its LinkStatusEvent history stay for audit — it's just
+  // excluded from campaign spend and every "needs action"/"uninvoiced" KPI.
+  // Can't be reached from INVOICED (see markLinkInvalid in links/service.js).
+  INVALID
 }
 
 enum InvoiceStatus {
@@ -57,19 +79,57 @@ model User {
   state            String?
   pincode          String?
   whatsappVerified Boolean  @default(false)
+  // Sub-admin permission overlay (newTask.md, 8 Sep — "Admin can create
+  // Sub-admins, each with a hand-picked selection of what they can
+  // see/access"). Null = plain account, full role-default access. Set only
+  // on an ADMIN-role account to restrict it below the default ADMIN grant —
+  // an ADMIN row with this set is what "Sub-admin" *is*, not a separate
+  // Role value (the less-invasive of the two migrations the note flagged;
+  // see lib/permissions.js for key names/defaults and getEffectivePermissions()
+  // for how an override merges with role defaults).
+  permissions      Json?
+  // Which admin created this account, when it's a sub-admin — the audit
+  // trail newTask.md's "suggested improvements" asked for (who gave X
+  // visibility into Y). Null for every account not created via the
+  // sub-admin flow (including the very first admin).
+  createdByAdminId String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  memberships      TeamMembership[] @relation("MemberUser")
-  refreshTokens    RefreshToken[]
-  assets           Asset[]
-  invoices         Invoice[]
-  notifications    Notification[]
-  submittedLinks   Link[]           @relation("SubmittedByUser")
-  statusEvents     LinkStatusEvent[]
-  billingProfiles  BillingProfile[]
-  costRevisions    LinkCostRevision[]
-  plans            Plan[]
+  createdByAdmin    User?               @relation("AdminCreatedSubAdmins", fields: [createdByAdminId], references: [id])
+  createdSubAdmins  User[]              @relation("AdminCreatedSubAdmins")
+  memberships       TeamMembership[]    @relation("MemberUser")
+  refreshTokens     RefreshToken[]
+  assets            Asset[]
+  invoices          Invoice[]
+  notifications     Notification[]
+  submittedLinks    Link[]              @relation("SubmittedByUser")
+  statusEvents      LinkStatusEvent[]
+  billingProfiles   BillingProfile[]
+  costRevisions     LinkCostRevision[]
+  plans             Plan[]
+  approvedPlans     Plan[]              @relation("PlanApprovals")
+  permissionChangesMade    PermissionAuditLog[] @relation("PermissionChangeActor")
+  permissionChangesReceived PermissionAuditLog[] @relation("PermissionChangeTarget")
+}
+
+// Audit trail for sub-admin permission grants/edits (newTask.md, 8 Sep
+// "suggested improvements" — "log who changed whose access and when").
+// Written on every sub-admin creation and every permission edit; never
+// updated or deleted, so it stays a true history even if permissions are
+// changed again later.
+model PermissionAuditLog {
+  id         String   @id @default(cuid())
+  targetId   String
+  actorId    String
+  before     Json?
+  after      Json
+  createdAt  DateTime @default(now())
+
+  target User @relation("PermissionChangeTarget", fields: [targetId], references: [id])
+  actor  User @relation("PermissionChangeActor", fields: [actorId], references: [id])
+
+  @@index([targetId])
 }
 
 // Payout/tax identity a creator registers to receive invoice payments —
@@ -150,17 +210,34 @@ model Asset {
 // still-pending row (newTask.md #11's approval-before-creation gate is the
 // existing Asset.approvalStatus flow on whatever gets created here — a page
 // created this way starts "pending" exactly like any other new page).
+//
+// `postUrl`/`format`/`cost` (newTask.md, 8 Sep — "if a post link is already
+// mentioned in the attached sheet, it should get added directly to that
+// creator's posts") are optional columns the same sheet can carry alongside
+// handle/phone. Kept even after auto-attaching, same as pageHandle/
+// creatorPhone, so the row still shows what the sheet actually said.
+// `linkId` is set once that attach has happened — either at campaign
+// creation (row already matched an existing page) or later, when an admin
+// resolves a still-pending row (see campaigns/service.js's
+// autoAttachLinkIfPossible) — and is what makes the attach idempotent: a
+// row is only ever auto-attached once, however many times its assignment
+// gets touched afterward.
 model CampaignAssignment {
   id           String   @id @default(cuid())
   campaignId   String
   assetId      String?
   pageHandle   String
   creatorPhone String?
+  postUrl      String?
+  format       String?
+  cost         Decimal? @db.Decimal(12, 2)
+  linkId       String?  @unique
   status       String   @default("pending") // pending | matched
   createdAt    DateTime @default(now())
 
   campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   asset    Asset?   @relation(fields: [assetId], references: [id])
+  link     Link?    @relation(fields: [linkId], references: [id])
 
   @@index([campaignId])
 }
@@ -177,18 +254,31 @@ model RateCard {
   @@unique([assetId, format])
 }
 
+// A campaign can grow phases (newTask.md, 8 Sep — "campaign can have
+// multiple phase if need to add 2 post for same campaign"): more posts
+// added to the same brand deal later, rather than a brand-new campaign.
+// parentCampaignId is null for a standalone campaign or a phase 1; a phase
+// 2+ points back at phase 1's row. Budget/spend roll up across every phase
+// under one parent (see campaigns/service.js's annotateCampaign) — a phase
+// isn't a separate budget, it's more work under the same one.
 model Campaign {
-  id        String    @id @default(cuid())
-  brandName String
-  title     String
-  deadline  DateTime?
-  costCap   Decimal?  @db.Decimal(12, 2) // total budget cap (newTask.md #8) — "remaining budget" (#9) is derived: costCap - sum(links.cost), not stored
-  sheetLink String? // reference URL (e.g. a Google Sheet) an admin attached when creating the campaign — kept as a plain link, not live-fetched; the actual page/creator list comes in via an uploaded file (see CampaignAssignment)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  brandName        String
+  title            String
+  deadline         DateTime?
+  costCap          Decimal?  @db.Decimal(12, 2) // total budget cap (newTask.md #8) — "remaining budget" (#9) is derived: costCap - sum(links.cost), not stored
+  sheetLink        String? // reference URL (e.g. a Google Sheet) an admin attached when creating the campaign — kept as a plain link, not live-fetched; the actual page/creator list comes in via an uploaded file (see CampaignAssignment)
+  parentCampaignId String?
+  phaseNumber      Int       @default(1)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  links       Link[]
-  assignments CampaignAssignment[]
+  parentCampaign Campaign?  @relation("CampaignPhases", fields: [parentCampaignId], references: [id])
+  phases         Campaign[] @relation("CampaignPhases")
+  links          Link[]
+  assignments    CampaignAssignment[]
+
+  @@index([parentCampaignId])
 }
 
 model Link {
@@ -213,6 +303,9 @@ model Link {
   invoiceItem   InvoiceItem?
   statusEvents  LinkStatusEvent[]
   costRevisions LinkCostRevision[]
+  // Back-reference for CampaignAssignment.linkId — set only when this Link
+  // was auto-attached from a sheet row rather than submitted normally.
+  campaignAssignment CampaignAssignment?
 
   @@index([status])
   @@index([assetId])
@@ -364,12 +457,19 @@ model Plan {
   clientName    String
   clientContact String?
   budget        Decimal? @db.Decimal(12, 2)
+  // Same convention as Invoice.isGstInvoice (newTask.md #4) — whether the
+  // PDF/overview adds 18% GST on top of the client subtotal.
+  isGstPlan     Boolean    @default(false)
+  status        PlanStatus @default(DRAFT)
+  approvedById  String?
+  approvedAt    DateTime?
   createdById   String
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  createdBy User       @relation(fields: [createdById], references: [id])
-  items     PlanItem[]
+  createdBy  User       @relation(fields: [createdById], references: [id])
+  approvedBy User?      @relation("PlanApprovals", fields: [approvedById], references: [id])
+  items      PlanItem[]
 }
 
 model PlanItem {
@@ -377,7 +477,18 @@ model PlanItem {
   planId  String
   assetId String
   format  String // reel | story | carousel | collaboration | video — mirrors RateCard.format
-  cost    Decimal @db.Decimal(12, 2) // snapshot of the rate at the time it was added to the plan
+  cost    Decimal @db.Decimal(12, 2) // internal — snapshot of the rate at the time it was added to the plan
+  // Client-facing price for this line, when it differs from the internal
+  // cost above (markup/margin) — newTask.md, 8 Sep. Null = show the
+  // internal cost as-is. NEVER read directly by anything client-facing
+  // (PDF) without going through plans/service.js's forClientPdf(), which
+  // resolves this fallback once in one place rather than leaving every
+  // call site to remember `clientCost ?? cost` itself.
+  clientCost Decimal? @db.Decimal(12, 2)
+  // How many posts on this one page this line covers — newTask.md, 8 Sep
+  // (the example sheet's "Post Per Profile" column). Cost above is
+  // per-post; totals multiply by this.
+  postsPerProfile Int @default(1)
 
   plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
   asset Asset @relation(fields: [assetId], references: [id])

@@ -39,7 +39,8 @@ export type LinkStatus =
   | "SCREENSHOT_APPROVED"
   | "INSIGHTS_PENDING"
   | "INSIGHTS_APPROVED"
-  | "INVOICED";
+  | "INVOICED"
+  | "INVALID";
 
 export type InvoiceStatus = "DRAFT" | "RAISED" | "APPROVED" | "REJECTED" | "PAID";
 export type GstStatus = "PENDING" | "SCHEDULED" | "COMPLETED";
@@ -63,6 +64,7 @@ export const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone; live
   INSIGHTS_PENDING: { label: "Insights pending", tone: "blue", live: true },
   INSIGHTS_APPROVED: { label: "Insights approved", tone: "emerald" },
   INVOICED: { label: "Invoiced", tone: "violet" },
+  INVALID: { label: "Broken", tone: "rose" },
   DRAFT: { label: "Draft", tone: "slate" },
   RAISED: { label: "Raised", tone: "blue", live: true },
   APPROVED: { label: "Approved", tone: "emerald" },

@@ -138,4 +138,38 @@ test.describe("Campaign detail page", () => {
 
     await expect(page).toHaveURL(/\/campaigns\/view\?id=camp-1$/);
   });
+
+  test("phase chips appear once a 2nd phase exists, and highlight the one being viewed", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    const phases = [
+      { id: "camp-1", phaseNumber: 1, title: "Launch Week", createdAt: campaign.createdAt },
+      { id: "camp-2", phaseNumber: 2, title: "Launch Week — Phase 2", createdAt: campaign.createdAt },
+    ];
+    await mockCampaignRoutes(page);
+    await page.route(`${API_URL}/campaigns/camp-1`, (route) => route.fulfill({ json: { ...campaign, phases } }));
+
+    await page.goto("/campaigns/view?id=camp-1");
+
+    await expect(page.getByRole("link", { name: "Phase 1" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Phase 2" })).toBeVisible();
+  });
+
+  test("Add phase creates a new phase and navigates to it", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockCampaignRoutes(page);
+    await page.route(`${API_URL}/campaigns/camp-1/phases`, (route) =>
+      route.fulfill({ status: 201, json: { id: "camp-2", parentCampaignId: "camp-1", phaseNumber: 2, title: "Launch Week — Phase 2" } })
+    );
+    await page.route(`${API_URL}/campaigns/camp-2`, (route) =>
+      route.fulfill({ json: { ...campaign, id: "camp-2", title: "Launch Week — Phase 2", phaseNumber: 2, parentCampaignId: "camp-1" } })
+    );
+
+    await page.goto("/campaigns/view?id=camp-1");
+    await page.getByRole("button", { name: "+ Add phase" }).click();
+
+    await expect(page).toHaveURL(/\/campaigns\/view\?id=camp-2$/);
+    await expect(page.getByRole("heading", { name: "Launch Week — Phase 2" })).toBeVisible();
+  });
 });

@@ -3,11 +3,10 @@ import type { ComponentType } from "react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
-import type { Role } from "@/lib/api-client";
+import type { Role, Permissions } from "@/lib/api-client";
 import {
   GridIcon,
   CampaignIcon,
-  AssetIcon,
   InvoiceIcon,
   InventoryIcon,
   TeamIcon,
@@ -23,6 +22,13 @@ type NavItem = {
   /** Omitted = every role. Matched against the signed-in user's raw role
    *  (not the humanized `SidebarUser.role` label) — see canSeeNavItem. */
   roles?: Role[];
+  /** Only for a destination whose entire server route is permission-gated
+   *  (e.g. GET /admin/users itself requires "users.manage") — a sub-admin
+   *  denied that key would otherwise land on a page that 403s immediately.
+   *  Not used for anything merely *action*-gated (a page that still loads
+   *  and just disables/errors on one button) — that's an acceptable
+   *  error-toast fallback, not worth hiding the whole destination for. */
+  permissionKey?: keyof Permissions;
 };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -30,19 +36,30 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Work",
     items: [
-      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns" },
-      { key: "assets", label: "Assets", icon: AssetIcon, href: "/assets" },
-      // ADMIN-only server-side (plans routes: requireRole("ADMIN")) and the
-      // page itself renders nothing for anyone else — see inventory/page.tsx.
-      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory", roles: ["ADMIN"] },
+      // Plan Maker's dashboard is deliberately just "Dashboard + Inventory +
+      // Plan-create" (newTask.md, 8 Sep) — they don't run Campaigns, so this
+      // is the one nav item that needs an explicit allowlist rather than
+      // being open to every role like Inventory below.
+      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"] },
+      // Visible to every role (Pages, the former /assets content, is for
+      // everyone, Plan Maker included) — Plans within it stays
+      // Admin/Plan-Maker-only, gated inside the page itself rather than at
+      // the nav level (newTask.md, 8 Sep: "assets tab will be removed" —
+      // folded into this one instead).
+      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory" },
     ],
   },
-  { label: "Finance", items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices" }] },
+  {
+    label: "Finance",
+    items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"] }],
+  },
   {
     label: "Admin",
     items: [
-      // ADMIN-only server-side (admin routes: requireRole("ADMIN")).
-      { key: "users", label: "Users", icon: TeamIcon, href: "/users", roles: ["ADMIN"] },
+      // ADMIN-only server-side (admin routes: requireRole("ADMIN")), and
+      // the whole route is further gated on "users.manage" — a sub-admin
+      // without it would land on a page that 403s on load.
+      { key: "users", label: "Users", icon: TeamIcon, href: "/users", roles: ["ADMIN"], permissionKey: "users.manage" },
       // CREATOR-only — this is a creator managing their own team, not an
       // admin function despite living in this group (see team/page.tsx's
       // "Team management is available to Creator accounts" fallback and
@@ -54,19 +71,28 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   },
 ];
 
-function canSeeNavItem(item: NavItem, role: Role | undefined) {
-  return !item.roles || (!!role && item.roles.includes(role));
+/** Just the two auth-context fields nav visibility actually needs — accepts
+ *  the full `useAuth().user` object as-is rather than a role string, so a
+ *  permissionKey check has something to read. */
+type NavUser = { role?: Role; permissions?: Permissions } | null | undefined;
+
+function canSeeNavItem(item: NavItem, user: NavUser) {
+  if (item.roles && (!user?.role || !item.roles.includes(user.role))) return false;
+  // Absent/undefined permissions (every role but a sub-admin) reads as
+  // "not restricted" — only an explicit `false` from an overlay hides it.
+  if (item.permissionKey && user?.permissions?.[item.permissionKey] === false) return false;
+  return true;
 }
 
-/** Same per-role visibility as the sidebar, keyed by NavItem.key, for the
- * mobile "More" sheet (more-sheet.tsx) — a second nav surface for the same
- * destinations that can't render NavItem/NAV_GROUPS directly (its own
- * icons/labels/layout), but must not re-derive the roles allowlist itself:
- * that drifted silently before (e.g. Team going CREATOR-only here without
- * the sheet following). */
-export function canSeeNavKey(key: string, role: Role | undefined) {
+/** Same per-role/per-permission visibility as the sidebar, keyed by
+ * NavItem.key, for the mobile "More" sheet (more-sheet.tsx) — a second nav
+ * surface for the same destinations that can't render NavItem/NAV_GROUPS
+ * directly (its own icons/labels/layout), but must not re-derive the
+ * allowlist itself: that drifted silently before (e.g. Team going
+ * CREATOR-only here without the sheet following). */
+export function canSeeNavKey(key: string, user: NavUser) {
   const item = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.key === key);
-  return !item || canSeeNavItem(item, role);
+  return !item || canSeeNavItem(item, user);
 }
 
 export interface SidebarUser {
@@ -88,10 +114,9 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
   // state here rather than threading it through every page that renders
   // AppShell (Topbar does the same for logout/accessToken).
   const { user: authUser } = useAuth();
-  const role = authUser?.role;
   const visibleGroups = NAV_GROUPS.map((group) => ({
     ...group,
-    items: group.items.filter((item) => canSeeNavItem(item, role)),
+    items: group.items.filter((item) => canSeeNavItem(item, authUser)),
   })).filter((group) => group.items.length > 0);
 
   return (

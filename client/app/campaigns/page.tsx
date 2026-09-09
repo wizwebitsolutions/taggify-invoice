@@ -229,6 +229,10 @@ function CampaignCard({
           <span className="text-[0.75rem] text-text-faint">likes</span>
         </div>
         {!!c.postCount && <span className="text-[0.8125rem] font-semibold text-text-muted">{c.postCount} post{c.postCount === 1 ? "" : "s"}</span>}
+        {/* newTask.md, 8 Sep — more posts under the same deal without a brand-new campaign card for each batch. */}
+        {(c.phaseCount ?? 1) > 1 && (
+          <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[0.6875rem] font-bold text-text-faint">{c.phaseCount} phases</span>
+        )}
       </div>
 
       {/* Budget — newTask.md #9: remaining = cost cap - spent so far. Only shown when a cap was actually set. */}
@@ -290,6 +294,8 @@ interface CreateCampaignResult {
   campaign: Campaign;
   matchedCount: number;
   pendingCount: number;
+  /** Rows whose sheet-named post got attached straight to the matched creator (newTask.md, 8 Sep). */
+  autoAttachedCount: number;
 }
 
 function NewCampaignModal({
@@ -410,7 +416,15 @@ function NewCampaignModal({
             </label>
             {sheetError && <p className="mt-1.5 text-[0.75rem] text-rose">{sheetError}</p>}
             {sheetRows.length > 0 && !sheetError && (
-              <p className="mt-1.5 text-[0.75rem] text-text-faint">{sheetRows.length} row{sheetRows.length === 1 ? "" : "s"} parsed.</p>
+              <p className="mt-1.5 text-[0.75rem] text-text-faint">
+                {sheetRows.length} row{sheetRows.length === 1 ? "" : "s"} parsed.
+                {/* newTask.md, 8 Sep — a row can already name a posted link
+                    (url + format columns); those get attached straight to
+                    the matched creator on create, not just added as a page assignment. */}
+                {sheetRows.some((r) => r.postUrl) && (
+                  <> {sheetRows.filter((r) => r.postUrl).length} of them name a post — it'll be attached to the matched creator automatically.</>
+                )}
+              </p>
             )}
           </div>
         </div>

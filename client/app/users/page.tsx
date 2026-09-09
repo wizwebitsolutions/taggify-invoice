@@ -13,10 +13,23 @@ import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, TeamIcon, AssetIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { admin as adminApi, auth as authApi, assets as assetsApi, LINK_FORMATS, ApiError, type User, type Role } from "@/lib/api-client";
+import { admin as adminApi, auth as authApi, assets as assetsApi, LINK_FORMATS, ApiError, type User, type Role, type Permissions } from "@/lib/api-client";
 import { initialsOf, roleLabel } from "@/lib/format";
 
-const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"];
+const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
+
+// Sub-admin permission overlay (newTask.md, 8 Sep) — one checkbox per
+// server-side key (lib/permissions.js), labeled by the section it actually
+// gates rather than the raw key name.
+const PERMISSION_LABELS: Record<keyof Permissions, string> = {
+  "users.manage": "Users — create accounts, change roles, reset passwords",
+  "campaigns.manage": "Campaigns — create/edit, phases, sheet import",
+  "inventory.manage": "Inventory — add pages, approve, rate cards",
+  "links.review": "Link review — screenshots, insights, cost revisions",
+  "finance.manage": "Finance — invoices, billing approvals, finance export",
+  "plans.manage": "Plans — create/edit/approve any plan",
+};
+const PERMISSION_KEYS = Object.keys(PERMISSION_LABELS) as (keyof Permissions)[];
 
 // Only CREATOR accounts own Instagram pages (see system design.md's roles) —
 // Team member/Admin/Finance accounts have no use for one, so the "at least
@@ -44,6 +57,7 @@ function UsersContent() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [resettingUser, setResettingUser] = useState<User | null>(null);
+  const [editingAccessUser, setEditingAccessUser] = useState<User | null>(null);
   const token = accessToken!;
   const isAdmin = user?.role === "ADMIN";
 
@@ -118,27 +132,46 @@ function UsersContent() {
                   <span className="truncate text-[0.8438rem] font-semibold">{u.name ?? "—"}</span>
                 </div>
                 <span className="truncate text-[0.8125rem] text-text-muted">{u.phoneNumber}</span>
-                <select
-                  value={u.role}
-                  onChange={(e) => roleMutation.mutate({ id: u.id, role: e.target.value as Role })}
-                  disabled={roleMutation.isPending || u.id === user?.id}
-                  title={u.id === user?.id ? "You can't change your own role" : "Change role"}
-                  className="h-8 w-fit rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
-                >
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {roleLabel(r)}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex flex-col gap-1">
+                  <select
+                    value={u.role}
+                    onChange={(e) => roleMutation.mutate({ id: u.id, role: e.target.value as Role })}
+                    disabled={roleMutation.isPending || u.id === user?.id}
+                    title={u.id === user?.id ? "You can't change your own role" : "Change role"}
+                    className="h-8 w-fit rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+                  >
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {roleLabel(r)}
+                      </option>
+                    ))}
+                  </select>
+                  {/* Sub-admin (newTask.md, 8 Sep) isn't a separate role — it's
+                      an Admin account with at least one permission key turned
+                      off. Flag it here so it doesn't read as a plain admin. */}
+                  {u.role === "ADMIN" && u.permissions && PERMISSION_KEYS.some((k) => u.permissions![k] === false) && (
+                    <span className="w-fit rounded-full bg-accent-2-soft px-2 py-0.5 text-[0.6875rem] font-semibold text-accent-2">Sub-admin</span>
+                  )}
+                </div>
                 <span className="text-xs text-text-faint">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</span>
-                <button
-                  type="button"
-                  onClick={() => setResettingUser(u)}
-                  className="w-fit text-[0.75rem] font-semibold text-accent hover:text-accent-2"
-                >
-                  Reset password
-                </button>
+                <div className="flex flex-col items-start gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setResettingUser(u)}
+                    className="w-fit text-[0.75rem] font-semibold text-accent hover:text-accent-2"
+                  >
+                    Reset password
+                  </button>
+                  {u.role === "ADMIN" && u.id !== user?.id && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingAccessUser(u)}
+                      className="w-fit text-[0.75rem] font-semibold text-accent hover:text-accent-2"
+                    >
+                      Edit access
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -160,7 +193,91 @@ function UsersContent() {
       {resettingUser && (
         <ResetPasswordModal token={token} targetUser={resettingUser} onClose={() => setResettingUser(null)} />
       )}
+
+      {editingAccessUser && (
+        <EditAccessModal
+          token={token}
+          targetUser={editingAccessUser}
+          onClose={() => setEditingAccessUser(null)}
+          onSaved={() => {
+            setEditingAccessUser(null);
+            queryClient.invalidateQueries({ queryKey: ["adminUsers"] });
+          }}
+        />
+      )}
     </AppShell>
+  );
+}
+
+/**
+ * Sub-admin permission editing (newTask.md, 8 Sep — "Admin can create
+ * Sub-admins, each with a hand-picked selection of what they can
+ * see/access"). Every checkbox starts from the target's *current* effective
+ * permissions (adminApi.users() already resolves role defaults + overlay —
+ * see admin/routes.js), so unchecking one box and saving only sends that
+ * one key as a change; the server merges it onto the existing overlay
+ * rather than replacing the whole thing (admin/service.js's updateUserPermissions).
+ */
+function EditAccessModal({
+  token,
+  targetUser,
+  onClose,
+  onSaved,
+}: {
+  token: string;
+  targetUser: User;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [values, setValues] = useState<Record<keyof Permissions, boolean>>(() => {
+    const current = targetUser.permissions;
+    return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, current?.[k] ?? true])) as Record<keyof Permissions, boolean>;
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: () => adminApi.updatePermissions(token, targetUser.id, values),
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Sheet onClose={onClose} panelClassName="md:max-w-[480px]">
+      <div className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto p-6 pt-1">
+        <div>
+          <h2 className="text-lg font-bold">Edit access</h2>
+          <p className="mt-1 text-[0.8125rem] text-text-muted">
+            What <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> can see and do. Unchecking a section
+            hides it and blocks its actions server-side, even if they still have the link.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {PERMISSION_KEYS.map((key) => (
+            <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-surface-2">
+              <input
+                type="checkbox"
+                checked={values[key]}
+                onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.checked }))}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+              />
+              <span className="text-[0.8125rem] text-text">{PERMISSION_LABELS[key]}</span>
+            </label>
+          ))}
+        </div>
+
+        {saveMutation.isError && (
+          <ErrorNotice message={saveMutation.error instanceof ApiError ? saveMutation.error.message : "Couldn't save this account's access."} />
+        )}
+
+        <div className="flex gap-2.5">
+          <Button variant="ghost" className="flex-1" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button className="flex-1" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            {saveMutation.isPending ? "Saving…" : "Save access"}
+          </Button>
+        </div>
+      </div>
+    </Sheet>
   );
 }
 
@@ -233,6 +350,14 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
   const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("CREATOR");
+  // Sub-admin creation (newTask.md, 8 Sep) — only reachable/relevant when
+  // role is ADMIN; starts fully-checked (a plain admin), so only sent to
+  // the server at all once something's actually been unchecked (see
+  // createMutation below) — otherwise this account is indistinguishable
+  // from an admin created before this feature existed.
+  const [permissions, setPermissions] = useState<Record<keyof Permissions, boolean>>(
+    () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true])) as Record<keyof Permissions, boolean>
+  );
   const [pages, setPages] = useState<DraftPage[]>([emptyPage()]);
   // Page creation happens after signup succeeds, one request per page — a
   // single bad handle shouldn't roll back the account that was just
@@ -272,9 +397,16 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
     setPages((prev) => prev.filter((_, i) => i !== index));
   }
 
+  const isRestrictedAdmin = role === "ADMIN" && PERMISSION_KEYS.some((k) => !permissions[k]);
+
   const createMutation = useMutation({
     mutationFn: async () => {
-      const result = await authApi.signup(token, { phoneNumber: `+91${phoneDigits}`, name: name || undefined, role });
+      const result = await authApi.signup(token, {
+        phoneNumber: `+91${phoneDigits}`,
+        name: name || undefined,
+        role,
+        permissions: isRestrictedAdmin ? permissions : undefined,
+      });
       const failures: string[] = [];
       for (const page of submittedPages) {
         try {
@@ -366,6 +498,28 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
                 ))}
               </Select>
             </Field>
+
+            {role === "ADMIN" && (
+              <div className="flex flex-col gap-3 border-t border-border pt-4">
+                <div>
+                  <p className="text-[0.8125rem] font-semibold">Access (Sub-admin)</p>
+                  <p className="text-[0.75rem] text-text-faint">
+                    Leave everything checked for a full admin. Uncheck a section to create a Sub-admin restricted to the rest.
+                  </p>
+                </div>
+                {PERMISSION_KEYS.map((key) => (
+                  <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-surface-2">
+                    <input
+                      type="checkbox"
+                      checked={permissions[key]}
+                      onChange={(e) => setPermissions((prev) => ({ ...prev, [key]: e.target.checked }))}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                    />
+                    <span className="text-[0.8125rem] text-text">{PERMISSION_LABELS[key]}</span>
+                  </label>
+                ))}
+              </div>
+            )}
 
             {requiresPage && (
               <div className="flex flex-col gap-3 border-t border-border pt-4">

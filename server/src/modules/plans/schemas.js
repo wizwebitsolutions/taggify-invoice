@@ -2,10 +2,16 @@ import { z } from "zod";
 
 // cost is optional — falls back to the page's rate card for that format,
 // same convention as a normal link submission (see links/service.js).
+// clientCost is separate and also optional (newTask.md, 8 Sep) — null
+// means "show the internal cost as-is" to the client; set it only when
+// this line is marked up/down from what the page actually earns.
+// postsPerProfile mirrors the example sheet's "Post Per Profile" column.
 export const planItemSchema = z.object({
   assetId: z.string().min(1),
   format: z.string().min(1).max(40),
   cost: z.number().min(0).optional(),
+  clientCost: z.number().min(0).optional(),
+  postsPerProfile: z.number().int().min(1).max(1000).default(1),
 });
 
 export const createPlanSchema = z.object({
@@ -13,6 +19,7 @@ export const createPlanSchema = z.object({
   clientName: z.string().min(1).max(150),
   clientContact: z.string().max(200).optional(),
   budget: z.number().positive().optional(),
+  isGstPlan: z.boolean().optional().default(false),
   items: z.array(planItemSchema).max(200).optional(),
 });
 
@@ -24,5 +31,6 @@ export const updatePlanSchema = z.object({
   clientName: z.string().min(1).max(150).optional(),
   clientContact: z.string().max(200).nullable().optional(),
   budget: z.number().positive().nullable().optional(),
+  isGstPlan: z.boolean().optional(),
   items: z.array(planItemSchema).max(200).optional(),
 });
