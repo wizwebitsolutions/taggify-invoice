@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -11,7 +11,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Field, TextField } from "@/components/ui/form-field";
-import { DownloadIcon, SearchIcon, PlusIcon, AlertIcon, CheckCircleIcon } from "@/components/icons";
+import { DownloadIcon, SearchIcon, PlusIcon, AlertIcon, CheckCircleIcon, CloseIcon, MoreIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -355,43 +355,17 @@ function InvoicesContent() {
                       <div className={cn("text-xs", isOverdue ? "font-bold text-rose" : "text-text-faint")}>
                         {isPaid ? (inv.paidAt ? `Settled ${new Date(inv.paidAt).toLocaleDateString()}` : "Settled") : isOverdue ? `Overdue · ${inv.overdueDays}d` : inv.dueDate ? `Due ${new Date(inv.dueDate).toLocaleDateString()}` : "—"}
                       </div>
-                      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5">
-                        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
-                          <Button
-                            size="sm"
-                            className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100"
-                            onClick={() => markPaidMutation.mutate(inv.id)}
-                            disabled={markPaidMutation.isPending}
-                          >
-                            Mark paid
-                          </Button>
-                        )}
-                        {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
-                          <button
-                            title="Reject invoice"
-                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-rose-soft hover:text-rose"
-                            onClick={() => setRejectingId(inv.id)}
-                          >
-                            ✕
-                          </button>
-                        )}
-                        <button
-                          title="Download links"
-                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted disabled:opacity-50"
-                          onClick={() => downloadLinksMutation.mutate(inv)}
-                          disabled={downloadLinksMutation.isPending}
-                        >
-                          <SearchIcon className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          title="Download PDF"
-                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted disabled:opacity-50"
-                          onClick={() => downloadMutation.mutate(inv)}
-                          disabled={downloadMutation.isPending}
-                        >
-                          <DownloadIcon className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
+                      <InvoiceRowActions
+                        inv={inv}
+                        canManage={canManage}
+                        onMarkPaid={() => markPaidMutation.mutate(inv.id)}
+                        onReject={() => setRejectingId(inv.id)}
+                        onDownloadPdf={() => downloadMutation.mutate(inv)}
+                        onDownloadLinks={() => downloadLinksMutation.mutate(inv)}
+                        markPaidPending={markPaidMutation.isPending}
+                        downloadPdfPending={downloadMutation.isPending}
+                        downloadLinksPending={downloadLinksMutation.isPending}
+                      />
                     </div>
                   );
                 })}
@@ -505,6 +479,127 @@ function InvoicesContent() {
         />
       )}
     </AppShell>
+  );
+}
+
+/**
+ * Desktop invoice-row actions — was 4 separate controls fighting for one
+ * 32px row (Mark paid, a reject icon-button, a download-links icon-button,
+ * a download-PDF icon-button). "Mark paid" is the one action taken
+ * constantly, so it stays a visible primary button; the other three move
+ * behind a single "more actions" trigger, closed by default.
+ */
+function InvoiceRowActions({
+  inv,
+  canManage,
+  onMarkPaid,
+  onReject,
+  onDownloadPdf,
+  onDownloadLinks,
+  markPaidPending,
+  downloadPdfPending,
+  downloadLinksPending,
+}: {
+  inv: Invoice;
+  canManage: boolean;
+  onMarkPaid: () => void;
+  onReject: () => void;
+  onDownloadPdf: () => void;
+  onDownloadLinks: () => void;
+  markPaidPending: boolean;
+  downloadPdfPending: boolean;
+  downloadLinksPending: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const canAct = canManage && inv.status !== "PAID" && inv.status !== "REJECTED";
+
+  useEffect(() => {
+    if (!open) return;
+    function onOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onOutside);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onOutside);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} onClick={(e) => e.stopPropagation()} className="relative flex items-center justify-end gap-1.5">
+      {canAct && (
+        <Button
+          size="sm"
+          className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100"
+          onClick={onMarkPaid}
+          disabled={markPaidPending}
+        >
+          Mark paid
+        </Button>
+      )}
+      <button
+        type="button"
+        title="More actions"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid={`invoice-actions-trigger-${inv.id}`}
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text-muted"
+      >
+        <MoreIcon className="h-3.5 w-3.5 rotate-90" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          data-testid={`invoice-actions-menu-${inv.id}`}
+          className="absolute right-0 top-[calc(100%+4px)] z-20 w-48 rounded-md border border-border-strong bg-surface-2 p-1 shadow-card"
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDownloadPdf();
+            }}
+            disabled={downloadPdfPending}
+            className="flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[0.8125rem] font-medium text-text-muted hover:bg-surface-hover hover:text-text disabled:opacity-50"
+          >
+            <DownloadIcon className="h-3.5 w-3.5" /> Download PDF
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDownloadLinks();
+            }}
+            disabled={downloadLinksPending}
+            className="flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[0.8125rem] font-medium text-text-muted hover:bg-surface-hover hover:text-text disabled:opacity-50"
+          >
+            <SearchIcon className="h-3.5 w-3.5" /> Download links
+          </button>
+          {canAct && (
+            <>
+              <div className="my-1 h-px bg-border" />
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onReject();
+                }}
+                className="flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[0.8125rem] font-semibold text-rose hover:bg-rose-soft"
+              >
+                <CloseIcon className="h-3.5 w-3.5" /> Reject invoice
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -723,7 +818,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
                   className="shrink-0 text-text-faint hover:text-text"
                   aria-label="Clear campaign"
                 >
-                  ✕
+                  <CloseIcon className="h-3.5 w-3.5" />
                 </button>
               </div>
             ) : (
@@ -783,6 +878,14 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
           <p className="text-[0.8125rem] text-text-faint">Select the links to bill, grouped by campaign.</p>
         </div>
 
+        {/* The whole body (banner through totals) scrolls as one region —
+            a separate inner scrollbar just for the link list (min-h-[160px]
+            + its own overflow-y-auto) meant the GST toggle/totals/Raise
+            button below it lived outside any scrollable area, so on a short
+            viewport they were pushed past the Sheet's max-h and clipped with
+            no way to reach them (reported as "preview invoice not scrolling
+            down"). One scroll region + a non-shrinking footer fixes that. */}
+        <div className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto">
         <div className="flex items-start gap-2.5 rounded-md border border-blue/25 bg-blue-soft px-3.5 py-2.5 text-[0.8125rem] text-blue">
           <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>Only links with an approved screenshot are shown — insights aren't required to invoice.</span>
@@ -805,14 +908,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
               Select all · {eligible.length} link{eligible.length === 1 ? "" : "s"}
             </label>
 
-            {/* min-h so the link list can't get squeezed to near-nothing on a
-                short viewport — step 2 now also carries the GST toggle +
-                totals card below it, competing for the same fixed modal
-                height the original single-purpose list didn't have to
-                share (found by actually driving this in a real, short
-                browser window, not just reading the JSX). */}
-            <div className="min-h-[160px] flex-1 overflow-y-auto">
-              <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-5">
                 {groups.map((group) => {
                   const groupIds = group.links.map((l) => l.id);
                   const groupAllIn = groupIds.every((id) => selected.has(id));
@@ -849,7 +945,6 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
                     </div>
                   );
                 })}
-              </div>
             </div>
 
             {/* GST choice — newTask.md #4: pick GST (auto +18%) or non-GST before raising. */}
@@ -894,6 +989,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
             </div>
           </>
         )}
+        </div>
 
         {raiseMutation.isError && (
           <ErrorNotice message={raiseMutation.error instanceof ApiError ? raiseMutation.error.message : "Couldn't raise this invoice."} />
