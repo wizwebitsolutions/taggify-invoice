@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { formatSchema } from "../../lib/formats.js";
 
 // One row from the attached sheet (newTask.md #8) — an admin's page/creator
 // list for who this campaign should be visible to. postUrl/format/cost
@@ -13,7 +14,7 @@ export const campaignAssignmentRowSchema = z
     handle: z.string().min(1).max(60),
     phone: z.string().min(1).max(20).optional(),
     postUrl: z.string().url().max(500).optional(),
-    format: z.string().min(1).max(40).optional(),
+    format: formatSchema.optional(),
     cost: z.number().min(0).optional(),
   })
   // A cost/format with no URL has nothing to attach to; requiring both

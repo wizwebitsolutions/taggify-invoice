@@ -3,6 +3,7 @@ import { ApiError } from "../../middleware/errorHandler.js";
 import { transitionLinkStatus } from "./statusTimeline.js";
 import { refreshLinkMetrics } from "../scraping/service.js";
 import { publicUrlFor } from "../../lib/cloudinaryClient.js";
+import { planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 
 export async function createLink(user, { campaignId, assetId, url, format, customAmount }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
@@ -157,7 +158,12 @@ export async function bulkImportLinks(admin, { rows }) {
 
 export async function listLinks(user, filters) {
   const where = {};
-  if (!["ADMIN", "FINANCE"].includes(user.role)) {
+  // Plan Maker: every link on their own plans' campaigns (what they need
+  // to generate per-creator invoices from a campaign page — 12 Sep);
+  // Creator/Team member: only links on pages they own.
+  if (user.role === "PLAN_MAKER") {
+    where.OR = [{ campaign: planMakerCampaignWhere(user.id) }, { asset: { ownerId: user.id } }];
+  } else if (!["ADMIN", "FINANCE"].includes(user.role)) {
     where.asset = { ownerId: user.id };
   }
   // A comma-separated status list (e.g. from the dashboard's "Links
@@ -177,7 +183,20 @@ export async function listLinks(user, filters) {
   const [items, total] = await prisma.$transaction([
     prisma.link.findMany({
       where,
-      include: { campaign: true, asset: true, screenshot: true, postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 } },
+      // asset.owner — the campaign page's per-creator invoice panel (12
+      // Sep) groups links by who gets paid and needs a name to head each
+      // group with, not just an ownerId.
+      // invoiceItem → invoice number/status: lets that same panel say "on
+      // invoice INV-…" for a link whose status and invoice row have drifted
+      // apart (a re-seeded status, a manual fix-up) instead of offering it
+      // as billable and failing on submit.
+      include: {
+        campaign: true,
+        asset: { include: { owner: { select: { id: true, name: true, phoneNumber: true } } } },
+        screenshot: true,
+        invoiceItem: { select: { invoiceId: true, invoice: { select: { invoiceNumber: true, status: true } } } },
+        postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 },
+      },
       orderBy: { createdAt: "desc" },
       skip: (filters.page - 1) * filters.pageSize,
       take: filters.pageSize,

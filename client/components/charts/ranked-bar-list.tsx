@@ -33,7 +33,7 @@ export function RankedBarList({
             onClick={onSelect ? () => onSelect(item.key) : undefined}
             className={cn(
               "grid w-full grid-cols-[104px_1fr_auto] items-center gap-3 rounded-md py-1 text-left",
-              onSelect && "cursor-pointer hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              onSelect && "cursor-pointer hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30",
               item.active && "bg-accent-soft"
             )}
           >
@@ -44,7 +44,7 @@ export function RankedBarList({
                 style={{ width: `${pct}%`, backgroundColor: item.color ?? "var(--accent)" }}
               />
             </span>
-            <span className="text-[0.8125rem] font-bold tabular-nums text-text">{formatValue(item.value)}</span>
+            <span className="text-[0.8125rem] font-semibold tabular-nums text-text">{formatValue(item.value)}</span>
           </Comp>
         );
       })}

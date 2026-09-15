@@ -151,8 +151,10 @@ test.describe("Campaign detail page", () => {
 
     await page.goto("/campaigns/view?id=camp-1");
 
-    await expect(page.getByRole("link", { name: "Phase 1" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Phase 2" })).toBeVisible();
+    // exact: the Phases card lists the same phases as "Phase N · created …" rows.
+    await expect(page.getByRole("link", { name: "Phase 1", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Phase 2", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Phase 1", exact: true })).toHaveAttribute("aria-current", "page");
   });
 
   test("Add phase creates a new phase and navigates to it", async ({ page }) => {
@@ -167,7 +169,7 @@ test.describe("Campaign detail page", () => {
     );
 
     await page.goto("/campaigns/view?id=camp-1");
-    await page.getByRole("button", { name: "+ Add phase" }).click();
+    await page.getByRole("button", { name: "Add phase" }).click();
 
     await expect(page).toHaveURL(/\/campaigns\/view\?id=camp-2$/);
     await expect(page.getByRole("heading", { name: "Launch Week — Phase 2" })).toBeVisible();

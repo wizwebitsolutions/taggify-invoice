@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
-import { requireRole } from "../../middleware/requireRole.js";
+import { requireAccess } from "../../middleware/requireAccess.js";
 import { requirePermission } from "../../middleware/requirePermission.js";
 import { validateBody } from "../../middleware/validate.js";
 import { createCampaignSchema, updateCampaignSchema, resolveAssignmentSchema, importSheetUrlSchema, createPhaseSchema } from "./schemas.js";
@@ -9,9 +9,11 @@ import * as campaignsService from "./service.js";
 const router = Router();
 router.use(requireAuth);
 
+// req.user scopes what comes back for a Plan Maker (own plans' campaigns
+// only — see lib/campaignAccess.js); every other role is unaffected.
 router.get("/", async (req, res, next) => {
   try {
-    res.json(await campaignsService.listCampaigns({ search: req.query.search }));
+    res.json(await campaignsService.listCampaigns({ search: req.query.search }, req.user));
   } catch (err) {
     next(err);
   }
@@ -20,13 +22,13 @@ router.get("/", async (req, res, next) => {
 // Full campaign detail — bugs.md #7's edit/view page.
 router.get("/:id", async (req, res, next) => {
   try {
-    res.json(await campaignsService.getCampaignById(req.params.id));
+    res.json(await campaignsService.getCampaignById(req.params.id, req.user));
   } catch (err) {
     next(err);
   }
 });
 
-router.post("/", requireRole("ADMIN"), requirePermission("campaigns.manage"), validateBody(createCampaignSchema), async (req, res, next) => {
+router.post("/", requireAccess("campaigns.manage"), validateBody(createCampaignSchema), async (req, res, next) => {
   try {
     res.status(201).json(await campaignsService.createCampaign(req.body));
   } catch (err) {
@@ -34,7 +36,7 @@ router.post("/", requireRole("ADMIN"), requirePermission("campaigns.manage"), va
   }
 });
 
-router.put("/:id", requireRole("ADMIN"), requirePermission("campaigns.manage"), validateBody(updateCampaignSchema), async (req, res, next) => {
+router.put("/:id", requireAccess("campaigns.manage"), validateBody(updateCampaignSchema), async (req, res, next) => {
   try {
     res.json(await campaignsService.updateCampaign(req.params.id, req.body));
   } catch (err) {
@@ -45,7 +47,7 @@ router.put("/:id", requireRole("ADMIN"), requirePermission("campaigns.manage"), 
 // newTask.md, 8 Sep — more posts under the same brand deal become a new
 // phase, not a brand-new campaign; :id can be any phase's id, not just the
 // root's (see createPhase).
-router.post("/:id/phases", requireRole("ADMIN"), requirePermission("campaigns.manage"), validateBody(createPhaseSchema), async (req, res, next) => {
+router.post("/:id/phases", requireAccess("campaigns.manage"), validateBody(createPhaseSchema), async (req, res, next) => {
   try {
     res.status(201).json(await campaignsService.createPhase(req.params.id, req.body));
   } catch (err) {
@@ -72,8 +74,7 @@ router.get("/:id/assignments", requirePermission("campaigns.manage"), async (req
 // Admin points a pending row at a page (one they just created, or an existing one) — newTask.md #11.
 router.put(
   "/:id/assignments/:assignmentId",
-  requireRole("ADMIN"),
-  requirePermission("campaigns.manage"),
+  requireAccess("campaigns.manage"),
   validateBody(resolveAssignmentSchema),
   async (req, res, next) => {
     try {
@@ -88,7 +89,7 @@ router.put(
 // re-uploading a CSV; used by both the New campaign assignment sheet and
 // the Import work sheet on the client, which parse the returned CSV text
 // exactly as they would a file upload.
-router.post("/import-sheet-url", requireRole("ADMIN"), requirePermission("campaigns.manage"), validateBody(importSheetUrlSchema), async (req, res, next) => {
+router.post("/import-sheet-url", requireAccess("campaigns.manage"), validateBody(importSheetUrlSchema), async (req, res, next) => {
   try {
     const csv = await campaignsService.fetchSheetCsv(req.body.url);
     res.json({ csv });

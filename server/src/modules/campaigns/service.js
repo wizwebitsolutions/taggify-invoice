@@ -1,6 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { autoAttachLink } from "../links/service.js";
+import { campaignVisibilityWhere, canPlanMakerAccessCampaign, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 
 const MAX_SHEET_BYTES = 5 * 1024 * 1024; // 5MB — plenty for a pages/work list, small enough to hold in memory
 
@@ -81,12 +82,16 @@ function annotateCampaign(campaign, campaignLinks, pendingAssignmentCount) {
  * never disagree; `postCount`/the card preview stay specific to the root's
  * own posts. `phaseCount` tells the card whether to show a "3 phases" hint.
  */
-export async function listCampaigns({ search } = {}) {
+export async function listCampaigns({ search } = {}, requester) {
+  // Search and the Plan Maker scope both use OR internally, so they go
+  // under AND rather than one clobbering the other on the same key.
+  const clauses = [];
+  if (search) clauses.push({ OR: [{ title: { contains: search, mode: "insensitive" } }, { brandName: { contains: search, mode: "insensitive" } }] });
+  const scope = campaignVisibilityWhere(requester);
+  if (Object.keys(scope).length > 0) clauses.push(scope);
+
   const roots = await prisma.campaign.findMany({
-    where: {
-      parentCampaignId: null,
-      ...(search ? { OR: [{ title: { contains: search, mode: "insensitive" } }, { brandName: { contains: search, mode: "insensitive" } }] } : {}),
-    },
+    where: { parentCampaignId: null, ...(clauses.length > 0 ? { AND: clauses } : {}) },
     orderBy: { createdAt: "desc" },
   });
   if (roots.length === 0) return roots;
@@ -145,9 +150,15 @@ export async function listCampaigns({ search } = {}) {
  * parent's budget rather than getting its own. `phases` lists the whole
  * group (including this one) so the client can render phase tabs/switcher.
  */
-export async function getCampaignById(id) {
+export async function getCampaignById(id, requester) {
   const campaign = await prisma.campaign.findUnique({ where: { id } });
   if (!campaign) throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
+  // A Plan Maker gets a 404 (not a 403) for a campaign outside their
+  // plans — same "don't confirm it exists" convention listInvoices/
+  // getInvoiceDetail use for another creator's invoice.
+  if (requester?.role === "PLAN_MAKER" && !(await canPlanMakerAccessCampaign(requester.id, id))) {
+    throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
+  }
 
   const rootId = campaign.parentCampaignId ?? campaign.id;
   const root = campaign.parentCampaignId ? (await prisma.campaign.findUnique({ where: { id: rootId } })) ?? campaign : campaign;
@@ -326,7 +337,12 @@ export async function updateCampaign(id, data) {
  */
 export async function listAssignments(campaignId, requester) {
   const where = { campaignId };
-  if (requester && !["ADMIN", "FINANCE"].includes(requester.role)) {
+  // Plan Maker sees every row of their own plans' campaigns (they need
+  // "which pages are still pending" to know what can't be invoiced yet);
+  // any other non-privileged role sees only their own matched row(s).
+  if (requester?.role === "PLAN_MAKER") {
+    where.campaign = planMakerCampaignWhere(requester.id);
+  } else if (requester && !["ADMIN", "FINANCE"].includes(requester.role)) {
     where.asset = { ownerId: requester.id };
   }
   return prisma.campaignAssignment.findMany({

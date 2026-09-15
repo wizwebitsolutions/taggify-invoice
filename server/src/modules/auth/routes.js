@@ -2,8 +2,7 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { validateBody } from "../../middleware/validate.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
-import { requireRole } from "../../middleware/requireRole.js";
-import { requirePermission } from "../../middleware/requirePermission.js";
+import { requireAccess } from "../../middleware/requireAccess.js";
 import { signupSchema, loginSchema, refreshSchema, changePasswordSchema } from "./schemas.js";
 import * as authService from "./service.js";
 
@@ -18,14 +17,15 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Admin-only — "New creators are added by an admin, no self-signup" is the
-// product's own login-page copy; this was previously reachable by anyone
-// unauthenticated, which let a caller mint themselves an ADMIN account.
+// Admin-only by default — "New creators are added by an admin, no
+// self-signup" is the product's own login-page copy; this was previously
+// reachable by anyone unauthenticated, which let a caller mint themselves
+// an ADMIN account. requireAccess("users.manage") also lets a non-admin
+// role explicitly granted that section create accounts (15 Sep).
 router.post(
   "/signup",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("users.manage"),
+  requireAccess("users.manage"),
   validateBody(signupSchema),
   async (req, res, next) => {
     try {

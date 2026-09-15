@@ -130,13 +130,13 @@ async function request<T>(
 // ── Types (fields the UI actually reads) ──────────────────────────────
 export type Role = "CREATOR" | "TEAM_MEMBER" | "ADMIN" | "FINANCE" | "PLAN_MAKER";
 
-// Sub-admin permission overlay (newTask.md, 8 Sep) — see server's
+// Per-account permission overlay (newTask.md, 8 Sep for the ADMIN sub-admin
+// case; extended 15 Sep so any role can be granted these same six sections
+// — "admin can give any user access permissions") — see server's
 // lib/permissions.js for the canonical key list. Always the *effective*
-// map (role defaults merged with any override), never the raw overlay —
-// a plain ADMIN has every key true, a restricted sub-admin has some false,
-// and every other role has every key false (their access comes from role
-// alone, not this map — see canSeeNavItem/sidebar.tsx for where a role
-// check is still the right tool).
+// map (role defaults merged with any override), never the raw overlay — a
+// plain ADMIN has every key true, a restricted sub-admin has some false,
+// and every other role has every key false unless an overlay grants one.
 export interface Permissions {
   "users.manage": boolean;
   "campaigns.manage": boolean;
@@ -144,6 +144,19 @@ export interface Permissions {
   "links.review": boolean;
   "finance.manage": boolean;
   "plans.manage": boolean;
+}
+
+/**
+ * Same rule the server's requireAccess()/getEffectivePermissions() applies:
+ * an ADMIN has `key` unless their overlay explicitly turns it off; any
+ * other role has it only if their overlay explicitly turns it on. Use this
+ * (not a bare `role === "ADMIN"` check) for any UI gate on one of the six
+ * sections above, so a granted non-admin role sees the same controls a
+ * sub-admin restricted to just that section would.
+ */
+export function hasAccess(user: { role?: Role; permissions?: Permissions } | null | undefined, key: keyof Permissions): boolean {
+  if (user?.role === "ADMIN") return user?.permissions?.[key] !== false;
+  return user?.permissions?.[key] === true;
 }
 
 export interface User {
@@ -205,7 +218,8 @@ export const PAGE_CATEGORIES = ["Meme page", "News page", "Entertainment", "Life
 // card can carry a free-form custom format too), just the starting set
 // shown in pickers. Shared between assets/page.tsx and users/page.tsx's
 // multi-page "Add user" flow.
-export const LINK_FORMATS = ["reel", "story", "carousel", "collaboration", "video"] as const;
+/** reel/story only, app-wide (user request, 14 Sep — "no other format from entire app"). Mirrors server/src/lib/formats.js. */
+export const LINK_FORMATS = ["reel", "story"] as const;
 
 export interface Asset {
   id: string;
@@ -213,12 +227,25 @@ export interface Asset {
   platform: string;
   handle: string;
   followers: number;
+  /** Instagram CDN URL, synced from Apify — re-synced every 24h. Null until the first scrape completes. */
+  profilePicUrl?: string | null;
   /** Free-form, e.g. "Meme page", "News page" — set at creation. */
   category?: string | null;
   approvalStatus: string;
   createdAt: string;
   rateCards: RateCard[];
-  engagement: { avgLikes: number | null; avgComments: number | null; avgViews: number | null; sampleSize: number };
+  /** `source: "profile"` = averaged from the profile's latest posts by the Apify scrape (no links through the app yet); absent = from this app's own link snapshots. */
+  engagement: { avgLikes: number | null; avgComments: number | null; avgViews: number | null; sampleSize: number; source?: "profile" };
+  /** When the last Instagram profile scrape succeeded — null until the first one lands (Inventory shows "Fetching from Instagram…" meanwhile). */
+  lastScrapedAt?: string | null;
+  /** Why the last profile scrape failed (private account, bad handle, Apify outage) — null once one succeeds. */
+  lastScrapeError?: string | null;
+  /** Set while a profile scrape is queued/running for this page (create, import, bulk refresh); null once it finishes. */
+  scrapeQueuedAt?: string | null;
+  /** The creator this page belongs to — Inventory's owner filter (newTask.md, 9 Sep). */
+  owner?: { id: string; name: string | null; phoneNumber: string } | null;
+  /** Every campaign this page has been assigned to, deduped — Inventory card's "campaigns they've made" (user request, 11 Sep). */
+  campaigns: { id: string; title: string; brandName: string }[];
 }
 
 export interface Campaign {
@@ -290,7 +317,17 @@ export interface PostSnapshot {
 // kept here, not redefined per-component, so the two can't drift apart.
 // Screenshot approval is the real "was the work done" gate; insights
 // (Apify metrics) are not required before a link can be invoiced.
-export const INVOICEABLE_LINK_STATUSES: Link["status"][] = ["SCREENSHOT_APPROVED", "INSIGHTS_PENDING", "INSIGHTS_APPROVED"];
+// Mirrors server/src/modules/invoices/service.js's INVOICEABLE_STATUSES: a
+// screenshot/insights are optional proof, not a gate (user request, 12 Sep)
+// — only a rejected screenshot, a broken (INVALID) link, or an already
+// INVOICED one is excluded.
+export const INVOICEABLE_LINK_STATUSES: Link["status"][] = [
+  "SUBMITTED",
+  "PENDING_SCREENSHOT_REVIEW",
+  "SCREENSHOT_APPROVED",
+  "INSIGHTS_PENDING",
+  "INSIGHTS_APPROVED",
+];
 export const INVOICEABLE_LINK_STATUSES_CSV = INVOICEABLE_LINK_STATUSES.join(",");
 
 export interface Link {
@@ -316,6 +353,8 @@ export interface Link {
   campaign?: Campaign;
   asset?: Asset;
   screenshot?: { id: string; publicId: string; approved: boolean | null; url: string | null } | null;
+  /** Present (on GET /links) when the link already sits on an invoice — even if its status hasn't caught up. */
+  invoiceItem?: { invoiceId: string; invoice?: { invoiceNumber: string; status: Invoice["status"] } } | null;
   postSnapshots?: PostSnapshot[];
 }
 
@@ -351,6 +390,14 @@ export interface Invoice {
   createdAt: string;
   overdueDays: number;
   creator?: { id: string; name: string | null; phoneNumber: string };
+  /** Set when the invoice is tied to one campaign — always for one generated from a campaign page (12 Sep), and for a creator-raised one whose links all share a campaign. */
+  campaignId?: string | null;
+  campaign?: { id: string; title: string; brandName: string } | null;
+  /** Who generated it (Admin/Plan Maker for a campaign-generated invoice; the raiser for a bulk one). Null on older rows. */
+  raisedById?: string | null;
+  raisedBy?: { id: string; name: string | null; role: string } | null;
+  /** The creator's own invoice document (PDF/image) attached to this record, if any (12 Sep). */
+  attachment?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
   items?: { id: string; amount: string; link: Link }[];
   billingProfile?: BillingProfile | null;
 }
@@ -391,6 +438,17 @@ export interface Plan {
   name: string;
   clientName: string;
   clientContact: string | null;
+  /** Client-details block (user request, 10 Sep — company/GST/address). */
+  clientCompany: string | null;
+  clientGstNumber: string | null;
+  clientAddress: string | null;
+  /** Client invoice (user request, 13 Sep) — phone collected by the "Generate invoice" popup. */
+  clientPhone: string | null;
+  /** The Taggify → client invoice number, minted on first generation and kept across regenerations. Null until generated. */
+  clientInvoiceNumber: string | null;
+  clientInvoiceAt: string | null;
+  /** Free-form brief/note, rendered as an extra bullet on the PDF's NOTES block. */
+  notes: string | null;
   budget: string | null;
   /** Whether the PDF/overview adds 18% GST on top of the client subtotal. */
   isGstPlan: boolean;
@@ -407,7 +465,9 @@ export interface Plan {
   budgetVariance: number | null;
   /** Summed avg. likes/views across the plan's distinct pages. */
   expectedEngagement: { likes: number; views: number };
-  /** Client-facing totals — matches the "CAMPAIGN OVERVIEW" block on the PDF. */
+  /** Client-facing totals — matches the "CAMPAIGN OVERVIEW" block on the PDF.
+   *  Each number reflects Step 3's override when one is set (see `internal`
+   *  below for the real computed number regardless of any override). */
   overview: {
     totalFollowers: number;
     totalPosts: number;
@@ -417,6 +477,34 @@ export interface Plan {
     gstAmount: number;
     total: number;
   };
+  /** The real numbers, ignoring any Step 3 override — what the internal PDF renders. */
+  internal: {
+    computedFollowers: number;
+    computedPosts: number;
+    computedImpressions: number;
+    computedSubtotal: number;
+    computedGstAmount: number;
+    computedTotal: number;
+  };
+  /** Step 3's editable client-facing overrides — null means "use the computed value" (see `overview` above). */
+  overrideFollowers: number | null;
+  overridePosts: number | null;
+  overrideImpressions: number | null;
+  overrideCost: string | null;
+  /** "Plan B or other plan" (user request, 10 Sep) — plans sharing this id started from one client-details/budget shell; null until "Add Plan B" is used. */
+  pitchGroupId: string | null;
+  /** "Plan A" / "Plan B" / etc — which sibling this is within its pitch group. */
+  variantLabel: string;
+  /** The generated client-facing Google Sheet link (user request, 10 Sep — "plan will be of google sheet ... generate google sheet and will provide link"). Null until generated. */
+  clientSheetUrl: string | null;
+  /** The generated internal (real-numbers) Google Sheet link — "list of plans ... option of viewing googlesheet of plan for client or internal". Null until generated. */
+  internalSheetUrl: string | null;
+  /** A pasted reference link to whoever's actual execution tracking sheet (user request, 10 Sep — "option of attaching execution sheet after plan creation"). Never fetched/parsed, just stored. */
+  executionSheetUrl: string | null;
+  /** Set once, on approval — the real Campaign created from this plan's pages (user request, 10 Sep — "on his marking all pages mentioned in the plan will get the campaign visible"). Null until approved. */
+  campaignId: string | null;
+  /** Attached invoice PDF (user request, 14 Sep — "option of attaching invoice document in pdf format as well"). Null until one is uploaded. */
+  invoiceAttachment?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
   createdBy?: { id: string; name: string | null };
 }
 
@@ -468,13 +556,120 @@ export const billing = {
 // ── Assets ──────────────────────────────────────────────────────────
 export const assets = {
   list: (token: string) => request<Asset[]>("/assets", { token }),
-  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string } = {}) =>
+  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string; rateCards?: { format: string; amount: number }[] } = {}) =>
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
   updateRateCard: (token: string, assetId: string, rateCards: { format: string; amount: number }[]) =>
     request<RateCard[]>(`/assets/${assetId}/rate-card`, { method: "PUT", token, body: { rateCards } }),
   setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
     request<Asset>(`/assets/${assetId}/approval`, { method: "PUT", token, body: { approvalStatus } }),
+  // Inventory's manual "refresh" button — re-pulls followers/name/bio/avatar
+  // from Apify right now instead of waiting for the 24h cron. Returns the
+  // bare updated row (no rateCards/engagement/owner joins, unlike list()) —
+  // callers should invalidate ["assets"] and refetch rather than read this
+  // directly.
+  // Bulk version for a selection — queues background scrapes, returns at once.
+  refreshProfiles: (token: string, assetIds: string[]) => request<{ queued: number }>("/assets/refresh-profiles", { method: "POST", token, body: { assetIds } }),
+  refreshProfile: (token: string, assetId: string) =>
+    request<{ id: string; handle: string; followers: number }>(`/assets/${assetId}/refresh-profile`, { method: "POST", token }),
+  // Inventory card's cover photo — routed through our own server instead of
+  // an <img> hotlinking cdninstagram.com directly (user report, 11 Sep: the
+  // direct link intermittently came back broken; server/src/modules/assets/
+  // service.js's fetchProfilePic explains why). No token needed: this route
+  // is deliberately public (an <img> tag can't send an Authorization header
+  // anyway, and the picture is already public on Instagram itself).
+  profilePicUrl: (assetId: string) => `${API_URL}/assets/${assetId}/profile-pic`,
+  // Inventory "Create page" / "Import pages" (user request, 14 Sep). Admin
+  // only — creator accounts a page can be registered under.
+  owners: (token: string) => request<PageOwner[]>("/assets/owners", { token }),
+  // Step 1: upload the raw .xlsx/.csv bytes, get back a per-row preview
+  // (resolved account, status, reason) without anything being created.
+  previewImport: (token: string, file: File) =>
+    requestWithFile<ImportPreview>("/assets/import/preview", token, file),
+  // Step 1, from a pasted Google Sheet share link (fetched server-side as CSV).
+  previewImportUrl: (token: string, url: string) => request<ImportPreview>("/assets/import/preview-url", { method: "POST", token, body: { url } }),
+  // Live follower counts / avg views for previewed handles (≤100 per call; one Apify run). A null entry = private/missing profile.
+  importFollowers: (token: string, handles: string[]) =>
+    request<{ profiles: Record<string, ImportScrapedProfile | null> }>("/assets/import/followers", { method: "POST", token, body: { handles } }),
+  // Step 2: create exactly the rows the admin confirmed.
+  import: (token: string, rows: ImportAssetRow[]) =>
+    request<ImportResult>("/assets/import", { method: "POST", token, body: { rows } }),
 };
+
+export interface PageOwner {
+  id: string;
+  name: string | null;
+  phoneNumber: string;
+  email?: string | null;
+}
+
+export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "conflict" | "owner-missing" | "owner-unknown";
+
+export interface ImportPreviewRow {
+  rowNumber: number;
+  rawHandle: string;
+  handle: string | null;
+  category: string | null;
+  followers: number | null;
+  rateCards: { format: string; amount: number }[];
+  /** What the sheet's owner cell said, verbatim. */
+  ownerRef: string | null;
+  /** The account this row resolved to (or already lives under, for "exists"). */
+  owner: { id: string; name: string | null; phoneNumber: string } | null;
+  ownerId: string | null;
+  status: ImportRowStatus;
+  reason: string | null;
+}
+
+export interface ImportPreview {
+  rows: ImportPreviewRow[];
+  summary: Partial<Record<ImportRowStatus, number>>;
+  totalRows: number;
+  hasOwnerColumn: boolean;
+  owners: PageOwner[];
+}
+
+export interface ImportScrapedProfile {
+  followers: number;
+  avgViews: number | null;
+  avgLikes: number | null;
+  avgComments: number | null;
+  fullName: string | null;
+}
+
+export interface ImportAssetRow {
+  handle: string;
+  ownerId: string;
+  category?: string | null;
+  followers?: number | null;
+  rateCards?: { format: string; amount: number }[];
+}
+
+export interface ImportResult {
+  created: { id: string; handle: string; ownerId: string; owner: { id: string; name: string | null; phoneNumber: string } }[];
+  skipped: { handle: string; reason: string }[];
+}
+
+/** POSTs a file's raw bytes (not JSON) — same auth/error conventions as request(), including the one-shot refresh on 401. */
+async function requestWithFile<T>(path: string, token: string, file: File, _isRetry = false): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-File-Name": encodeURIComponent(file.name),
+      Authorization: `Bearer ${token}`,
+    },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401 && !_isRetry) {
+      const freshToken = await refreshAccessToken();
+      if (freshToken) return requestWithFile<T>(path, freshToken, file, true);
+    }
+    throw new ApiError(res.status, data?.error?.code ?? "UNKNOWN", data?.error?.message ?? res.statusText);
+  }
+  return data as T;
+}
 
 // ── Campaigns ───────────────────────────────────────────────────────
 export const campaigns = {
@@ -589,8 +784,12 @@ export const screenshots = {
 
 // ── Invoices ────────────────────────────────────────────────────────
 export const invoices = {
-  list: (token: string, params: { status?: string; paymentStatus?: string; search?: string; page?: number; pageSize?: number } = {}) => {
+  list: (
+    token: string,
+    params: { campaignId?: string; status?: string; paymentStatus?: string; search?: string; page?: number; pageSize?: number } = {}
+  ) => {
     const qs = new URLSearchParams();
+    if (params.campaignId) qs.set("campaignId", params.campaignId);
     if (params.status) qs.set("status", params.status);
     if (params.paymentStatus) qs.set("paymentStatus", params.paymentStatus);
     if (params.search) qs.set("search", params.search);
@@ -600,6 +799,19 @@ export const invoices = {
   },
   bulkCreate: (token: string, linkIds: string[], dueInDays = 15, isGstInvoice = false) =>
     request<Invoice>("/invoices/bulk", { method: "POST", token, body: { linkIds, dueInDays, isGstInvoice } }),
+  // Attached invoice document (12 Sep) — same two-step direct-to-Cloudinary
+  // upload as screenshots: mint a signed upload, PUT the bytes there, confirm.
+  requestAttachmentUpload: (token: string, invoiceId: string) =>
+    request<{ uploadUrl: string; apiKey: string; timestamp: number; signature: string; publicId: string }>(`/invoices/${invoiceId}/attachment/upload-url`, {
+      method: "POST",
+      token,
+    }),
+  confirmAttachment: (token: string, invoiceId: string, publicId: string, fileName: string) =>
+    request<NonNullable<Invoice["attachment"]>>(`/invoices/${invoiceId}/attachment`, { method: "POST", token, body: { publicId, fileName } }),
+  removeAttachment: (token: string, invoiceId: string) => request<void>(`/invoices/${invoiceId}/attachment`, { method: "DELETE", token }),
+  // Admin sign-off, RAISED → APPROVED (Finance then marks paid).
+  approve: (token: string, invoiceId: string) =>
+    request<Invoice>(`/invoices/${invoiceId}/approve`, { method: "POST", token }),
   markPaid: (token: string, invoiceId: string) =>
     request<Invoice>(`/invoices/${invoiceId}/mark-paid`, { method: "POST", token }),
   reject: (token: string, invoiceId: string, remarks: string) =>
@@ -694,40 +906,141 @@ export interface PlanItemInput {
   postsPerProfile?: number;
 }
 
+// One field set shared by create/update — every field beyond name/clientName
+// is optional, matching the wizard's "fill what you have, come back later"
+// shape (see the Plans list's completeness indicator).
+export interface PlanFields {
+  name: string;
+  clientName: string;
+  clientContact?: string;
+  clientCompany?: string;
+  clientGstNumber?: string;
+  clientAddress?: string;
+  notes?: string;
+  budget?: number;
+  isGstPlan?: boolean;
+  items?: PlanItemInput[];
+  overrideFollowers?: number | null;
+  overridePosts?: number | null;
+  overrideImpressions?: number | null;
+  overrideCost?: number | null;
+}
+
+export interface SheetImportResult {
+  matchedCount: number;
+  createdCount: number;
+  addedCount: number;
+  failures: { handle: string; reason: string }[];
+  plan: Plan;
+}
+
+async function downloadBinary(url: string, token: string, filename: string) {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data?.error?.code ?? "UNKNOWN", data?.error?.message ?? res.statusText);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+export interface ClientInvoiceDetails {
+  clientCompany: string;
+  clientGstNumber?: string;
+  clientAddress: string;
+  clientPhone?: string;
+}
+
 export const plans = {
   list: (token: string) => request<Plan[]>("/plans", { token }),
   get: (token: string, id: string) => request<Plan>(`/plans/${id}`, { token }),
-  create: (
-    token: string,
-    body: { name: string; clientName: string; clientContact?: string; budget?: number; isGstPlan?: boolean; items?: PlanItemInput[] }
-  ) => request<Plan>("/plans", { method: "POST", token, body }),
+  create: (token: string, body: PlanFields) => request<Plan>("/plans", { method: "POST", token, body }),
+  // Every clearable text/number field accepts null here (server's
+  // updatePlanSchema is the nullable one) — Omit+override rather than a
+  // plain `&` intersection with PlanFields, since intersecting two
+  // property types narrows to their overlap (`string` only, dropping both
+  // `null` and `undefined`) instead of replacing the type outright.
   update: (
     token: string,
     id: string,
-    body: Partial<{ name: string; clientName: string; clientContact: string | null; budget: number | null; isGstPlan: boolean; items: PlanItemInput[] }>
+    body: Partial<
+      Omit<PlanFields, "clientContact" | "clientCompany" | "clientGstNumber" | "clientAddress" | "budget" | "notes"> & {
+        clientContact: string | null;
+        clientCompany: string | null;
+        clientGstNumber: string | null;
+        clientAddress: string | null;
+        budget: number | null;
+        notes: string | null;
+        executionSheetUrl: string | null;
+      }
+    >
   ) => request<Plan>(`/plans/${id}`, { method: "PUT", token, body }),
   remove: (token: string, id: string) => request<void>(`/plans/${id}`, { method: "DELETE", token }),
-  // Approval workflow (newTask.md, 8 Sep) — submit moves DRAFT → PENDING_APPROVAL;
-  // approve/reject only work from PENDING_APPROVAL. Server enforces who can
-  // call which: Admin on any plan, Plan Maker only on their own.
-  submit: (token: string, id: string) => request<Plan>(`/plans/${id}/submit`, { method: "POST", token }),
+  // Approval workflow (user request, 11 Sep — "remove option of submit for
+  // approval, plan maker or admin can approve plan by themselves only"):
+  // approve/reject act directly on a DRAFT plan, no submit step first.
+  // Server enforces who can call which: Admin on any plan, Plan Maker only
+  // on their own.
   approve: (token: string, id: string) => request<Plan>(`/plans/${id}/approve`, { method: "POST", token }),
   reject: (token: string, id: string) => request<Plan>(`/plans/${id}/reject`, { method: "POST", token }),
-  // Binary response, same pattern as invoices.downloadPdf.
-  downloadPdf: async (token: string, id: string, name?: string) => {
-    const res = await fetch(`${API_URL}/plans/${id}/pdf`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, data?.error?.code ?? "UNKNOWN", data?.error?.message ?? res.statusText);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${name ?? id}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  },
+  // Same pattern as campaigns.importSheetUrl — fetches a pasted Google
+  // Sheet link server-side, returns its CSV text to parse client-side.
+  // Client invoice (user request, 13 Sep — "on clicking generate invoice,
+  // it'll ask for client details like gst, company address, phone number"):
+  // the popup posts the details, the plan comes back with a
+  // clientInvoiceNumber, then the PDF is fetched with the auth header and
+  // handed to the browser as a download (same pattern as invoices.downloadPdf).
+  generateClientInvoice: (token: string, id: string, body: ClientInvoiceDetails) =>
+    request<Plan>(`/plans/${id}/client-invoice`, { method: "POST", token, body }),
+  downloadClientInvoicePdf: (token: string, id: string, invoiceNumber?: string | null) =>
+    downloadBinary(`${API_URL}/plans/${id}/client-invoice.pdf`, token, `${invoiceNumber ?? id}.pdf`),
+  // Attached invoice PDF (user request, 14 Sep) — same signed direct-to-
+  // Cloudinary two-step as invoices.requestAttachmentUpload/confirmAttachment.
+  requestInvoiceAttachmentUpload: (token: string, id: string) =>
+    request<{ uploadUrl: string; apiKey: string; timestamp: number; signature: string; publicId: string }>(`/plans/${id}/invoice-attachment/upload-url`, {
+      method: "POST",
+      token,
+    }),
+  confirmInvoiceAttachment: (token: string, id: string, publicId: string, fileName: string) =>
+    request<NonNullable<Plan["invoiceAttachment"]>>(`/plans/${id}/invoice-attachment`, { method: "POST", token, body: { publicId, fileName } }),
+  removeInvoiceAttachment: (token: string, id: string) => request<void>(`/plans/${id}/invoice-attachment`, { method: "DELETE", token }),
+  importSheetUrl: (token: string, url: string) => request<{ csv: string }>("/plans/import-sheet-url", { method: "POST", token, body: { url } }),
+  importSheetPages: (token: string, id: string, rows: { handle: string; category?: string; followers?: number; format?: string; cost?: number; postsPerProfile?: number }[]) =>
+    request<SheetImportResult>(`/plans/${id}/import-sheet-pages`, { method: "POST", token, body: { rows } }),
+  // The plan's deliverable (user request, 10 Sep — "plan will be of google
+  // sheet, not in pdf, it'll generate google sheet and will provide link"),
+  // superseding the PDF downloads below as the primary Build-step action.
+  generateSheet: (token: string, id: string, variant?: "client" | "internal") =>
+    request<{ spreadsheetUrl: string }>(`/plans/${id}/sheet${variant === "internal" ? "?variant=internal" : ""}`, { method: "POST", token }),
+  // The downloadable sample (user request, 10 Sep — "give downloadable
+  // sample template for google sheet so they'll know how their execution
+  // should look like") — one fixed document, not scoped to any plan.
+  getExecutionSheetTemplate: (token: string) => request<{ spreadsheetUrl: string }>("/plans/execution-sheet-template", { method: "POST", token }),
+  // The same sample as plain data, for an in-app preview table (user
+  // request, 11 Sep — "show in preview" before pasting an execution sheet
+  // link) — no Google account needed, unlike the live download above.
+  previewExecutionSheetTemplate: (token: string) =>
+    request<{ title: string; headers: string[]; rows: (string | number)[][]; totalsRow: (string | number)[]; linkColumns: number[] }>(
+      "/plans/execution-sheet-template/preview",
+      { token }
+    ),
+  // PDF export — kept as a secondary option (server-side unchanged and
+  // still fully working) now that the Google Sheet above is primary.
+  // variant: "internal" gets the real-numbers PDF instead of the
+  // client-facing one — same endpoint, a query param apart.
+  downloadPdf: (token: string, id: string, name?: string, variant?: "client" | "internal") =>
+    downloadBinary(`${API_URL}/plans/${id}/pdf${variant === "internal" ? "?variant=internal" : ""}`, token, `${name ?? id}${variant === "internal" ? "-internal" : ""}.pdf`),
+  downloadGroupPdf: (token: string, pitchGroupId: string, name?: string, variant?: "client" | "internal") =>
+    downloadBinary(
+      `${API_URL}/plans/group/${pitchGroupId}/pdf${variant === "internal" ? "?variant=internal" : ""}`,
+      token,
+      `${name ?? "plan-group"}${variant === "internal" ? "-internal" : ""}.pdf`
+    ),
 };

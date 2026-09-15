@@ -1,9 +1,7 @@
 import { z } from "zod";
 
-// Free-form format string (not a fixed enum) — mirrors RateCard.format so an
-// asset can carry custom format names (e.g. "VOXPOP") the way WLDD's rate
-// cards do, not just the original reel/story/carousel/collaboration/video set.
-const formatSchema = z.string().min(1).max(40);
+// reel/story only (14 Sep) — see lib/formats.js.
+import { formatSchema } from "../../lib/formats.js";
 
 export const createLinkSchema = z.object({
   campaignId: z.string().min(1),

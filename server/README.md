@@ -29,11 +29,30 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
 
 - `auth` — signup/login/refresh/logout
 - `users` — profile, team membership (Creator ↔ Team Member)
-- `assets` — social profile registry + rate cards
+- `assets` — social profile registry + rate cards. Admin-only Inventory
+  onboarding (14 Sep): `GET /assets/owners` (creator accounts a page can sit
+  under), `POST /assets/import/preview` (raw .xlsx/.csv bytes in the body,
+  original name in `X-File-Name`; returns a per-row preview with the resolved
+  account and status — nothing written), `POST /assets/import/preview-url`
+  (`{ url }` of a link-shared Google Sheet, fetched server-side as CSV, same
+  preview), `POST /assets/import/followers` (`{ handles }` ≤100 — one Apify
+  run per 25 handles for live followers/avg views shown in the preview; a
+  handle whose run didn't finish is omitted = unknown, `null` = not on
+  Instagram; cached 30 min so the confirm stores them instead of re-scraping) and `POST /assets/import` (creates the
+  confirmed rows; re-validated server-side, skipped rows come back with reasons).
+  A page an ADMIN creates or imports is `approved` immediately (the approval
+  queue is for creator-added pages); `POST /assets` also accepts an optional
+  `rateCards` array. Every profile scrape stores `profileAvg*` engagement from
+  the profile's latest posts plus `lastScrapedAt` / `lastScrapeError`;
+  `scrapeQueuedAt` is set while a scrape is queued/running (create, import,
+  `POST /assets/refresh-profiles { assetIds }` — the bulk "Refresh from
+  Instagram" for a selection, background, one page at a time).
 - `campaigns` — brand campaigns
 - `links` — post link submission, status machine, timeline
 - `screenshots` — Cloudinary signed upload flow, mounted at `/links/:linkId/screenshot`
-- `invoices` — bulk invoice generation, manual mark-paid, GST status
+- `invoices` — creator-raised invoices (`POST /invoices/bulk`, CREATOR only), admin approve, manual mark-paid, GST status
+- `plans` also owns the Taggify → client invoice: `POST /plans/:id/client-invoice` (client details from the popup) and `GET /plans/:id/client-invoice.pdf`
+- `plans` also keeps an attached invoice PDF per plan (Admin / Plan Maker, 14 Sep): `POST /plans/:id/invoice-attachment/upload-url` → direct Cloudinary upload → `POST /plans/:id/invoice-attachment` (`{ publicId, fileName }`, `.pdf` names only) / `DELETE /plans/:id/invoice-attachment`; surfaced as `plan.invoiceAttachment`
 - `notifications` — in-app notification rows (polled, no pub/sub)
 - `scraping` — Apify Instagram provider wrapper
 - `jobs` — node-cron registrations + `JobRun` tracking table (substitute for queue observability)

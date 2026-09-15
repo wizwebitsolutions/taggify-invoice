@@ -7,13 +7,51 @@
 body {
   background: var(--bg);
   color: var(--text);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Instrument Serif italic — the one display accent in the system. Used on
+   a word or two of a greeting/hero line, never on body copy. */
+.serif {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* Page reveal — every direct child of a `.page-stagger` container fades
+   up in sequence. Applied by AppShell's content pane so each screen gets
+   the same entrance without per-page wiring. Removed under reduced motion. */
+.page-stagger > * {
+  animation: reveal-up 0.55s var(--ease) both;
+}
+.page-stagger > :nth-child(1) { animation-delay: 0.02s; }
+.page-stagger > :nth-child(2) { animation-delay: 0.08s; }
+.page-stagger > :nth-child(3) { animation-delay: 0.14s; }
+.page-stagger > :nth-child(4) { animation-delay: 0.2s; }
+.page-stagger > :nth-child(5) { animation-delay: 0.26s; }
+.page-stagger > :nth-child(6) { animation-delay: 0.32s; }
+.page-stagger > :nth-child(n + 7) { animation-delay: 0.38s; }
+
+@keyframes reveal-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-stagger > *,
+  .animate-reveal-up,
+  .animate-reveal-pop,
+  .animate-grow-x,
+  .animate-grow-y,
+  .animate-ping {
+    animation: none !important;
+  }
 }
 
 /* Applied for ~260ms by lib/theme-context.tsx while a theme swap is in
-   flight, so surfaces/borders/text cross-fade instead of flashing. Scoped
-   to this class (not a blanket `*` rule) so it doesn't fight the
-   `transition-colors` hover states components already carry the rest of
-   the time. */
+   flight, so surfaces/borders/text cross-fade instead of flashing. */
 .theme-transition,
 .theme-transition * {
   transition:
@@ -23,66 +61,30 @@ body {
     box-shadow 200ms ease !important;
 }
 
-/* Ambient glow blobs — two large blurred, low-opacity accent-colored
-   circles that drift slowly behind the app shell (AppShell renders the
-   elements; see components/layout/app-shell.tsx). Same trick used on the
-   login page's static radial-gradient background, made to move. Frozen
-   under prefers-reduced-motion instead of removed, since the blobs are
-   also just a static bit of color at rest. */
-.glow-blob {
-  position: absolute;
-  border-radius: 9999px;
-  filter: blur(70px);
-  pointer-events: none;
-  z-index: 0;
+/* Number inputs: no spinner arrows anywhere (the wheel guard in
+   app/providers.tsx stops scroll-to-change too). */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
-.glow-blob-a {
-  animation: glow-float-a 18s ease-in-out infinite alternate;
-}
-.glow-blob-b {
-  animation: glow-float-b 22s ease-in-out infinite alternate;
-}
-@keyframes glow-float-a {
-  from {
-    transform: translate(0, 0) scale(1);
-  }
-  to {
-    transform: translate(40px, 30px) scale(1.15);
-  }
-}
-@keyframes glow-float-b {
-  from {
-    transform: translate(0, 0) scale(1);
-  }
-  to {
-    transform: translate(-30px, -35px) scale(1.1);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .glow-blob-a,
-  .glow-blob-b {
-    animation: none;
-  }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
-/* Scrollable regions that should still scroll (wheel/touch/keyboard) but
-   not show a visible scrollbar track — e.g. the sidebar nav column. */
+/* Scrollable regions that should still scroll but not show a scrollbar. */
 .no-scrollbar {
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* old Edge/IE */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 .no-scrollbar::-webkit-scrollbar {
-  display: none; /* Chrome/Safari/new Edge */
+  display: none;
 }
 
-/* App-wide scrollbar skin — every other scrollable region (main content
-   area, modals, tables, ...) keeps a visible-but-quiet scrollbar instead
-   of the browser default: slim, transparent track, a pill thumb in the
-   border color that darkens/lightens on hover. Lower specificity than
-   `.no-scrollbar` above, which still wins where a scrollbar should be
-   hidden entirely (the sidebar). */
+/* App-wide scrollbar skin — slim, transparent track, quiet thumb. */
 * {
-  scrollbar-width: thin; /* Firefox */
+  scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
 *::-webkit-scrollbar {
@@ -102,14 +104,12 @@ body {
   background-color: var(--text-faint);
 }
 
-/* Chrome/Safari paint autofilled inputs with a light background by
-   default, which breaks the dark theme — override it to match. */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
   -webkit-text-fill-color: var(--text);
-  -webkit-box-shadow: 0 0 0 1000px var(--surface-2) inset;
-  box-shadow: 0 0 0 1000px var(--surface-2) inset;
+  -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+  box-shadow: 0 0 0 1000px var(--surface) inset;
   caret-color: var(--text);
   transition: background-color 999999s ease-in-out 0s;
 }

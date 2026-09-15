@@ -28,7 +28,7 @@ export function CategoryPicker({ value, onChange, className }: { value: string; 
             }}
             className={cn(
               "rounded-full border px-2.5 py-1 text-[0.75rem] font-semibold transition-colors",
-              value === c ? "border-accent bg-accent-soft text-accent" : "border-border text-text-muted hover:bg-surface-2"
+              value === c ? "border-ink bg-surface-2 text-text" : "border-border text-text-muted hover:bg-surface-2"
             )}
           >
             {c}
@@ -39,7 +39,7 @@ export function CategoryPicker({ value, onChange, className }: { value: string; 
           onClick={() => setShowCustom(true)}
           className={cn(
             "rounded-full border px-2.5 py-1 text-[0.75rem] font-semibold transition-colors",
-            showCustom ? "border-accent bg-accent-soft text-accent" : "border-border text-text-muted hover:bg-surface-2"
+            showCustom ? "border-ink bg-surface-2 text-text" : "border-border text-text-muted hover:bg-surface-2"
           )}
         >
           Custom…
@@ -51,7 +51,7 @@ export function CategoryPicker({ value, onChange, className }: { value: string; 
           value={PAGE_CATEGORIES.includes(value) ? "" : value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Category name…"
-          className="h-8 w-full rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="h-8 w-full rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
         />
       )}
     </div>

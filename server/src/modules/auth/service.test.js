@@ -115,11 +115,51 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
     expect(mockPrisma.user.create).not.toHaveBeenCalled();
   });
 
-  it("ignores a permissions payload for any role other than ADMIN", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(null);
+  it("stores nothing for a non-ADMIN role when the payload only restates that role's own false baseline", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
     mockPrisma.user.create.mockResolvedValue({ id: "pm-1", phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", whatsappVerified: false });
 
     await signup({ phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", permissions: { "plans.manage": false } }, actor);
+
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ permissions: undefined }) }));
+    expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("grants a non-ADMIN role one of the six sections (15 Sep — admin can give any user access permissions)", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
+    mockPrisma.user.create.mockResolvedValue({
+      id: "tm-1",
+      phoneNumber: "+918888888887",
+      name: "Teammate",
+      role: "TEAM_MEMBER",
+      whatsappVerified: false,
+      permissions: { "inventory.manage": true },
+    });
+
+    const result = await signup(
+      { phoneNumber: "+918888888887", name: "Teammate", role: "TEAM_MEMBER", permissions: { "inventory.manage": true } },
+      actor
+    );
+
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ permissions: { "inventory.manage": true } }) })
+    );
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ after: { "inventory.manage": true } }) })
+    );
+    expect(result.user.permissions["inventory.manage"]).toBe(true);
+    expect(result.user.permissions["campaigns.manage"]).toBe(false);
+  });
+
+  it("a restricted actor can't grant a non-ADMIN role a section they don't hold themselves", async () => {
+    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "inventory.manage": false } };
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(restrictedActor);
+    mockPrisma.user.create.mockResolvedValue({ id: "tm-1", phoneNumber: "+918888888886", name: "Teammate", role: "TEAM_MEMBER", whatsappVerified: false });
+
+    await signup(
+      { phoneNumber: "+918888888886", name: "Teammate", role: "TEAM_MEMBER", permissions: { "inventory.manage": true } },
+      restrictedActor
+    );
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ permissions: undefined }) }));
     expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();

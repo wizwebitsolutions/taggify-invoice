@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
-import { requirePermission } from "../../middleware/requirePermission.js";
+import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import {
   createLinkSchema,
@@ -33,7 +33,7 @@ router.post("/bulk", requireRole("CREATOR", "TEAM_MEMBER"), validateBody(bulkCre
   }
 });
 
-router.post("/bulk-import", requireRole("ADMIN"), requirePermission("links.review"), validateBody(bulkImportLinksSchema), async (req, res, next) => {
+router.post("/bulk-import", requireAccess("links.review"), validateBody(bulkImportLinksSchema), async (req, res, next) => {
   try {
     res.status(201).json(await linksService.bulkImportLinks(req.user, req.body));
   } catch (err) {
@@ -57,7 +57,7 @@ router.get("/:id/timeline", async (req, res, next) => {
   }
 });
 
-router.post("/:id/review-screenshot", requireRole("ADMIN"), requirePermission("links.review"), validateBody(reviewScreenshotSchema), async (req, res, next) => {
+router.post("/:id/review-screenshot", requireAccess("links.review"), validateBody(reviewScreenshotSchema), async (req, res, next) => {
   try {
     res.json(await linksService.reviewScreenshot(req.params.id, req.user, req.body));
   } catch (err) {
@@ -65,7 +65,7 @@ router.post("/:id/review-screenshot", requireRole("ADMIN"), requirePermission("l
   }
 });
 
-router.post("/:id/refresh-metrics", requireRole("ADMIN"), requirePermission("links.review"), async (req, res, next) => {
+router.post("/:id/refresh-metrics", requireAccess("links.review"), async (req, res, next) => {
   try {
     res.json(await linksService.refreshMetricsNow(req.params.id, req.user));
   } catch (err) {
@@ -73,7 +73,7 @@ router.post("/:id/refresh-metrics", requireRole("ADMIN"), requirePermission("lin
   }
 });
 
-router.post("/:id/approve-insights", requireRole("ADMIN"), requirePermission("links.review"), async (req, res, next) => {
+router.post("/:id/approve-insights", requireAccess("links.review"), async (req, res, next) => {
   try {
     res.json(await linksService.approveInsights(req.params.id, req.user));
   } catch (err) {
@@ -81,7 +81,7 @@ router.post("/:id/approve-insights", requireRole("ADMIN"), requirePermission("li
   }
 });
 
-router.put("/:id/cost", requireRole("ADMIN"), requirePermission("links.review"), validateBody(reviseCostSchema), async (req, res, next) => {
+router.put("/:id/cost", requireAccess("links.review"), validateBody(reviseCostSchema), async (req, res, next) => {
   try {
     res.json(await linksService.reviseLinkCost(req.params.id, req.user, req.body));
   } catch (err) {
@@ -89,7 +89,7 @@ router.put("/:id/cost", requireRole("ADMIN"), requirePermission("links.review"),
   }
 });
 
-router.post("/:id/mark-invalid", requireRole("ADMIN"), requirePermission("links.review"), validateBody(markInvalidSchema), async (req, res, next) => {
+router.post("/:id/mark-invalid", requireAccess("links.review"), validateBody(markInvalidSchema), async (req, res, next) => {
   try {
     res.json(await linksService.markLinkInvalid(req.params.id, req.user, req.body));
   } catch (err) {
@@ -97,7 +97,7 @@ router.post("/:id/mark-invalid", requireRole("ADMIN"), requirePermission("links.
   }
 });
 
-router.get("/:id/cost-revisions", requireRole("ADMIN"), requirePermission("links.review"), async (req, res, next) => {
+router.get("/:id/cost-revisions", requireAccess("links.review"), async (req, res, next) => {
   try {
     res.json(await linksService.getLinkCostRevisions(req.params.id));
   } catch (err) {

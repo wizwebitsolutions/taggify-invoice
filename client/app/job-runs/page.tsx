@@ -78,9 +78,9 @@ function JobRunsContent() {
     >
       <div className="flex flex-col gap-7">
         <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Admin</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">Job runs</h1>
-          <p className="text-[0.9375rem] text-text-muted">
+          <p className="mb-1 text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Admin</p>
+          <h1 className="mb-1 text-[1.5rem] font-semibold leading-tight tracking-[-0.03em] md:text-[1.625rem]">Job runs</h1>
+          <p className="max-w-[56ch] text-[0.875rem] text-text-muted">
             node-cron execution history — the substitute for a job queue&apos;s built-in observability.
           </p>
         </div>
@@ -125,7 +125,7 @@ function JobRunsContent() {
 
         {!isAdmin ? (
           <div className="rounded-lg border border-border bg-surface p-8 text-center shadow-card">
-            <p className="text-[0.9375rem] text-text-muted">Job run history is available to Admin accounts.</p>
+            <p className="max-w-[56ch] text-[0.875rem] text-text-muted">Job run history is available to Admin accounts.</p>
           </div>
         ) : jobRunsQuery.isLoading ? (
           <div className="rounded-lg border border-border bg-surface shadow-card">
@@ -153,7 +153,7 @@ function JobRunsContent() {
                   <ClockIcon className="h-4 w-4 shrink-0 text-text-faint" />
                   <span className="truncate text-[0.8438rem] font-semibold">{run.jobName}</span>
                 </div>
-                <span className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-[0.6875rem] font-bold ${pillClass(JOB_STATUS_TONE[run.status] ?? "blue")}`}>
+                <span className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold ${pillClass(JOB_STATUS_TONE[run.status] ?? "blue")}`}>
                   {run.status}
                 </span>
                 <span className="text-[0.8125rem] text-text-faint">{new Date(run.startedAt).toLocaleString()}</span>
@@ -169,7 +169,7 @@ function JobRunsContent() {
 }
 
 function Th({ children }: { children: ReactNode }) {
-  return <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">{children}</div>;
+  return <div className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">{children}</div>;
 }
 
 function pillClass(tone: "emerald" | "rose" | "blue") {

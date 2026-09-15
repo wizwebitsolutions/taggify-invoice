@@ -5,9 +5,11 @@ import { signIn, mockApi, API_URL } from "./fixtures";
 /**
  * newTask.md #13 / 8 Sep — "inventory tab -> all pages, listed category
  * wise, selection of pages, option of create a plan": pages picked directly
- * on the Pages grid (not from inside the plan form) carry straight into a
- * new plan's page list once "Create plan" is clicked, via
- * app/inventory/page.tsx's selectedAssetIds/pendingPlanAssetIds state.
+ * on the Pages grid carry into a new plan's page list once "Create plan" is
+ * clicked. Plans moved to its own /plans nav tab (newTask.md, 9 Sep), so
+ * the hand-off is now a route param (?assetIds=...) rather than in-page
+ * state — app/inventory/page.tsx's onCreatePlanFromSelection navigates
+ * there, and app/plans/page.tsx consumes it once on mount.
  */
 function testAssets() {
   return [
@@ -45,7 +47,6 @@ test.describe("Inventory — select pages, then create a plan from the selection
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: testAssets() }));
-    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [] }));
 
     await page.goto("/inventory");
     await expect(page.getByRole("checkbox", { name: "Select @daily.news.test for a plan" })).toBeVisible();
@@ -62,7 +63,6 @@ test.describe("Inventory — select pages, then create a plan from the selection
     await signIn(page, "PLAN_MAKER");
     await mockApi(page);
     await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: testAssets() }));
-    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [] }));
 
     await page.goto("/inventory");
     await expect(page.getByRole("checkbox", { name: "Select @daily.news.test for a plan" })).toBeVisible();
@@ -82,7 +82,6 @@ test.describe("Inventory — select pages, then create a plan from the selection
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: testAssets() }));
-    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [] }));
 
     await page.goto("/inventory");
     await page.getByRole("checkbox", { name: "Select @daily.news.test for a plan" }).check();
@@ -93,47 +92,68 @@ test.describe("Inventory — select pages, then create a plan from the selection
     await expect(page.getByRole("checkbox", { name: "Select @daily.news.test for a plan" })).not.toBeChecked();
   });
 
-  test("Create plan switches to the Plans tab and pre-fills the new plan with the selected pages", async ({ page }) => {
+  test("Create plan navigates to /plans with the selection, which opens New plan at Step 1, pages pre-filled once Step 2 is reached", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: testAssets() }));
-    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [] }));
+    await page.route(`${API_URL}/plans`, (route) => {
+      if (route.request().method() === "POST") return route.fulfill({ status: 201, json: { id: "plan-new", variantLabel: "Plan A", items: [] } });
+      return route.fulfill({ json: [] });
+    });
 
     await page.goto("/inventory");
     await page.getByRole("checkbox", { name: "Select @daily.news.test for a plan" }).check();
     await page.getByRole("checkbox", { name: "Select @meme.central.test for a plan" }).check();
     await page.getByRole("button", { name: "Create plan" }).click();
 
-    // Switched to the Plans tab underneath, and the New plan modal opened.
+    await expect(page).toHaveURL(/\/plans(\?|$)/);
     await expect(page.getByRole("heading", { name: "New plan" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Plans", exact: true })).toHaveClass(/bg-accent-soft/);
+    // Multi-step now (user request, 10 Sep — "not everything at one time
+    // ui"): Step 1 is Basics only, nothing about pages yet.
+    await expect(page.getByRole("textbox", { name: "Plan name" })).toBeVisible();
+    await expect(page.getByRole("combobox")).toHaveCount(0);
 
-    // Both selected pages are already checked in the modal's own picker,
-    // each defaulted to its page's only rate-card format — asserted as a
-    // set (not scoped per-row) since the two <select>s are the only
-    // comboboxes this modal renders.
+    // The ?assetIds= param is consumed once, then stripped — a refresh
+    // shouldn't reopen the wizard with the same stale selection later.
+    await expect(page).toHaveURL(/\/plans$/);
+
+    await page.getByRole("textbox", { name: "Plan name" }).fill("Q1 Push");
+    await page.getByRole("textbox", { name: "Client name" }).fill("Acme");
+    await page.getByRole("textbox", { name: "Brief" }).fill("Launch week push"); // mandatory since 14 Sep
+    await page.getByRole("button", { name: "Next: Budget & pages" }).click();
+
+    // Step 2 — both selected pages already checked, each defaulted to its
+    // page's only rate-card format, and a running total reflecting both
+    // rate cards (15000 + 8000).
+    await expect(page.getByRole("checkbox", { name: /daily\.news\.test/ })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: /meme\.central\.test/ })).toBeChecked();
     const formatValues = await page.getByRole("combobox").evaluateAll((els) => els.map((el) => (el as HTMLSelectElement).value));
     expect(formatValues.sort()).toEqual(["reel", "story"]);
-
-    // Cost totals reflect both pages' rate cards: 15000 + 8000.
     await expect(page.getByText("₹23,000").first()).toBeVisible();
   });
 
-  test("the plain 'New plan' button (from the Plans tab) never carries over a stale selection", async ({ page }) => {
+  test("visiting /plans directly (no selection) never carries over a stale one", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: testAssets() }));
-    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [] }));
+    await page.route(`${API_URL}/plans`, (route) => {
+      if (route.request().method() === "POST") return route.fulfill({ status: 201, json: { id: "plan-new", variantLabel: "Plan A", items: [] } });
+      return route.fulfill({ json: [] });
+    });
 
-    await page.goto("/inventory");
-    // Select a page, then abandon that flow by switching to the Plans tab directly.
-    await page.getByRole("checkbox", { name: "Select @daily.news.test for a plan" }).check();
-    await page.getByRole("button", { name: "Plans", exact: true }).click();
+    await page.goto("/plans");
     await page.getByRole("button", { name: "New plan" }).click();
 
     await expect(page.getByRole("heading", { name: "New plan" })).toBeVisible();
-    // Nothing pre-checked — neither the GST checkbox nor either page's —
-    // this "New plan" click didn't go through "Create plan from selection".
+    // Step 1 has no checkboxes at all any more (the GST toggle went on 14 Sep).
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+
+    await page.getByRole("textbox", { name: "Plan name" }).fill("Q1 Push");
+    await page.getByRole("textbox", { name: "Client name" }).fill("Acme");
+    await page.getByRole("textbox", { name: "Brief" }).fill("Launch week push");
+    await page.getByRole("button", { name: "Next: Budget & pages" }).click();
+
+    // Step 2 — nothing pre-checked, since no selection was carried over.
     const checkedStates = await page.getByRole("checkbox").evaluateAll((els) => els.map((el) => (el as HTMLInputElement).checked));
     expect(checkedStates.every((checked) => checked === false)).toBe(true);
   });

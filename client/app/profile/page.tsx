@@ -8,9 +8,9 @@ import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
-import { Field, TextField } from "@/components/ui/form-field";
+import { Field, TextField, PhoneField, FieldError, VALIDATORS, digitsOnly } from "@/components/ui/form-field";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
-import { LogoutIcon } from "@/components/icons";
+import { LogoutIcon, CheckIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { users as usersApi, auth as authApi, billing as billingApi, ApiError, type User, type BillingProfile } from "@/lib/api-client";
@@ -42,9 +42,9 @@ function ProfileContent() {
     >
       <div className="flex max-w-[720px] flex-col gap-7">
         <div>
-          <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Account</p>
-          <h1 className="mb-1.5 text-[1.625rem] font-bold">Profile</h1>
-          <p className="text-[0.9375rem] text-text-muted">Your details, contact info, and billing identity.</p>
+          <p className="mb-1 text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Account</p>
+          <h1 className="mb-1 text-[1.5rem] font-semibold leading-tight tracking-[-0.03em] md:text-[1.625rem]">Profile</h1>
+          <p className="max-w-[56ch] text-[0.875rem] text-text-muted">Your details, contact info, and billing identity.</p>
         </div>
 
         <div className="flex gap-1 border-b border-border">
@@ -54,7 +54,7 @@ function ProfileContent() {
               onClick={() => setTab(t)}
               className={cn(
                 "-mb-px border-b-2 px-4 py-2.5 text-[0.875rem] font-semibold capitalize",
-                tab === t ? "border-accent text-accent" : "border-transparent text-text-faint hover:text-text-muted"
+                tab === t ? "border-ink text-text" : "border-transparent text-text-faint hover:text-text-muted"
               )}
             >
               {t === "billing" ? "Billing profiles" : "Profile"}
@@ -86,7 +86,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState(me.name ?? "");
   const [email, setEmail] = useState(me.email ?? "");
-  const [secondaryPhone, setSecondaryPhone] = useState(me.secondaryPhone ?? "");
+  const [secondaryPhone, setSecondaryPhone] = useState((me.secondaryPhone ?? "").replace(/^\+91/, "").replace(/\D/g, "").slice(0, 10));
   const [addressLine1, setAddressLine1] = useState(me.addressLine1 ?? "");
   const [addressLine2, setAddressLine2] = useState(me.addressLine2 ?? "");
   const [state, setState] = useState(me.state ?? "");
@@ -97,7 +97,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
       // Omit blank fields rather than sending "" — they're optional server-side
       // but validated (e.g. secondaryPhone min length) when present at all.
       const body = Object.fromEntries(
-        Object.entries({ name, email, secondaryPhone, addressLine1, addressLine2, state, pincode }).filter(([, v]) => v !== "")
+        Object.entries({ name, email, secondaryPhone: secondaryPhone ? `+91${secondaryPhone}` : "", addressLine1, addressLine2, state, pincode }).filter(([, v]) => v !== "")
       );
       return usersApi.updateProfile(token, body);
     },
@@ -107,7 +107,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-6 shadow-card">
-        <h2 className="text-[0.9375rem] font-bold">Contact details</h2>
+        <h2 className="text-[0.9375rem] font-semibold">Contact details</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Name">
             <TextField value={name} onChange={setName} placeholder="Your name" />
@@ -117,14 +117,15 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
           </Field>
           <Field label="Email">
             <TextField type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
+            <FieldError message={VALIDATORS.email(email)} />
           </Field>
           <Field label="Secondary phone">
-            <TextField value={secondaryPhone} onChange={setSecondaryPhone} placeholder="For WhatsApp invoice alerts" />
+            <PhoneField value={secondaryPhone} onChange={setSecondaryPhone} placeholder="For WhatsApp invoice alerts" />
           </Field>
         </div>
 
         <div className="border-t border-border pt-4">
-          <p className="mb-3 text-xs font-bold uppercase tracking-[0.06em] text-text-faint">Address</p>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.06em] text-text-faint">Address</p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Address line 1">
               <TextField value={addressLine1} onChange={setAddressLine1} />
@@ -136,7 +137,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
               <TextField value={state} onChange={setState} />
             </Field>
             <Field label="Pincode">
-              <TextField value={pincode} onChange={setPincode} />
+              <TextField inputMode="numeric" maxLength={6} value={pincode} onChange={(v) => setPincode(digitsOnly(v, 6))} />
             </Field>
           </div>
         </div>
@@ -179,7 +180,7 @@ function ChangePasswordCard({ token }: { token: string }) {
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-6 shadow-card">
       <div>
-        <h2 className="text-[0.9375rem] font-bold">Change password</h2>
+        <h2 className="text-[0.9375rem] font-semibold">Change password</h2>
         <p className="mt-1 text-[0.8125rem] text-text-faint">Let&apos;s make sure your password is strong.</p>
       </div>
 
@@ -192,10 +193,15 @@ function ChangePasswordCard({ token }: { token: string }) {
         </Field>
       </div>
 
-      <ul className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-1.5">
         {rules.map((r) => (
-          <li key={r.label} className={cn("text-[0.8125rem]", r.ok ? "text-accent" : "text-text-faint")}>
-            {r.ok ? "✓" : "·"} {r.label}
+          <li key={r.label} className={cn("flex items-center gap-2 text-[0.8125rem]", r.ok ? "text-accent" : "text-text-faint")}>
+            {r.ok ? (
+              <CheckIcon className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <span className="h-3.5 w-3.5 shrink-0 rounded-full border-[1.5px] border-border-strong" />
+            )}
+            {r.label}
           </li>
         ))}
       </ul>
@@ -258,7 +264,7 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
             <div key={bp.id} className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-5 shadow-card">
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-[0.9375rem] font-bold">
+                  <p className="text-[0.9375rem] font-semibold">
                     {bp.pan} — {bp.name}
                   </p>
                   {isReviewer && bp.user && (
@@ -269,7 +275,7 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
                 </div>
                 <span
                   className={cn(
-                    "rounded-full px-2.5 py-1 text-[0.6875rem] font-bold",
+                    "rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold",
                     bp.approvalStatus === "approved"
                       ? "bg-accent-soft text-accent"
                       : bp.approvalStatus === "rejected"
@@ -349,26 +355,30 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
         }}
         className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
-        <h2 className="text-lg font-bold">Add a billing profile</h2>
+        <h2 className="text-lg font-semibold">Add a billing profile</h2>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="PAN">
-            <TextField required value={pan} onChange={(v) => setPan(v.toUpperCase())} placeholder="ABCDE1234F" maxLength={10} />
+            <TextField required value={pan} onChange={(v) => setPan(v.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="ABCDE1234F" maxLength={10} aria-label="PAN" />
+            <FieldError message={pan ? VALIDATORS.pan(pan) : null} />
           </Field>
           <Field label="Name on PAN">
-            <TextField required value={name} onChange={setName} />
+            <TextField required value={name} onChange={setName} aria-label="Name on PAN" />
           </Field>
           <Field label="GSTIN (optional)">
-            <TextField value={gstin} onChange={setGstin} />
+            <TextField value={gstin} onChange={(v) => setGstin(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 15))} placeholder="27ABCDE1234F1Z5" maxLength={15} aria-label="GSTIN" />
+            <FieldError message={VALIDATORS.gstin(gstin)} />
           </Field>
           <Field label="MSME number (optional)">
             <TextField value={msme} onChange={setMsme} />
           </Field>
           <Field label="Bank account number">
-            <TextField required value={bankAccountNumber} onChange={setBankAccountNumber} />
+            <TextField required inputMode="numeric" value={bankAccountNumber} onChange={(v) => setBankAccountNumber(digitsOnly(v, 18))} maxLength={18} aria-label="Bank account number" />
+            <FieldError message={bankAccountNumber ? VALIDATORS.bankAccount(bankAccountNumber) : null} />
           </Field>
           <Field label="IFSC code">
-            <TextField required value={ifscCode} onChange={(v) => setIfscCode(v.toUpperCase())} />
+            <TextField required value={ifscCode} onChange={(v) => setIfscCode(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 11))} placeholder="HDFC0001234" maxLength={11} aria-label="IFSC code" />
+            <FieldError message={ifscCode ? VALIDATORS.ifsc(ifscCode) : null} />
           </Field>
         </div>
 
@@ -380,7 +390,7 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
           <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" className="flex-1" disabled={createMutation.isPending}>
+          <Button type="submit" className="flex-1" disabled={createMutation.isPending || Boolean(VALIDATORS.pan(pan) || VALIDATORS.gstin(gstin) || VALIDATORS.ifsc(ifscCode) || VALIDATORS.bankAccount(bankAccountNumber)) || !name.trim()}>
             {createMutation.isPending ? "Adding…" : "Add profile"}
           </Button>
         </div>

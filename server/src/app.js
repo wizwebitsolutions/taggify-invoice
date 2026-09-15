@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { clearStaleScrapeQueue } from "./modules/assets/service.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -17,6 +18,7 @@ import billingRoutes from "./modules/billing/routes.js";
 import notificationsRoutes from "./modules/notifications/routes.js";
 import adminRoutes from "./modules/admin/routes.js";
 import plansRoutes from "./modules/plans/routes.js";
+import googleAuthRoutes from "./modules/integrations/googleAuthRoutes.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 
@@ -55,6 +57,7 @@ apiRouter.use("/billing-profiles", billingRoutes);
 apiRouter.use("/notifications", notificationsRoutes);
 apiRouter.use("/admin", adminRoutes);
 apiRouter.use("/plans", plansRoutes);
+apiRouter.use("/integrations/google", googleAuthRoutes);
 apiRouter.use(notFoundHandler);
 apiRouter.use(errorHandler);
 app.use("/api", apiRouter);
@@ -76,6 +79,7 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`invoice-taggify server listening on :${PORT}`);
   startCronJobs();
+  clearStaleScrapeQueue().catch((err) => console.error("clearStaleScrapeQueue failed", err));
 });
 
 export default app;

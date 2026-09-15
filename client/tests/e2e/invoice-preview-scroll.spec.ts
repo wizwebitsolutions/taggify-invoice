@@ -30,7 +30,7 @@ test.describe("New invoice — Preview invoice step scrolls to reveal GST choice
   }
 
   test("Raise invoice button is reachable by scrolling, and reflects the full total", async ({ page }) => {
-    await signIn(page, "ADMIN");
+    await signIn(page, "CREATOR");
     await mockApi(page);
     await page.route(`${API_URL}/links?*`, (route) => route.fulfill({ json: { items: eligibleLinks(16), total: 16, page: 1, pageSize: 100 } }));
     await page.route(`${API_URL}/campaigns`, (route) => route.fulfill({ json: [] }));
@@ -40,6 +40,8 @@ test.describe("New invoice — Preview invoice step scrolls to reveal GST choice
     await page.getByRole("button", { name: "Continue" }).click();
 
     await expect(page.getByRole("heading", { name: "Preview invoice" })).toBeVisible();
+    // Step 3 (Generate) carries the GST choice and the Raise button.
+    await page.getByRole("button", { name: "Continue" }).click();
 
     const raiseButton = page.getByRole("button", { name: /Raise invoice/ });
     // Not necessarily in the (short) viewport yet — the point of the test —
@@ -51,7 +53,7 @@ test.describe("New invoice — Preview invoice step scrolls to reveal GST choice
 
     // The GST toggle sits just above the footer in the same scroll region —
     // reachable the same way, independently of where Raise was scrolled to.
-    const gstToggle = page.getByRole("button", { name: "GST invoice · +18%" });
+    const gstToggle = page.getByRole("radio", { name: /^GST invoice/ });
     await gstToggle.scrollIntoViewIfNeeded();
     await expect(gstToggle).toBeInViewport();
   });

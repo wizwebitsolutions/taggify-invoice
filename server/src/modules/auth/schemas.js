@@ -7,8 +7,8 @@ export const signupSchema = z.object({
   phoneNumber: z.string().min(8).max(15),
   name: z.string().min(1).max(100).optional(),
   role: z.enum(["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"]).default("CREATOR"),
-  // Sub-admin creation (newTask.md, 8 Sep) — only meaningful when role is
-  // ADMIN; ignored server-side for every other role (see auth/service.js).
+  // Sub-admin creation (newTask.md, 8 Sep) for ADMIN; granted-access
+  // creation (15 Sep) for every other role — see auth/service.js's signup.
   permissions: z.object(permissionsShape).strict().optional(),
 });
 

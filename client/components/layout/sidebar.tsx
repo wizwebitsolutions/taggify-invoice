@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ComponentType } from "react";
 
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/ui/logo";
 import { useAuth } from "@/lib/auth-context";
 import type { Role, Permissions } from "@/lib/api-client";
 import {
@@ -9,9 +10,11 @@ import {
   CampaignIcon,
   InvoiceIcon,
   InventoryIcon,
+  AssetIcon,
   TeamIcon,
   ClockIcon,
   ChevronDownIcon,
+  CheckCircleIcon,
 } from "@/components/icons";
 
 type NavItem = {
@@ -22,36 +25,52 @@ type NavItem = {
   /** Omitted = every role. Matched against the signed-in user's raw role
    *  (not the humanized `SidebarUser.role` label) — see canSeeNavItem. */
   roles?: Role[];
-  /** Only for a destination whose entire server route is permission-gated
-   *  (e.g. GET /admin/users itself requires "users.manage") — a sub-admin
-   *  denied that key would otherwise land on a page that 403s immediately.
-   *  Not used for anything merely *action*-gated (a page that still loads
-   *  and just disables/errors on one button) — that's an acceptable
-   *  error-toast fallback, not worth hiding the whole destination for. */
+  /** For a destination whose entire server route is permission-gated (e.g.
+   *  GET /admin/users itself requires "users.manage"). Cuts both ways
+   *  (15 Sep): a sub-admin denied that key is hidden even though their role
+   *  is in `roles`, and — the actual grant path — a role *not* in `roles`
+   *  but explicitly granted this key sees the item anyway. Not used for
+   *  anything merely *action*-gated (a page that still loads and just
+   *  disables/errors on one button) — that's an acceptable error-toast
+   *  fallback, not worth hiding the whole destination for. */
   permissionKey?: keyof Permissions;
 };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  { label: "Overview", items: [{ key: "dashboard", label: "Dashboard", icon: GridIcon, href: "/dashboard" }] },
+  {
+    label: "Overview",
+    items: [
+      { key: "dashboard", label: "Home", icon: GridIcon, href: "/dashboard" },
+      // The decision queue (premium mockup 03) — one row per approval,
+      // list-left / detail-right. Admin-only: Finance approves nothing here.
+      { key: "approvals", label: "Approvals", icon: CheckCircleIcon, href: "/approvals", roles: ["ADMIN"] },
+    ],
+  },
   {
     label: "Work",
     items: [
-      // Plan Maker's dashboard is deliberately just "Dashboard + Inventory +
-      // Plan-create" (newTask.md, 8 Sep) — they don't run Campaigns, so this
-      // is the one nav item that needs an explicit allowlist rather than
-      // being open to every role like Inventory below.
-      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"] },
+      // Plan Maker sees Campaigns (and Invoices, below) since 12 Sep — but
+      // only the campaigns spawned from their own approved plans, scoped
+      // server-side (see server/src/lib/campaignAccess.js), so they can
+      // generate per-creator invoices from a campaign page. Every role is
+      // on the list now; kept explicit rather than open like Inventory so
+      // the allowlist stays the single place to read "who sees Campaigns".
+      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] },
       // Visible to every role (Pages, the former /assets content, is for
-      // everyone, Plan Maker included) — Plans within it stays
-      // Admin/Plan-Maker-only, gated inside the page itself rather than at
-      // the nav level (newTask.md, 8 Sep: "assets tab will be removed" —
-      // folded into this one instead).
+      // everyone, Plan Maker included) — newTask.md, 8 Sep: "assets tab
+      // will be removed" — folded into this one instead.
       { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory" },
+      // Split back out into its own nav tab (newTask.md, 9 Sep: "plan will
+      // be in separate nav tab") — was a second tab inside Inventory,
+      // gated the same way (Admin + Plan Maker) but now at the nav level
+      // too, matching Campaigns' allowlist pattern above. permissionKey
+      // lets a granted non-ADMIN/PLAN_MAKER role in too (15 Sep).
+      { key: "plans", label: "Plans", icon: AssetIcon, href: "/plans", roles: ["ADMIN", "PLAN_MAKER"], permissionKey: "plans.manage" },
     ],
   },
   {
     label: "Finance",
-    items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"] }],
+    items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] }],
   },
   {
     label: "Admin",
@@ -59,7 +78,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // ADMIN-only server-side (admin routes: requireRole("ADMIN")), and
       // the whole route is further gated on "users.manage" — a sub-admin
       // without it would land on a page that 403s on load.
-      { key: "users", label: "Users", icon: TeamIcon, href: "/users", roles: ["ADMIN"], permissionKey: "users.manage" },
+      { key: "users", label: "People", icon: TeamIcon, href: "/users", roles: ["ADMIN"], permissionKey: "users.manage" },
       // CREATOR-only — this is a creator managing their own team, not an
       // admin function despite living in this group (see team/page.tsx's
       // "Team management is available to Creator accounts" fallback and
@@ -77,11 +96,16 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 type NavUser = { role?: Role; permissions?: Permissions } | null | undefined;
 
 function canSeeNavItem(item: NavItem, user: NavUser) {
-  if (item.roles && (!user?.role || !item.roles.includes(user.role))) return false;
-  // Absent/undefined permissions (every role but a sub-admin) reads as
-  // "not restricted" — only an explicit `false` from an overlay hides it.
-  if (item.permissionKey && user?.permissions?.[item.permissionKey] === false) return false;
-  return true;
+  const roleAllowed = !item.roles || (!!user?.role && item.roles.includes(user.role));
+  if (roleAllowed) {
+    // Absent/undefined permissions (every role but a sub-admin) reads as
+    // "not restricted" — only an explicit `false` from an overlay hides it.
+    if (item.permissionKey && user?.permissions?.[item.permissionKey] === false) return false;
+    return true;
+  }
+  // Not one of this item's normal roles — but an explicit grant (15 Sep)
+  // opens it anyway, same as the server's requireAccess() would allow.
+  return !!item.permissionKey && user?.permissions?.[item.permissionKey] === true;
 }
 
 /** Same per-role/per-permission visibility as the sidebar, keyed by
@@ -104,8 +128,8 @@ export interface SidebarUser {
 }
 
 export const AVATAR_TONE = {
-  emerald: "bg-accent-soft text-accent",
-  blue: "bg-blue-soft text-blue",
+  emerald: "bg-surface-2 text-text-2 ring-1 ring-inset ring-border",
+  blue: "bg-blue-soft text-blue ring-1 ring-inset ring-blue-line",
 } as const;
 
 export function Sidebar({ active, user }: { active: string; user: SidebarUser }) {
@@ -126,18 +150,15 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
     // last item after a flex-1 spacer, so on a short viewport with several
     // nav groups it got pushed past the bottom edge and clipped by the
     // app shell's overflow-hidden instead of ever being reachable.
-    <aside className="hidden h-full w-[260px] shrink-0 flex-col border-r border-border bg-sidebar md:flex">
-      <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto p-4">
-        <div className="flex items-center gap-2.5 px-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-sm font-extrabold text-accent-ink">
-            T
-          </div>
-          <span className="text-[1rem] font-bold tracking-tight">Taggify</span>
+    <aside className="hidden h-full w-[232px] shrink-0 flex-col border-r border-border bg-sidebar md:flex">
+      <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-3">
+        <div className="flex items-center px-2.5 pt-2">
+          <Logo className="h-[22px]" />
         </div>
 
         {visibleGroups.map((group) => (
-          <nav key={group.label} className="flex flex-col gap-0.5">
-            <p className="mb-2 px-3 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">
+          <nav key={group.label} className="flex flex-col gap-px">
+            <p className="mb-1.5 px-2.5 text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">
               {group.label}
             </p>
             {group.items.map((item) => {
@@ -146,13 +167,13 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
               const content = (
                 <span
                   className={cn(
-                    "flex h-[38px] items-center gap-2.5 rounded-full px-3 text-sm font-medium text-text-muted transition-colors",
-                    isActive && "bg-accent-soft font-semibold text-accent shadow-[inset_0_0_0_1px_var(--accent-soft)]",
-                    item.href && !isActive && "hover:bg-surface hover:text-text",
+                    "flex h-[34px] items-center gap-2.5 rounded-[7px] px-2.5 text-[0.8375rem] font-medium text-text-2 transition-colors duration-150",
+                    isActive && "bg-surface-2 font-semibold text-text shadow-[inset_0_0_0_1px_var(--border)]",
+                    item.href && !isActive && "hover:bg-surface-2 hover:text-text",
                     !item.href && "cursor-default opacity-50"
                   )}
                 >
-                  <Icon className={cn("h-[18px] w-[18px] shrink-0 text-text-faint", isActive && "text-accent")} />
+                  <Icon className={cn("h-[17px] w-[17px] shrink-0 text-text-muted", isActive && "text-text")} />
                   {item.label}
                 </span>
               );
@@ -170,20 +191,20 @@ export function Sidebar({ active, user }: { active: string; user: SidebarUser })
         ))}
       </div>
 
-      <div className="shrink-0 border-t border-border p-4">
+      <div className="shrink-0 border-t border-border p-3">
         <Link
           href="/profile"
           className={cn(
-            "flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors hover:bg-surface",
-            active === "profile" ? "border-accent" : "border-border"
+            "flex items-center gap-2.5 rounded-[10px] border bg-surface p-2 shadow-card transition-colors hover:bg-surface-2",
+            active === "profile" ? "border-ink" : "border-border"
           )}
         >
-          <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[0.8125rem] font-bold", AVATAR_TONE[user.tone ?? "emerald"])}>
+          <div className={cn("flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[0.72rem] font-semibold", AVATAR_TONE[user.tone ?? "emerald"])}>
             {user.initials}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[0.8125rem] font-semibold">{user.name}</div>
-            <div className="text-xs text-text-faint">{user.role}</div>
+            <div className="truncate text-[0.8rem] font-semibold">{user.name}</div>
+            <div className="text-[0.72rem] text-text-muted">{user.role}</div>
           </div>
           <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
         </Link>

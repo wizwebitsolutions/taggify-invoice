@@ -46,14 +46,76 @@ function headers(accessToken) {
   return { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
 }
 
-/** Sheet (tab) titles that already exist in the spreadsheet. */
-async function getExistingSheetTitles({ accessToken, spreadsheetId }) {
-  const res = await fetch(`${SHEETS_API}/${spreadsheetId}?fields=sheets.properties.title`, { headers: headers(accessToken) });
+/**
+ * Creates a brand-new spreadsheet, owned by whoever `accessToken` belongs
+ * to — user request, 10 Sep, "1 spreadsheet generation per plan, not just
+ * write access". Only viable with a real user's OAuth access token (see
+ * googleOAuthClient.js): a service account has no Drive storage quota of
+ * its own and gets a 403 on this exact call (verified directly against the
+ * live API), which is why every plan used to share tabs in one
+ * admin-owned spreadsheet instead. Returns the new file's id and the
+ * default "Sheet1" tab's sheetId so the caller can remove that placeholder
+ * tab once its own tabs are in place.
+ */
+export async function createSpreadsheet({ accessToken, title }) {
+  const res = await fetch(SHEETS_API, {
+    method: "POST",
+    headers: headers(accessToken),
+    body: JSON.stringify({ properties: { title } }),
+  });
+  if (!res.ok) {
+    throw new Error(`Google Sheets API error creating spreadsheet: ${res.status} ${await res.text()}`);
+  }
+  const { spreadsheetId, sheets } = await res.json();
+  return { spreadsheetId, defaultSheetId: sheets?.[0]?.properties?.sheetId };
+}
+
+/** Removes a tab by its numeric sheetId — used to drop the blank default
+ *  "Sheet1" a freshly created spreadsheet always starts with, once the
+ *  real tabs have been written. No-op (rather than an error) if it's the
+ *  spreadsheet's only remaining tab, since Sheets refuses to delete the
+ *  last sheet in a file. */
+export async function deleteSheetTab({ accessToken, spreadsheetId, sheetId }) {
+  if (sheetId == null) return;
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: headers(accessToken),
+    body: JSON.stringify({ requests: [{ deleteSheet: { sheetId } }] }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    if (res.status === 400 && /last visible sheet/i.test(body)) return;
+    throw new Error(`Google Sheets API error deleting tab: ${res.status} ${body}`);
+  }
+}
+
+/** Every tab's title + sheetId ("gid" — the number a deep link like
+ *  `.../edit#gid=123` points at) already in the spreadsheet. */
+async function getExistingSheetTabs({ accessToken, spreadsheetId }) {
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}?fields=sheets.properties`, { headers: headers(accessToken) });
   if (!res.ok) {
     throw new Error(`Google Sheets API error reading spreadsheet: ${res.status} ${await res.text()}`);
   }
   const { sheets } = await res.json();
-  return (sheets ?? []).map((s) => s.properties.title);
+  return (sheets ?? []).map((s) => ({ title: s.properties.title, sheetId: s.properties.sheetId }));
+}
+
+/** Sheet (tab) titles that already exist in the spreadsheet. */
+async function getExistingSheetTitles({ accessToken, spreadsheetId }) {
+  return (await getExistingSheetTabs({ accessToken, spreadsheetId })).map((t) => t.title);
+}
+
+/**
+ * The sheetId ("gid") for each of `titles` — for building a deep link
+ * straight to one tab (`.../edit?gid=<id>#gid=<id>`), the shape plans
+ * (user request, 10 Sep — "plan will be of google sheet ... generate
+ * google sheet and provide link") deep-link to their own Overview tab
+ * with. Titles not found in the spreadsheet are simply omitted.
+ */
+export async function getSheetTabIds({ accessToken, spreadsheetId, titles }) {
+  const tabs = await getExistingSheetTabs({ accessToken, spreadsheetId });
+  const byTitle = new Map(tabs.map((t) => [t.title, t.sheetId]));
+  return Object.fromEntries(titles.filter((t) => byTitle.has(t)).map((t) => [t, byTitle.get(t)]));
 }
 
 /**
@@ -85,7 +147,7 @@ export async function ensureSheetTabsExist({ accessToken, spreadsheetId, titles 
  * later) would leave stale cells from the previous day's longer sheet
  * sitting past the end of the new data.
  */
-export async function writeSheetTab({ accessToken, spreadsheetId, title, rows }) {
+export async function writeSheetTab({ accessToken, spreadsheetId, title, rows, valueInputOption = "RAW" }) {
   const range = `'${title}'`;
   const clearRes = await fetch(`${SHEETS_API}/${spreadsheetId}/values/${encodeURIComponent(range)}:clear`, {
     method: "POST",
@@ -95,11 +157,34 @@ export async function writeSheetTab({ accessToken, spreadsheetId, title, rows })
     throw new Error(`Google Sheets API error clearing tab "${title}": ${clearRes.status} ${await clearRes.text()}`);
   }
 
+  // USER_ENTERED (rather than the default RAW) lets a cell like
+  // `=HYPERLINK("https://...","https://...")` (planSheet.js's Page Link
+  // column) actually evaluate into a clickable link instead of being
+  // written as literal formula text.
   const updateRes = await fetch(
-    `${SHEETS_API}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
+    `${SHEETS_API}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=${valueInputOption}`,
     { method: "PUT", headers: headers(accessToken), body: JSON.stringify({ values: rows }) }
   );
   if (!updateRes.ok) {
     throw new Error(`Google Sheets API error writing tab "${title}": ${updateRes.status} ${await updateRes.text()}`);
+  }
+}
+
+/**
+ * Sends arbitrary Sheets API batchUpdate `requests` (mergeCells, repeatCell,
+ * updateBorders, etc.) — the styling primitive planSheet.js's format
+ * builder uses to make a generated tab actually look like the reference
+ * sheet (user request, 10 Sep — "google sheet format should be like this,
+ * same styling") instead of the plain, unstyled cell values written so far.
+ */
+export async function batchUpdateSpreadsheet({ accessToken, spreadsheetId, requests }) {
+  if (!requests || requests.length === 0) return;
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: headers(accessToken),
+    body: JSON.stringify({ requests }),
+  });
+  if (!res.ok) {
+    throw new Error(`Google Sheets API error applying formatting: ${res.status} ${await res.text()}`);
   }
 }

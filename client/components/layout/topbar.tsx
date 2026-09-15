@@ -48,30 +48,30 @@ export function Topbar({
   });
 
   return (
-    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 md:h-[72px] md:gap-4 md:px-8">
+    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface-80 px-4 backdrop-blur-md md:gap-3 md:px-7">
       {/* flex-1 + max-w (was a fixed w-[340px]) so this gives way first on
           a narrow window — the account controls to the right (profile,
           log out) are the ones that must never get squeezed past the
           edge and clipped. Hidden below md: the mobile icon-only stand-in
           just underneath takes its place there. */}
-      <div className="hidden h-10 min-w-0 max-w-[340px] flex-1 items-center gap-2.5 rounded-full border border-border bg-surface px-4 text-sm text-text-faint md:flex">
+      <div className="hidden h-[34px] min-w-0 max-w-[320px] flex-1 items-center gap-2.5 rounded-md border border-border bg-surface px-3 text-[0.8125rem] text-text-faint shadow-card md:flex">
         <SearchIcon className="h-[15px] w-[15px] shrink-0" />
         <span className="truncate">{placeholder}</span>
       </div>
       {/* Mobile: same (currently decorative) search affordance, condensed to an icon so it doesn't crowd the account cluster on a narrow screen. */}
-      <div className="flex h-9 w-9 flex-1 items-center justify-center rounded-full border border-border bg-surface text-text-faint md:hidden">
+      <div className="flex h-9 w-9 flex-1 items-center justify-center rounded-md border border-border bg-surface text-text-faint md:hidden">
         <SearchIcon className="h-4 w-4" />
       </div>
 
-      <div className="flex shrink-0 items-center gap-3 md:gap-4">
+      <div className="flex shrink-0 items-center gap-2.5 md:ml-auto">
         {/* Theme toggle lives in the mobile "More" sheet instead — no room for it in the condensed mobile bar. */}
         <button
           onClick={toggleTheme}
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           aria-label="Toggle color theme"
-          className="hidden h-[38px] w-[38px] items-center justify-center rounded-full border border-border bg-surface text-text-muted transition-all duration-150 hover:scale-105 hover:bg-surface-hover hover:text-text active:scale-95 md:flex"
+          className="hidden h-[34px] w-[34px] items-center justify-center rounded-md border border-border bg-surface text-text-2 shadow-card transition-colors duration-150 hover:bg-surface-2 hover:text-text md:flex"
         >
-          {theme === "dark" ? <SunIcon className="h-[18px] w-[18px]" /> : <MoonIcon className="h-[18px] w-[18px]" />}
+          {theme === "dark" ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
         </button>
 
         {/* Desktop-only, like the theme toggle above — mobile gets notifications
@@ -85,11 +85,11 @@ export function Topbar({
           <button
             onClick={() => setOpen((v) => !v)}
             aria-label="Notifications"
-            className="relative flex h-[38px] w-[38px] items-center justify-center rounded-full border border-border bg-surface transition-all duration-150 hover:scale-105 hover:bg-surface-hover active:scale-95"
+            className="relative flex h-[34px] w-[34px] items-center justify-center rounded-md border border-border bg-surface shadow-card transition-colors duration-150 hover:bg-surface-2"
           >
-            <BellIcon className="h-[18px] w-[18px] text-text-muted" />
+            <BellIcon className="h-4 w-4 text-text-2" />
             {unreadCount > 0 && (
-              <span className="absolute right-[9px] top-2 h-[7px] w-[7px] rounded-full border-2 border-sidebar bg-accent-2" />
+              <span className="absolute right-[7px] top-[7px] h-[7px] w-[7px] rounded-full border-2 border-surface bg-rose motion-safe:animate-ping" />
             )}
           </button>
 
@@ -98,15 +98,15 @@ export function Topbar({
               <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
               <div
                 data-testid="notifications-panel"
-                className="absolute right-0 top-[calc(100%+8px)] z-50 flex max-h-[420px] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-card"
+                className="absolute right-0 top-[calc(100%+8px)] z-50 flex max-h-[420px] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-lg motion-safe:animate-reveal-pop"
               >
                 <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                  <p className="text-[0.875rem] font-bold">Notifications</p>
+                  <p className="text-[0.875rem] font-semibold">Notifications</p>
                   {unreadCount > 0 && (
                     <button
                       onClick={() => markAllMutation.mutate()}
                       disabled={markAllMutation.isPending}
-                      className="text-[0.75rem] font-semibold text-accent hover:text-accent-2"
+                      className="text-[0.75rem] font-medium text-blue hover:text-text"
                     >
                       Mark all as read
                     </button>
@@ -122,11 +122,11 @@ export function Topbar({
                         onClick={() => !n.readAt && markOneMutation.mutate(n.id)}
                         className={cn(
                           "flex w-full flex-col gap-0.5 border-b border-border px-4 py-3 text-left last:border-b-0 hover:bg-surface-2",
-                          !n.readAt && "bg-accent-soft/30"
+                          !n.readAt && "bg-blue-soft-40"
                         )}
                       >
                         <div className="flex items-center gap-2">
-                          {!n.readAt && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-2" />}
+                          {!n.readAt && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />}
                           <span className="text-[0.8125rem] font-semibold capitalize">{n.type.replace(/_/g, " ")}</span>
                         </div>
                         <span className="text-[0.75rem] text-text-faint">{new Date(n.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
@@ -153,7 +153,7 @@ export function Topbar({
           href="/profile"
           title="Profile"
           className={cn(
-            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[0.8125rem] font-bold transition-opacity hover:opacity-80",
+            "flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[0.72rem] font-semibold transition-opacity hover:opacity-80",
             AVATAR_TONE[user.tone ?? "emerald"]
           )}
         >
@@ -166,7 +166,7 @@ export function Topbar({
             subtle action. shrink-0 so it's never the thing that gets
             clipped off the edge on a narrow window. Hidden on mobile —
             the "More" sheet's Log out row covers it there. */}
-        <Button variant="danger" size="sm" className="hidden shrink-0 md:inline-flex" onClick={logout}>
+        <Button variant="ghost" size="sm" className="hidden shrink-0 md:inline-flex" onClick={logout}>
           <LogoutIcon className="h-3.5 w-3.5" />
           Log out
         </Button>

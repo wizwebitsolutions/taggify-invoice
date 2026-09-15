@@ -81,11 +81,40 @@ describe("updateUserPermissions — sub-admin overlay (newTask.md, 8 Sep)", () =
     });
   });
 
-  it("refuses to set permissions on a non-ADMIN account", async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "u1", role: "CREATOR", permissions: null });
+  it("grants a section to a non-ADMIN account (15 Sep — admin can give any user access permissions)", async () => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: "tm-1", role: "TEAM_MEMBER", permissions: null })
+      .mockResolvedValueOnce(unrestrictedActor);
+    mockPrisma.user.update.mockResolvedValue({ id: "tm-1", role: "TEAM_MEMBER", permissions: { "inventory.manage": true } });
+    mockPrisma.permissionAuditLog.create.mockResolvedValue({});
 
-    await expect(updateUserPermissions("actor-1", "u1", { "plans.manage": false })).rejects.toBeInstanceOf(ApiError);
-    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    const result = await updateUserPermissions("actor-1", "tm-1", { "inventory.manage": true });
+
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({
+      where: { id: "tm-1" },
+      data: { permissions: { "inventory.manage": true } },
+    });
+    expect(result.permissions["inventory.manage"]).toBe(true);
+    expect(result.permissions["campaigns.manage"]).toBe(false);
+  });
+
+  it("a restricted actor can't grant a non-ADMIN account a section they don't hold themselves", async () => {
+    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "inventory.manage": false } };
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: "tm-1", role: "TEAM_MEMBER", permissions: null })
+      .mockResolvedValueOnce(restrictedActor);
+    mockPrisma.user.update.mockResolvedValue({ id: "tm-1", role: "TEAM_MEMBER", permissions: { "inventory.manage": false } });
+    mockPrisma.permissionAuditLog.create.mockResolvedValue({});
+
+    await updateUserPermissions("actor-1", "tm-1", { "inventory.manage": true });
+
+    // clampPatchToActor forces the patched `true` down to `false` since the
+    // actor themselves doesn't hold inventory.manage — same guard as the
+    // ADMIN case above, just now reachable on a non-ADMIN target too.
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({
+      where: { id: "tm-1" },
+      data: { permissions: { "inventory.manage": false } },
+    });
   });
 
   it("404s on a target that doesn't exist", async () => {

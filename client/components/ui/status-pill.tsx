@@ -9,18 +9,19 @@ import { cn } from "@/lib/utils";
  * styles/tokens.css, same as Button. See frontend.md §3.
  */
 const statusPillVariants = cva(
-  "inline-flex items-center rounded-full px-2.5 py-1 text-[0.6875rem] font-bold font-ui leading-none",
+  // Premium system: 6px-radius bordered tags, 11.5px/500. Amber = waiting,
+  // green = done/money, red = blocked, blue = info, slate = resting.
+  "inline-flex items-center rounded-[6px] border px-2 py-[3px] text-[0.7rem] font-medium font-ui leading-none",
   {
     variants: {
       tone: {
-        slate: "bg-slate-soft text-slate",
-        // Was "indigo" — --accent-2 is now a violet hue (palette v2, see
-        // styles/tokens.css), renamed so the tone name matches what it
-        // actually renders.
-        violet: "bg-accent-2-soft text-accent-2",
-        rose: "bg-rose-soft text-rose",
-        blue: "bg-blue-soft text-blue",
-        emerald: "bg-accent-soft text-accent",
+        slate: "bg-slate-soft text-slate border-slate-line",
+        // "violet" is the historical name for the in-flight tone; the token
+        // behind it (--accent-2) is amber now — see styles/tokens.css.
+        violet: "bg-accent-2-soft text-accent-2 border-accent-2-line",
+        rose: "bg-rose-soft text-rose border-rose-line",
+        blue: "bg-blue-soft text-blue border-blue-line",
+        emerald: "bg-accent-soft text-accent border-accent-line",
       },
     },
     defaultVariants: { tone: "slate" },

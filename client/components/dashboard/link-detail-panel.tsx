@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { MoneyField } from "@/components/ui/form-field";
 import { StatusTimeline, type TimelineStep } from "@/components/dashboard/status-timeline";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { links as linksApi, screenshots as screenshotsApi, ApiError, type Link } from "@/lib/api-client";
@@ -101,13 +102,13 @@ export function LinkDetailPanel({
         <div className="h-[140px] rounded-[14px] bg-gradient-to-br from-accent-soft to-accent-2-soft" />
       )}
       <div>
-        <p className="text-base font-bold">{link.campaign?.title ?? "—"}</p>
+        <p className="text-base font-semibold">{link.campaign?.title ?? "—"}</p>
         <p className="mt-1 text-[0.8125rem] text-text-faint">@{link.asset?.handle} · {link.url}</p>
       </div>
       <div className="border-t border-border pt-3">
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-faint">Cost</span>
-          <span className="text-[1.125rem] font-extrabold tabular-nums">{money(link.cost)}</span>
+          <span className="text-[1.125rem] font-semibold tabular-nums">{money(link.cost)}</span>
         </div>
         {isAdmin && (
           <CostRevisionControl
@@ -130,7 +131,7 @@ export function LinkDetailPanel({
       {canUploadScreenshot && (link.status === "SUBMITTED" || link.status === "SCREENSHOT_REJECTED") && (
         <div className="flex flex-col gap-2 border-t border-border pt-4">
           <label className="text-xs font-semibold text-text-faint">
-            {link.status === "SCREENSHOT_REJECTED" ? "Re-upload proof screenshot" : "Upload proof screenshot"}
+            {link.status === "SCREENSHOT_REJECTED" ? "Re-upload proof screenshot" : "Upload proof screenshot (optional)"}
           </label>
           <input
             type="file"
@@ -141,7 +142,7 @@ export function LinkDetailPanel({
               if (file) uploadScreenshotMutation.mutate(file);
               e.target.value = "";
             }}
-            className="text-[0.8125rem] text-text-faint file:mr-3 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-2 file:text-[0.8125rem] file:font-bold file:text-accent-ink"
+            className="text-[0.8125rem] text-text-faint file:mr-3 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-2 file:text-[0.8125rem] file:font-semibold file:text-accent-ink"
           />
           {uploadScreenshotMutation.isPending && <p className="text-[0.8125rem] text-text-faint">Uploading…</p>}
           {uploadScreenshotMutation.isError && (
@@ -241,18 +242,12 @@ function CostRevisionControl({ link, token, onChanged }: { link: Link; token: st
     <div className="mt-1.5">
       {editing ? (
         <div className="flex flex-col gap-2 rounded-md border border-border-strong bg-surface-2 p-2.5">
-          <input
-            type="number"
-            min={0}
-            value={cost}
-            onChange={(e) => setCost(e.target.value)}
-            className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-right text-[0.8125rem] text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          />
+          <MoneyField compact value={cost} onChange={setCost} aria-label="Revised cost" className="w-full" />
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="Reason (optional)"
-            className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
           />
           {reviseMutation.isError && (
             <ErrorNotice message={reviseMutation.error instanceof ApiError ? reviseMutation.error.message : "Couldn't revise the cost."} />
@@ -268,7 +263,7 @@ function CostRevisionControl({ link, token, onChanged }: { link: Link; token: st
         </div>
       ) : (
         <div className="flex items-center gap-3">
-          <button onClick={() => setEditing(true)} className="text-[0.75rem] font-semibold text-accent hover:text-accent-2">
+          <button onClick={() => setEditing(true)} className="text-[0.75rem] font-semibold text-blue hover:text-text">
             Revise cost
           </button>
           <button onClick={() => setShowHistory((v) => !v)} className="text-[0.75rem] text-text-faint hover:text-text-muted">
@@ -339,7 +334,7 @@ function MarkInvalidControl({ link, token, onChanged }: { link: Link; token: str
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="e.g. Post was deleted"
-        className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="h-8 w-full rounded-md border border-border-strong bg-surface px-2.5 text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
       />
       {markInvalidMutation.isError && (
         <ErrorNotice message={markInvalidMutation.error instanceof ApiError ? markInvalidMutation.error.message : "Couldn't mark this link invalid."} />

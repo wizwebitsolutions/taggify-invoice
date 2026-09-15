@@ -31,15 +31,16 @@ export async function resetUserPassword(userId) {
 }
 
 /**
- * Sets/edits a sub-admin's permission overlay (newTask.md, 8 Sep). `patch`
- * only carries the keys the caller actually sent (schemas.js's
+ * Sets/edits a user's permission overlay (newTask.md, 8 Sep for the ADMIN
+ * sub-admin case; extended 15 Sep so any role can be granted the same six
+ * sections — "admin can give any user access permissions"). `patch` only
+ * carries the keys the caller actually sent (schemas.js's
  * updatePermissionsSchema makes every key optional) — merged onto the
  * target's *existing* overlay rather than replacing it outright, so toggling
- * one key off in the UI can't silently reset every other key back to
- * true/undefined. Only ever meaningful on an ADMIN account; every other
- * role's access comes from requireRole() alone (see lib/permissions.js).
- * Every call is written to PermissionAuditLog — the "who changed whose
- * access and when" trail newTask.md's suggested improvements asked for.
+ * one key off in the UI can't silently reset every other key back to its
+ * role's baseline. Every call is written to PermissionAuditLog — the "who
+ * changed whose access and when" trail newTask.md's suggested improvements
+ * asked for.
  *
  * The patch (only the keys actually sent — not the target's whole existing
  * overlay) is clamped to the *actor's own* effective permissions before
@@ -56,9 +57,6 @@ export async function resetUserPassword(userId) {
 export async function updateUserPermissions(actorId, targetId, patch) {
   const target = await prisma.user.findUnique({ where: { id: targetId } });
   if (!target) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
-  if (target.role !== "ADMIN") {
-    throw new ApiError(400, "NOT_AN_ADMIN_ACCOUNT", "Permissions can only be set on an Admin account — change its role first");
-  }
   const actor = await prisma.user.findUnique({ where: { id: actorId } });
   if (!actor) throw new ApiError(401, "UNAUTHENTICATED", "Acting user no longer exists");
 

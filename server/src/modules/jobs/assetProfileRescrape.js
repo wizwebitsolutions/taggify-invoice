@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { refreshAssetMetrics } from "../scraping/service.js";
+import { warmProfilePicCache } from "../assets/service.js";
 
 /**
  * Refreshes each approved asset's Instagram profile — follower count,
@@ -14,6 +15,10 @@ export async function assetProfileRescrapeJob() {
   for (const { id } of assets) {
     try {
       await refreshAssetMetrics(id);
+      // Inventory card's cover photo (user report, 11 Sep) — pre-fetch it
+      // into fetchProfilePic's cache right after the URL refreshes, so a
+      // real viewer's <img> is instant instead of racing Instagram live.
+      await warmProfilePicCache(id);
     } catch (err) {
       console.error(`assetProfileRescrapeJob: asset ${id} failed`, err);
     }

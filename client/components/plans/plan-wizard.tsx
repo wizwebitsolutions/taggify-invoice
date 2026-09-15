@@ -1,0 +1,889 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { Steps } from "@/components/ui/steps";
+import { Button } from "@/components/ui/button";
+import { Field, TextField, TextArea, MoneyField, IntegerField } from "@/components/ui/form-field";
+import { PageHeader } from "@/components/ui/page-header";
+import { Chip, Chips } from "@/components/ui/chips";
+import { Tag } from "@/components/ui/tag";
+import { Note } from "@/components/ui/note";
+import { Card, CardHeader, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
+import { ProgressBar } from "@/components/ui/panel";
+import { ErrorNotice, EmptyState, TableSkeleton } from "@/components/ui/table-parts";
+import { CloseIcon, SearchIcon, ArrowRightIcon, DownloadIcon } from "@/components/icons";
+import { plans as plansApi, assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Plan, type Asset, type PlanItemInput } from "@/lib/api-client";
+import { parsePlanPageSheet } from "@/lib/parseAssignmentSheet";
+import { money, count, compactNumber } from "@/lib/format";
+import { formatIndian } from "@/components/ui/form-field";
+
+/**
+ * Plan wizard — a full page, not a popup, in four steps (reshaped per the
+ * user request of 14 Sep):
+ *   1. Client & brief   — name, client, contact, a mandatory brief. No GST
+ *                         toggle, no budget here.
+ *   2. Budget & pages   — the budget first, then pages by category / search /
+ *                         manual pick / sheet import, posts per page, with a
+ *                         hard cap: the client-facing total can't pass the
+ *                         budget (server enforces it too: PLAN_OVER_BUDGET).
+ *   3. Pricing          — impressions, our internal cost (read-only) and an
+ *                         editable client price per page. No margin %.
+ *   4. Preview & sheet  — the client view + generate the client/internal
+ *                         Google Sheets. Client details, the overview
+ *                         overrides, the execution sheet and "Plan B" are gone
+ *                         from here.
+ * Pages and pricing share one draft item list held here; each "Next" persists.
+ */
+type StepIndex = 1 | 2 | 3 | 4;
+const STEP_LABELS: Record<StepIndex, string> = { 1: "Client & brief", 2: "Budget & pages", 3: "Pricing", 4: "Preview & sheet" };
+const STEP_HINT: Record<StepIndex, string> = { 1: "Who is this for, and what's the brief?", 2: "Set the budget, then pick pages within it", 3: "Set the overall client total and expected impressions", 4: "Check the client view and generate the sheet" };
+
+interface DraftItem {
+  assetId: string;
+  format: string;
+  cost: string;
+  postsPerProfile: string;
+}
+
+const isFormat = (f: string) => (FORMATS as readonly string[]).includes(f);
+// A plan saved before 14 Sep can carry a legacy format (carousel, video...);
+// the server now rejects those, so it's normalised to reel here with its
+// stored cost dropped (the rate card for reel applies instead). A legacy
+// per-page clientCost is dropped the same way — the client-facing number is
+// the overall override now (14 Sep), so the next save wipes old markups.
+const toDraft = (plan: Plan): DraftItem[] =>
+  (plan.items ?? []).map((i) => (isFormat(i.format) ? { assetId: i.assetId, format: i.format, cost: i.cost, postsPerProfile: String(i.postsPerProfile) } : { assetId: i.assetId, format: FORMATS[0], cost: "", postsPerProfile: String(i.postsPerProfile) }));
+const toInput = (items: DraftItem[]): PlanItemInput[] =>
+  items.map((i) => ({ assetId: i.assetId, format: i.format, cost: i.cost ? Number(i.cost) : undefined, postsPerProfile: Math.max(1, Number(i.postsPerProfile) || 1) }));
+const rateFor = (asset: Asset | undefined, format: string) => Number(asset?.rateCards.find((rc) => rc.format === format)?.amount ?? 0);
+const itemCost = (i: DraftItem, asset: Asset | undefined) => (i.cost ? Number(i.cost) : rateFor(asset, i.format));
+const itemPosts = (i: DraftItem) => Math.max(1, Number(i.postsPerProfile) || 1);
+/** Only reel/story exist app-wide (14 Sep); a page's priced formats narrow that further. */
+const formatsFor = (asset: Asset | undefined): string[] => {
+  const priced = (asset?.rateCards ?? []).map((rc) => rc.format).filter(isFormat);
+  return priced.length > 0 ? priced : [...FORMATS];
+};
+const instagramUrl = (handle: string) => `https://www.instagram.com/${handle.replace(/^@/, "")}/`;
+
+function clearableOnUpdate(value: string): string | null {
+  return value.trim() === "" ? null : value;
+}
+
+export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose, onSaved }: { token: string; plan: Plan | null; initialAssetIds: string[]; onClose: () => void; onSaved: () => void }) {
+  const [plan, setPlan] = useState<Plan | null>(initialPlan);
+  const [step, setStep] = useState<StepIndex>(1);
+  const [dirty, setDirty] = useState(false);
+
+  const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
+  const allAssets = useMemo(() => assetsQuery.data ?? [], [assetsQuery.data]);
+  const assetById = useMemo(() => new Map(allAssets.map((a) => [a.id, a])), [allAssets]);
+
+  // Draft items + budget are shared by "Budget & pages" and "Pricing".
+  const [items, setItems] = useState<DraftItem[]>(() => (initialPlan && (initialPlan.items?.length ?? 0) > 0 ? toDraft(initialPlan) : []));
+  const [budget, setBudget] = useState<string>(initialPlan?.budget != null ? String(Math.round(Number(initialPlan.budget))) : "");
+  // Step 3's editable *overall* client numbers (user request, 14 Sep —
+  // "client side overall total cost, impression should be editable, not
+  // single page"). "" = no override, show the computed value.
+  const [overrideCost, setOverrideCost] = useState<string>(initialPlan?.overrideCost != null ? String(Math.round(Number(initialPlan.overrideCost))) : "");
+  const [overrideImpressions, setOverrideImpressions] = useState<string>(initialPlan?.overrideImpressions != null ? String(initialPlan.overrideImpressions) : "");
+  const [seededInitial, setSeededInitial] = useState(false);
+  useEffect(() => {
+    if (seededInitial || initialPlan || initialAssetIds.length === 0 || allAssets.length === 0) return;
+    setItems(initialAssetIds.map((assetId) => ({ assetId, format: formatsFor(assetById.get(assetId))[0], cost: "", postsPerProfile: "1" })));
+    setSeededInitial(true);
+  }, [seededInitial, initialPlan, initialAssetIds, allAssets, assetById]);
+
+  function savedPlan(updated: Plan) {
+    setPlan(updated);
+    setDirty(true);
+  }
+  function close() {
+    if (dirty) onSaved();
+    onClose();
+  }
+
+  const saveItems = useMutation({
+    mutationFn: () =>
+      plansApi.update(token, plan!.id, {
+        items: toInput(items),
+        budget: Number(budget),
+        overrideCost: overrideCost ? Number(overrideCost) : null,
+        overrideImpressions: overrideImpressions ? Number(overrideImpressions) : null,
+      }),
+    onSuccess: (saved) => {
+      savedPlan(saved);
+      setItems(toDraft(saved));
+    },
+  });
+
+  const subtotal = items.reduce((s, i) => s + itemCost(i, assetById.get(i.assetId)) * itemPosts(i), 0);
+  // Step 2 caps page-picking on the line sum; Step 3's typed total (when
+  // any) is what's quoted, so pages added later never hide behind an old
+  // override on the picking step.
+  const computedQuoted = subtotal;
+  const quoted = overrideCost ? Number(overrideCost) : computedQuoted;
+  const budgetNumber = budget ? Number(budget) : null;
+
+  return (
+    <div className="flex flex-col gap-5" data-testid="plan-wizard">
+      <PageHeader
+        title={plan ? plan.name : "New plan"}
+        subtitle={`Step ${step} of 4 · ${STEP_HINT[step]}`}
+        tags={plan?.status && plan.status !== "DRAFT" ? <Tag tone={plan.status === "APPROVED" ? "ok" : plan.status === "REJECTED" ? "bad" : "wait"}>{plan.status === "PENDING_APPROVAL" ? "Pending approval" : plan.status[0] + plan.status.slice(1).toLowerCase()}</Tag> : undefined}
+        actions={
+          <>
+            <Button variant="ghost" onClick={close}>
+              Save draft
+            </Button>
+            <Button variant="ghost" size="icon" onClick={close} aria-label="Close">
+              <CloseIcon className="h-4 w-4" />
+            </Button>
+          </>
+        }
+      />
+
+      <Steps steps={[1, 2, 3, 4].map((s) => STEP_LABELS[s as StepIndex])} current={step - 1} />
+
+      {step === 1 && (
+        <BasicsStep
+          token={token}
+          plan={plan}
+          onSaved={(saved) => {
+            savedPlan(saved);
+            setStep(2);
+          }}
+        />
+      )}
+
+      {step === 2 && plan && (
+        <PagesStep
+          token={token}
+          plan={plan}
+          assets={allAssets}
+          loading={assetsQuery.isLoading}
+          items={items}
+          setItems={setItems}
+          budget={budget}
+          setBudget={setBudget}
+          quoted={computedQuoted}
+          onPlanChanged={savedPlan}
+          onBack={() => setStep(1)}
+          saving={saveItems.isPending}
+          error={saveItems.isError ? saveItems.error : null}
+          onNext={() => saveItems.mutate(undefined, { onSuccess: () => setStep(3) })}
+        />
+      )}
+
+      {step === 3 && plan && (
+        <PriceStep
+          assetById={assetById}
+          items={items}
+          budget={budgetNumber}
+          subtotal={subtotal}
+          computedQuoted={computedQuoted}
+          quoted={quoted}
+          overrideCost={overrideCost}
+          setOverrideCost={setOverrideCost}
+          overrideImpressions={overrideImpressions}
+          setOverrideImpressions={setOverrideImpressions}
+          onBack={() => setStep(2)}
+          saving={saveItems.isPending}
+          error={saveItems.isError ? saveItems.error : null}
+          onNext={() => saveItems.mutate(undefined, { onSuccess: () => setStep(4) })}
+        />
+      )}
+
+      {step === 4 && plan && <SendStep token={token} plan={plan} onSaved={savedPlan} onBack={() => setStep(3)} onDone={close} />}
+    </div>
+  );
+}
+
+function FooterBar({ onBack, meta, children }: { onBack?: () => void; meta?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="mt-2 flex items-center gap-2.5 border-t border-border pt-4">
+      {onBack && (
+        <Button type="button" variant="secondary" onClick={onBack}>
+          Back
+        </Button>
+      )}
+      <span className="ml-auto hidden text-[0.8125rem] text-text-muted sm:inline">{meta}</span>
+      {children}
+    </div>
+  );
+}
+
+/** "Budget left" bar shared by steps 2 and 3 — the one number the hard cap is about. */
+function BudgetLeft({ budget, quoted }: { budget: number | null; quoted: number }) {
+  if (budget == null || !(budget > 0)) return null;
+  const left = budget - quoted;
+  const over = left < 0;
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="budget-left">
+      <div className="flex items-center justify-between text-[0.8125rem]">
+        <span className="text-text-muted">{over ? "Over budget by" : "Budget left"}</span>
+        <b className={over ? "tabular-nums text-rose" : "tabular-nums"}>{money(Math.abs(left))}</b>
+      </div>
+      <ProgressBar pct={(quoted / budget) * 100} tone={over ? "rose" : "accent"} />
+      <p className="text-[0.72rem] text-text-faint">
+        {money(quoted)} of {money(budget)} used
+      </p>
+    </div>
+  );
+}
+
+/* ── Step 1 · Client & brief ──────────────────────────────────────────── */
+function BasicsStep({ token, plan, onSaved }: { token: string; plan: Plan | null; onSaved: (plan: Plan) => void }) {
+  const [name, setName] = useState(plan?.name ?? "");
+  const [clientName, setClientName] = useState(plan?.clientName ?? "");
+  const [clientContact, setClientContact] = useState(plan?.clientContact ?? "");
+  const [notes, setNotes] = useState(plan?.notes ?? "");
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      plan
+        ? plansApi.update(token, plan.id, { name, clientName, clientContact: clearableOnUpdate(clientContact ?? ""), notes: notes.trim() })
+        : plansApi.create(token, { name, clientName, clientContact: clientContact || undefined, notes: notes.trim() }),
+    onSuccess: onSaved,
+  });
+  const ready = Boolean(name.trim() && clientName.trim() && notes.trim());
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (ready) mutation.mutate();
+      }}
+      className="flex flex-col gap-5"
+    >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
+        <Card className="p-5 md:p-6">
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Plan name">
+                <TextField required aria-label="Plan name" value={name} onChange={setName} placeholder="e.g. Nykaa Summer pitch" />
+              </Field>
+              <Field label="Client name">
+                <TextField required aria-label="Client name" value={clientName} onChange={setClientName} placeholder="e.g. Nykaa" />
+              </Field>
+            </div>
+            <Field label="Client contact (optional)">
+              <TextField aria-label="Client contact" value={clientContact ?? ""} onChange={setClientContact} placeholder="Email or phone" />
+            </Field>
+            {/* user request, 14 Sep — "brief note will be mandatory" */}
+            <Field label="Brief">
+              <TextArea required aria-label="Brief" value={notes ?? ""} onChange={setNotes} placeholder="What the client wants from this campaign — goals, tone, must-haves, timing." rows={4} />
+            </Field>
+          </div>
+        </Card>
+        <Note tone="info" className="self-start">
+          The budget is set on the next step, and company, GST number and billing address are asked for when the client invoice is generated.
+        </Note>
+      </div>
+      {mutation.isError && <ErrorNotice message={mutation.error instanceof ApiError ? mutation.error.message : "Couldn't save this plan."} />}
+      <FooterBar>
+        <Button type="submit" disabled={mutation.isPending || !ready}>
+          {mutation.isPending ? "Saving…" : "Next: Budget & pages"} <ArrowRightIcon className="h-4 w-4" />
+        </Button>
+      </FooterBar>
+    </form>
+  );
+}
+
+/* ── Step 2 · Budget & pages ──────────────────────────────────────────── */
+function PagesStep({
+  token,
+  plan,
+  assets,
+  loading,
+  items,
+  setItems,
+  budget,
+  setBudget,
+  quoted,
+  onPlanChanged,
+  onBack,
+  onNext,
+  saving,
+  error,
+}: {
+  token: string;
+  plan: Plan;
+  assets: Asset[];
+  loading: boolean;
+  items: DraftItem[];
+  setItems: React.Dispatch<React.SetStateAction<DraftItem[]>>;
+  budget: string;
+  setBudget: (v: string) => void;
+  quoted: number;
+  onPlanChanged: (p: Plan) => void;
+  onBack: () => void;
+  onNext: () => void;
+  saving: boolean;
+  error: unknown;
+}) {
+  const queryClient = useQueryClient();
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [search, setSearch] = useState("");
+  const [topN, setTopN] = useState("10");
+  const [sheetLink, setSheetLink] = useState("");
+  const [sheetFileName, setSheetFileName] = useState("");
+  const [sheetError, setSheetError] = useState("");
+  const [sheetResultMsg, setSheetResultMsg] = useState("");
+  const [capMessage, setCapMessage] = useState("");
+
+  const budgetNumber = budget ? Number(budget) : null;
+  const hasBudget = budgetNumber != null && budgetNumber > 0;
+  const remaining = hasBudget ? budgetNumber - quoted : 0;
+  const overBudget = hasBudget && quoted > budgetNumber;
+
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const a of assets) if (a.category) counts.set(a.category, (counts.get(a.category) ?? 0) + 1);
+    return [{ label: "All", count: assets.length }, ...[...counts.entries()].map(([label, c]) => ({ label, count: c }))];
+  }, [assets]);
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return [...assets]
+      .filter((a) => categoryFilter === "All" || a.category === categoryFilter)
+      .filter((a) => !q || a.handle.toLowerCase().includes(q) || (a.category ?? "").toLowerCase().includes(q))
+      .sort((a, b) => b.followers - a.followers);
+  }, [assets, categoryFilter, search]);
+  const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
+  const itemByAsset = new Map(items.map((i) => [i.assetId, i]));
+
+  const newItem = (asset: Asset): DraftItem => ({ assetId: asset.id, format: formatsFor(asset)[0], cost: "", postsPerProfile: "1" });
+  const costToAdd = (asset: Asset) => rateFor(asset, formatsFor(asset)[0]);
+
+  // Hard cap (user request, 14 Sep, decided this session): a page that
+  // doesn't fit in what's left can't be added, and posts can't be raised
+  // past it. Removing is always allowed.
+  function toggleAsset(asset: Asset) {
+    setCapMessage("");
+    if (itemByAsset.has(asset.id)) {
+      setItems((prev) => prev.filter((i) => i.assetId !== asset.id));
+      return;
+    }
+    if (!hasBudget) return setCapMessage("Enter the budget first — pages are picked within it.");
+    if (!(costToAdd(asset) > 0)) return setCapMessage(`@${asset.handle} has no reel or story rate yet — set one in Inventory first.`);
+    if (costToAdd(asset) > remaining) return setCapMessage(`@${asset.handle} (${money(costToAdd(asset))}) doesn't fit in the ${money(Math.max(0, remaining))} left.`);
+    setItems((prev) => [...prev, newItem(asset)]);
+  }
+  function updateItem(assetId: string, patch: Partial<DraftItem>) {
+    setCapMessage("");
+    const current = itemByAsset.get(assetId);
+    if (!current) return;
+    const next = { ...current, ...patch };
+    if (hasBudget) {
+      const asset = assetById.get(assetId);
+      const delta = itemCost(next, asset) * itemPosts(next) - itemCost(current, asset) * itemPosts(current);
+      if (delta > remaining) {
+        setCapMessage(`That would take @${asset?.handle ?? assetId} over the ${money(Math.max(0, remaining))} left.`);
+        return;
+      }
+    }
+    setItems((prev) => prev.map((i) => (i.assetId === assetId ? next : i)));
+  }
+  function addTopN() {
+    setCapMessage("");
+    if (!hasBudget) return setCapMessage("Enter the budget first — pages are picked within it.");
+    const n = Math.max(1, Number(topN) || 0);
+    const candidates = visible.filter((a) => !itemByAsset.has(a.id)).slice(0, n);
+    let left = remaining;
+    const fits: DraftItem[] = [];
+    for (const a of candidates) {
+      const c = costToAdd(a);
+      if (!(c > 0) || c > left) continue;
+      left -= c;
+      fits.push(newItem(a));
+    }
+    if (fits.length < candidates.length) setCapMessage(`Added ${fits.length} of ${candidates.length} — the rest don't fit in the budget.`);
+    setItems((prev) => [...prev, ...fits]);
+  }
+
+  const importMutation = useMutation({
+    mutationFn: async (url: string) => {
+      const { csv } = await plansApi.importSheetUrl(token, url);
+      return parsePlanPageSheet(csv);
+    },
+    onSuccess: (rows) => importRows(rows),
+    onError: (err) => setSheetError(err instanceof ApiError ? err.message : "Couldn't fetch that sheet."),
+  });
+  const attachRowsMutation = useMutation({
+    mutationFn: (rows: Awaited<ReturnType<typeof parsePlanPageSheet>>) => plansApi.importSheetPages(token, plan.id, rows),
+    onSuccess: (result) => {
+      setSheetResultMsg(`${result.matchedCount} matched, ${result.createdCount} new page${result.createdCount === 1 ? "" : "s"} created.`);
+      if (result.failures.length > 0) setSheetError(result.failures.map((f) => `@${f.handle}: ${f.reason}`).join(" "));
+      const serverItems = toDraft(result.plan);
+      const serverIds = new Set(serverItems.map((i) => i.assetId));
+      setItems((prevLocal) => [...serverItems, ...prevLocal.filter((i) => !serverIds.has(i.assetId))]);
+      onPlanChanged(result.plan);
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+    },
+    onError: (err) => setSheetError(err instanceof ApiError ? err.message : "Couldn't import that sheet."),
+  });
+  async function importRows(rows: Awaited<ReturnType<typeof parsePlanPageSheet>>) {
+    setSheetError("");
+    setSheetResultMsg("");
+    if (rows.length === 0) {
+      setSheetError('No rows found — check the sheet has a header row (e.g. "handle").');
+      return;
+    }
+    attachRowsMutation.mutate(rows);
+  }
+  async function handleSheetFile(file: File | undefined) {
+    if (!file) return;
+    setSheetFileName(file.name);
+    setSheetError("");
+    try {
+      await importRows(await parsePlanPageSheet(file));
+    } catch {
+      setSheetError("Couldn't read that file — make sure it's a CSV export.");
+    }
+  }
+
+  const maxPosts = items.reduce((m, i) => Math.max(m, itemPosts(i)), 1);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
+        <div className="flex flex-col gap-4">
+          {/* Budget comes first (user request, 14 Sep — "after this, budget
+              selection, according to the budget can add no. of post per page"). */}
+          <Card className="p-[18px]" data-testid="budget-card">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="sm:w-[260px]">
+                <Field label="Client budget">
+                  <MoneyField aria-label="Budget" value={budget} onChange={setBudget} placeholder="4,50,000" />
+                </Field>
+              </div>
+              <p className="text-[0.75rem] text-text-muted sm:max-w-[360px] sm:text-right">Pages and posts can be added only up to this amount. Change it here any time.</p>
+            </div>
+          </Card>
+
+          <Card className="flex flex-col">
+            <CardHeader
+              title="Pick pages"
+              meta={<span className="text-[0.78rem] text-text-muted">{items.length} selected</span>}
+              action={
+                <label className="relative block w-[200px]">
+                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-faint" />
+                  <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search pages" aria-label="Search pages" className="h-8 w-full rounded-md border border-border bg-surface pl-8 pr-2 text-[0.78rem] placeholder:text-text-faint focus:border-ink focus:outline-none" />
+                </label>
+              }
+            />
+            <div className="flex flex-wrap items-center gap-2 border-b border-border px-[18px] py-2.5">
+              <Chips className="min-w-0 flex-1">
+                {categories.map((c) => (
+                  <Chip key={c.label} on={categoryFilter === c.label} count={c.count} onClick={() => setCategoryFilter(c.label)}>
+                    {c.label}
+                  </Chip>
+                ))}
+              </Chips>
+              <div className="flex items-center gap-1.5 text-[0.75rem] text-text-muted">
+                Add top
+                <IntegerField value={topN} onChange={setTopN} max={500} aria-label="How many top pages to add" className="h-7 w-14 rounded-[6px] px-2 text-center text-[0.78rem] shadow-none" />
+                by followers
+                <Button type="button" size="sm" variant="secondary" onClick={addTopN}>
+                  Add
+                </Button>
+              </div>
+            </div>
+            {capMessage && (
+              <p className="border-b border-border bg-rose-soft px-[18px] py-2 text-[0.78rem] text-rose" role="status" data-testid="budget-cap-message">
+                {capMessage}
+              </p>
+            )}
+            {loading ? (
+              <TableSkeleton />
+            ) : visible.length === 0 ? (
+              <EmptyState label="No pages in this category." />
+            ) : (
+              <Table>
+                <THead>
+                  <tr>
+                    <TH className="w-9 pr-0" />
+                    <TH>Page</TH>
+                    <TH className="hidden xl:table-cell">Category</TH>
+                    <TH right className="hidden sm:table-cell">
+                      Followers
+                    </TH>
+                    <TH>Format</TH>
+                    <TH right>Posts</TH>
+                    <TH right className="hidden lg:table-cell">
+                      Cost
+                    </TH>
+                  </tr>
+                </THead>
+                <tbody>
+                  {visible.map((asset) => {
+                    const item = itemByAsset.get(asset.id);
+                    const selected = Boolean(item);
+                    const formats = formatsFor(asset);
+                    const priced = costToAdd(asset) > 0;
+                    const fits = selected || (hasBudget && priced && costToAdd(asset) <= remaining);
+                    return (
+                      <TR key={asset.id} selected={selected}>
+                        <TD className="w-9 pr-0">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleAsset(asset)}
+                            disabled={!fits}
+                            title={!fits ? (!hasBudget ? "Enter the budget first" : !priced ? "No reel/story rate set for this page" : "Doesn't fit in the budget left") : undefined}
+                            aria-label={`Select @${asset.handle}`}
+                            className="h-4 w-4 rounded accent-[var(--ink)] disabled:opacity-40"
+                          />
+                        </TD>
+                        <TD>
+                          {/* user request, 14 Sep — "instagram page link should be open on clicking page name" */}
+                          <a href={instagramUrl(asset.handle)} target="_blank" rel="noopener noreferrer" className="font-semibold hover:text-blue hover:underline" title={`Open @${asset.handle} on Instagram`}>
+                            @{asset.handle}
+                          </a>
+                        </TD>
+                        <TD className="hidden xl:table-cell">{asset.category ? <Tag tone="neutral" dot={false}>{asset.category}</Tag> : <span className="text-text-faint">—</span>}</TD>
+                        <TD right className="hidden whitespace-nowrap tabular-nums text-text-muted sm:table-cell">
+                          {count(asset.followers)} followers
+                        </TD>
+                        <TD>
+                          {selected && item ? (
+                            <select value={item.format} onChange={(e) => updateItem(asset.id, { format: e.target.value, cost: "" })} aria-label={`Format for @${asset.handle}`} className="h-8 rounded-[6px] border border-border-strong bg-surface px-2 text-[0.78rem] capitalize text-text focus:border-ink focus:outline-none">
+                              {formats.map((f) => (
+                                <option key={f} value={f}>
+                                  {f}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="text-text-faint">—</span>
+                          )}
+                        </TD>
+                        <TD right>
+                          {selected && item ? (
+                            <IntegerField value={item.postsPerProfile} onChange={(v) => updateItem(asset.id, { postsPerProfile: v })} max={99} aria-label={`Posts for @${asset.handle}`} className="h-8 w-14 rounded-[6px] px-2 text-[0.78rem] shadow-none" />
+                          ) : (
+                            <span className="text-text-faint">—</span>
+                          )}
+                        </TD>
+                        <TD right className="hidden tabular-nums lg:table-cell">
+                          {selected && item ? money(itemCost(item, asset) * itemPosts(item)) : costToAdd(asset) ? money(costToAdd(asset)) : <span className="text-text-faint">—</span>}
+                        </TD>
+                      </TR>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            )}
+          </Card>
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <Card className="flex flex-col gap-2 p-[18px]">
+            <div className="flex items-center justify-between text-[0.8125rem]">
+              <span className="text-text-muted">Pages selected</span>
+              <b className="tabular-nums">{items.length}</b>
+            </div>
+            <div className="flex items-center justify-between text-[0.8125rem]">
+              <span className="text-text-muted">Client cost so far</span>
+              <b className="tabular-nums">{money(quoted)}</b>
+            </div>
+            {hasBudget ? <BudgetLeft budget={budgetNumber} quoted={quoted} /> : <p className="text-[0.75rem] text-text-faint">Enter a budget to start picking pages.</p>}
+            {maxPosts > 1 && (
+              <p className="border-t border-border pt-2 text-[0.72rem] text-text-muted">
+                Pages with more than one post run as phases — creators will see this as {maxPosts} campaigns (Phase 1 to {maxPosts}).
+              </p>
+            )}
+          </Card>
+          <Card className="p-[18px]">
+            <p className="text-[0.8375rem] font-semibold">Attach a Google Sheet of pages (optional)</p>
+            <p className="mt-1 text-[0.78rem] text-text-muted">A handle not already in Inventory gets added as a new pending page — a cost column is required for those rows since a new page has no rate card yet.</p>
+            <div className="mt-3 flex flex-col gap-2">
+              <TextField type="url" value={sheetLink} onChange={setSheetLink} placeholder="https://docs.google.com/spreadsheets/…" />
+              <Button type="button" variant="secondary" disabled={!sheetLink.trim() || importMutation.isPending || attachRowsMutation.isPending} onClick={() => importMutation.mutate(sheetLink)}>
+                {importMutation.isPending || attachRowsMutation.isPending ? "Fetching…" : "Fetch & attach"}
+              </Button>
+              <label className="flex h-[64px] cursor-pointer flex-col items-center justify-center gap-1 rounded-[10px] border border-dashed border-border-strong text-[0.78rem] font-medium text-text-muted hover:bg-surface-2">
+                <DownloadIcon className="h-4 w-4" />
+                {sheetFileName || "…or upload a CSV of pages instead"}
+                <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => handleSheetFile(e.target.files?.[0])} />
+              </label>
+              {sheetError && <p className="text-[0.75rem] text-rose">{sheetError}</p>}
+              {sheetResultMsg && !sheetError && <p className="text-[0.75rem] text-accent">{sheetResultMsg}</p>}
+            </div>
+          </Card>
+        </div>
+      </div>
+      {error ? <ErrorNotice message={error instanceof ApiError ? error.message : "Couldn't save these pages."} /> : null}
+      <FooterBar onBack={onBack} meta={`${items.length} page${items.length === 1 ? "" : "s"} · ${money(quoted)}${hasBudget ? ` of ${money(budgetNumber)}` : ""}`}>
+        <Button type="button" onClick={onNext} disabled={saving || !hasBudget || overBudget} title={!hasBudget ? "Enter the budget first" : overBudget ? "Over budget — remove pages or posts" : undefined}>
+          {saving ? "Saving…" : "Next: Pricing"} <ArrowRightIcon className="h-4 w-4" />
+        </Button>
+      </FooterBar>
+    </div>
+  );
+}
+
+/* ── Step 3 · Pricing ─────────────────────────────────────────────────── */
+function PriceStep({
+  assetById,
+  items,
+  budget,
+  subtotal,
+  computedQuoted,
+  quoted,
+  overrideCost,
+  setOverrideCost,
+  overrideImpressions,
+  setOverrideImpressions,
+  onBack,
+  onNext,
+  saving,
+  error,
+}: {
+  assetById: Map<string, Asset>;
+  items: DraftItem[];
+  budget: number | null;
+  subtotal: number;
+  /** Sum of the lines (cost × posts) — the "Total cost" placeholder when nothing's typed. */
+  computedQuoted: number;
+  /** The client-facing total in effect: the typed override, else computedQuoted. */
+  quoted: number;
+  overrideCost: string;
+  setOverrideCost: (v: string) => void;
+  overrideImpressions: string;
+  setOverrideImpressions: (v: string) => void;
+  onBack: () => void;
+  onNext: () => void;
+  saving: boolean;
+  error: unknown;
+}) {
+  // The quoted total is a markup and may exceed the budget — the budget only
+  // caps the pages (Step 2). Nothing here blocks Next.
+  const belowComputed = Boolean(overrideCost) && quoted < computedQuoted;
+  const markup = quoted - subtotal;
+  const computedViews = items.reduce((s, i) => s + (assetById.get(i.assetId)?.engagement.avgViews ?? 0) * itemPosts(i), 0);
+  const expectedViews = overrideImpressions ? Number(overrideImpressions) : computedViews;
+  const cpm = expectedViews > 0 ? (quoted / expectedViews) * 1000 : null;
+  const categories = [...new Set(items.map((i) => assetById.get(i.assetId)?.category).filter(Boolean))].join(", ");
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
+        <Card>
+          <CardHeader title={`${items.length} page${items.length === 1 ? "" : "s"}${categories ? ` · ${categories}` : ""}`} meta={<span className="text-[0.78rem] text-text-muted">internal cost is what each page earns; the client total is set on the right</span>} />
+          {items.length === 0 ? (
+            <EmptyState label="No pages picked yet — go back and select some." />
+          ) : (
+            <Table data-testid="price-table">
+              <THead>
+                <tr>
+                  <TH>Page</TH>
+                  <TH right className="hidden sm:table-cell">
+                    Followers
+                  </TH>
+                  <TH right className="hidden md:table-cell">
+                    Exp. impressions
+                  </TH>
+                  <TH right>Internal cost</TH>
+                </tr>
+              </THead>
+              <tbody>
+                {items.map((i) => {
+                  const asset = assetById.get(i.assetId);
+                  const ours = itemCost(i, asset);
+                  const posts = itemPosts(i);
+                  return (
+                    <TR key={i.assetId}>
+                      <TD>
+                        <Cell2 primary={`@${asset?.handle ?? "—"}`} secondary={`${i.format}${posts > 1 ? ` · ${posts} posts` : ""}`} />
+                      </TD>
+                      <TD right className="hidden tabular-nums text-text-muted sm:table-cell">
+                        {asset ? compactNumber(asset.followers) : "—"}
+                      </TD>
+                      <TD right className="hidden tabular-nums text-text-muted md:table-cell">
+                        {asset?.engagement.avgViews != null ? compactNumber(asset.engagement.avgViews * posts) : "—"}
+                      </TD>
+                      <TD right className="tabular-nums text-text-muted" data-testid={`internal-cost-${i.assetId}`}>
+                        {money(ours)}
+                        {posts > 1 && <span className="ml-1 text-[0.72rem] text-text-faint">× {posts}</span>}
+                      </TD>
+                    </TR>
+                  );
+                })}
+              </tbody>
+            </Table>
+          )}
+        </Card>
+
+        <div className="flex flex-col gap-4">
+          <Card className="flex flex-col gap-2.5 p-[18px]" data-testid="price-totals">
+            <b className="text-[0.875rem]">Client side</b>
+            <Row label="Budget" value={budget != null ? money(budget) : "—"} />
+            <EditableRow label="Total cost" hint={`computed ${money(computedQuoted)}`}>
+              <MoneyField compact value={overrideCost} onChange={setOverrideCost} placeholder={formatIndian(String(Math.round(computedQuoted)))} aria-label="Total cost to client" className="ml-auto w-36" />
+            </EditableRow>
+            <EditableRow label="Expected impressions" hint={`computed ${computedViews > 0 ? compactNumber(computedViews) : "—"}`}>
+              <IntegerField value={overrideImpressions} onChange={setOverrideImpressions} placeholder={computedViews > 0 ? formatIndian(String(Math.round(computedViews))) : "0"} aria-label="Expected impressions" className="ml-auto h-8 w-36 text-right" />
+            </EditableRow>
+            <p className="text-[0.72rem] text-text-faint">Leave blank to use the computed number. These are what the client sees.</p>
+            {belowComputed && (
+              <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[0.75rem] text-amber-800" data-testid="override-below-computed">
+                Below what the pages come to ({money(computedQuoted)}) — the client would pay less than the pages earn.
+              </p>
+            )}
+            <Row label="Quoted to client" value={money(quoted)} bold />
+            <div className="my-0.5 h-px bg-border" />
+            <b className="text-[0.875rem]">Internal</b>
+            <Row label="Our cost" value={money(subtotal)} />
+            <Row label={markup >= 0 ? "Margin" : "Loss"} value={money(Math.abs(markup))} tone={markup > 0 ? "ok" : markup < 0 ? "bad" : undefined} />
+            <BudgetLeft budget={budget} quoted={subtotal} />
+          </Card>
+          <Card className="flex flex-col gap-2.5 p-[18px]">
+            <b className="text-[0.875rem]">Expected reach</b>
+            <Row label="Expected impressions" value={expectedViews > 0 ? compactNumber(expectedViews) : "—"} bold />
+            <Row label="Cost per 1k impressions" value={cpm != null ? money(Math.round(cpm)) : "—"} bold />
+            <p className="text-[0.75rem] text-text-muted">{overrideImpressions ? "Using the impressions you entered." : "Based on each page\u2019s scraped average views."}</p>
+          </Card>
+        </div>
+      </div>
+      {error ? <ErrorNotice message={error instanceof ApiError ? error.message : "Couldn't save the pricing."} /> : null}
+      <FooterBar onBack={onBack} meta={`Quoted ${money(quoted)} · pages ${money(subtotal)}${budget != null ? ` of ${money(budget)}` : ""}`}>
+        <Button type="button" onClick={onNext} disabled={saving}>
+          {saving ? "Saving…" : "Next: Preview"} <ArrowRightIcon className="h-4 w-4" />
+        </Button>
+      </FooterBar>
+    </div>
+  );
+}
+
+function EditableRow({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-[0.8125rem]">
+      <span className="flex flex-col">
+        <span className="text-text-muted">{label}</span>
+        <span className="text-[0.7rem] text-text-faint">{hint}</span>
+      </span>
+      {children}
+    </div>
+  );
+}
+
+function Row({ label, value, bold, tone }: { label: string; value: string; bold?: boolean; tone?: "ok" | "bad" }) {
+  return (
+    <div className="flex items-center justify-between text-[0.8125rem]">
+      <span className="text-text-muted">{label}</span>
+      <span className={`tabular-nums ${bold ? "font-semibold" : ""} ${tone === "bad" ? "text-rose" : tone === "ok" ? "text-accent" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+/* ── Step 4 · Preview & sheet ─────────────────────────────────────────── */
+function SendStep({ token, plan, onSaved, onBack, onDone }: { token: string; plan: Plan; onSaved: (plan: Plan) => void; onBack: () => void; onDone: () => void }) {
+  const generateMutation = useMutation({
+    mutationFn: async (variant: "client" | "internal") => {
+      await plansApi.generateSheet(token, plan.id, variant);
+      return plansApi.get(token, plan.id);
+    },
+    onSuccess: onSaved,
+  });
+  const pendingVariant = generateMutation.isPending ? generateMutation.variables : null;
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_400px]">
+        <Card className="overflow-hidden">
+          <CardHeader title="Client sheet preview" meta={<span className="text-[0.78rem] text-text-muted">what the client will see</span>} />
+          <div className="bg-surface-2 p-4 md:p-6">
+            <div className="mx-auto flex max-w-[560px] flex-col gap-4 rounded-[6px] border border-border bg-surface p-5 shadow-lg">
+              <p className="text-[0.72rem] font-semibold uppercase tracking-wide text-text-muted">Overview of {plan.name}</p>
+              <div className="divide-y divide-border">
+                {[
+                  ["Total Followers Targeted Overall", count(plan.overview.totalFollowers)],
+                  ["Total Posts", String(plan.overview.totalPosts)],
+                  ["Expected Impressions", `${count(plan.overview.expectedImpressions)} (est.)`],
+                  ["Cost", money(plan.overview.subtotal)],
+                  ...(plan.isGstPlan ? [["GST (18%)", money(plan.overview.gstAmount)]] : []),
+                  [plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(plan.overview.total)],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex items-center justify-between py-1.5 text-[0.8125rem]">
+                    <span className="text-text-muted">{label}</span>
+                    <span className="font-semibold tabular-nums">{value}</span>
+                  </div>
+                ))}
+              </div>
+              {plan.items.length === 0 ? (
+                <p className="text-[0.8125rem] text-text-muted">No pages added yet.</p>
+              ) : (
+                <div className="overflow-hidden rounded-md border border-border" data-testid="preview-pages">
+                  <table className="w-full text-[0.75rem]">
+                    <thead>
+                      <tr className="border-b border-border text-left text-text-muted">
+                        <th className="px-3 py-1.5 font-medium">S No</th>
+                        <th className="px-3 py-1.5 font-medium">Page</th>
+                        <th className="px-3 py-1.5 font-medium">Followers</th>
+                        <th className="px-3 py-1.5 font-medium">Format</th>
+                        <th className="px-3 py-1.5 font-medium">Posts</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {plan.items.map((item, i) => (
+                        <tr key={`${item.assetId}-${item.format}`}>
+                          <td className="px-3 py-1.5 tabular-nums text-text-muted">{i + 1}</td>
+                          <td className="px-3 py-1.5 font-semibold">@{item.asset?.handle ?? "—"}</td>
+                          <td className="px-3 py-1.5 tabular-nums">{count(item.asset?.followers ?? 0)}</td>
+                          <td className="px-3 py-1.5 capitalize">{item.format}</td>
+                          <td className="px-3 py-1.5 tabular-nums">{item.postsPerProfile}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        <Card className="flex flex-col gap-4 self-start p-[18px]">
+          <div className="flex items-center justify-between">
+            <p className="text-[0.875rem] font-semibold">Generate the sheet</p>
+            <p className="text-[0.78rem] text-text-muted">
+              {money(plan.overview.total)} · {plan.items.length} pages
+            </p>
+          </div>
+          {generateMutation.isError && <ErrorNotice message={generateMutation.error instanceof ApiError ? generateMutation.error.message : "Couldn't generate the sheet."} />}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5 rounded-[10px] border border-ink bg-surface-2 p-3">
+              <p className="text-[0.72rem] font-semibold">Client sheet</p>
+              <Button type="button" size="sm" onClick={() => generateMutation.mutate("client")} disabled={generateMutation.isPending}>
+                {pendingVariant === "client" ? "Generating…" : plan.clientSheetUrl ? "Regenerate" : "Generate"}
+              </Button>
+              {plan.clientSheetUrl && (
+                <a href={plan.clientSheetUrl} target="_blank" rel="noopener noreferrer" className="text-[0.75rem] font-medium text-blue hover:text-text">
+                  Open sheet ↗
+                </a>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5 rounded-[10px] border border-border p-3">
+              <p className="text-[0.72rem] font-medium text-text-muted">Internal sheet</p>
+              <Button type="button" size="sm" variant="secondary" onClick={() => generateMutation.mutate("internal")} disabled={generateMutation.isPending}>
+                {pendingVariant === "internal" ? "Generating…" : plan.internalSheetUrl ? "Regenerate" : "Generate"}
+              </Button>
+              {plan.internalSheetUrl && (
+                <a href={plan.internalSheetUrl} target="_blank" rel="noopener noreferrer" className="text-[0.75rem] font-medium text-text-muted hover:text-text">
+                  Open sheet ↗
+                </a>
+              )}
+            </div>
+          </div>
+          <p className="text-[0.75rem] text-text-muted">Company, GST number and address are collected when the client invoice is generated from the plan card.</p>
+        </Card>
+      </div>
+      <FooterBar onBack={onBack} meta={`${plan.items.length} pages · ${money(plan.overview.total)}`}>
+        <Button type="button" onClick={onDone}>
+          Done
+        </Button>
+      </FooterBar>
+    </div>
+  );
+}

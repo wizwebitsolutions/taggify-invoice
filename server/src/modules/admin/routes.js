@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
-import { requirePermission } from "../../middleware/requirePermission.js";
+import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
 import { prisma } from "../../lib/prisma.js";
 import { getEffectivePermissions } from "../../lib/permissions.js";
@@ -11,9 +11,13 @@ import { financeExportJob } from "../jobs/financeExport.js";
 import { financeGoogleSheetExportJob } from "../jobs/financeGoogleSheetExport.js";
 
 const router = Router();
-router.use(requireAuth, requireRole("ADMIN"));
+// No blanket requireRole("ADMIN") here any more (15 Sep) — each route below
+// is gated individually via requireAccess() so a non-admin role granted one
+// of these six sections can reach it, while /job-runs (the one route with
+// no permission key at all) keeps its own explicit requireRole("ADMIN").
+router.use(requireAuth);
 
-router.get("/users", requirePermission("users.manage"), async (req, res, next) => {
+router.get("/users", requireAccess("users.manage"), async (req, res, next) => {
   try {
     const users = await prisma.user.findMany({
       select: { id: true, phoneNumber: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true },
@@ -29,16 +33,18 @@ router.get("/users", requirePermission("users.manage"), async (req, res, next) =
   }
 });
 
-router.put("/users/:id/role", requirePermission("users.manage"), async (req, res, next) => {
+router.put("/users/:id/role", requireAccess("users.manage"), async (req, res, next) => {
   try {
     const { role } = req.body;
     if (!["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"].includes(role)) {
       return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid role" } });
     }
-    // Moving an account off ADMIN drops any sub-admin overlay it carried —
-    // if it's ever promoted back to ADMIN later, it should start as a plain
-    // full admin, not silently reappear restricted by a stale permission set.
-    const data = role === "ADMIN" ? { role } : { role, permissions: null };
+    // A role change always drops whatever overlay the account carried (15
+    // Sep — permission overlays now exist on any role, not just ADMIN) — if
+    // it's ever moved to this role (or back to ADMIN) again later, it should
+    // start at that role's plain baseline, not silently reappear restricted
+    // or granted by a stale permission set from the role it just left.
+    const data = { role, permissions: null };
     const user = await prisma.user.update({ where: { id: req.params.id }, data });
     res.json(user);
   } catch (err) {
@@ -48,7 +54,7 @@ router.put("/users/:id/role", requirePermission("users.manage"), async (req, res
 
 router.put(
   "/users/:id/permissions",
-  requirePermission("users.manage"),
+  requireAccess("users.manage"),
   validateBody(updatePermissionsSchema),
   async (req, res, next) => {
     try {
@@ -62,7 +68,7 @@ router.put(
   }
 );
 
-router.post("/users/:id/reset-password", requirePermission("users.manage"), async (req, res, next) => {
+router.post("/users/:id/reset-password", requireAccess("users.manage"), async (req, res, next) => {
   try {
     res.json(await adminService.resetUserPassword(req.params.id));
   } catch (err) {
@@ -75,7 +81,7 @@ router.post("/users/:id/reset-password", requirePermission("users.manage"), asyn
 // be tested (runTrackedJob, used by the cron schedule, deliberately
 // swallows errors into JobRun so a bad job can't crash the scheduler —
 // not useful for "did it actually work?" feedback here).
-router.post("/finance-export/run-now", requirePermission("finance.manage"), async (req, res, next) => {
+router.post("/finance-export/run-now", requireAccess("finance.manage"), async (req, res, next) => {
   const run = await prisma.jobRun.create({ data: { jobName: "finance_export", status: "running" } });
   try {
     const result = await financeExportJob();
@@ -90,7 +96,7 @@ router.post("/finance-export/run-now", requirePermission("finance.manage"), asyn
 
 // Same manual-trigger pattern as finance-export/run-now, for the Google
 // Sheet export (newTask.md, 8 Sep) — runs alongside it, not in place of it.
-router.post("/finance-google-sheet-export/run-now", requirePermission("finance.manage"), async (req, res, next) => {
+router.post("/finance-google-sheet-export/run-now", requireAccess("finance.manage"), async (req, res, next) => {
   const run = await prisma.jobRun.create({ data: { jobName: "finance_google_sheet_export", status: "running" } });
   try {
     const result = await financeGoogleSheetExportJob();
@@ -105,8 +111,11 @@ router.post("/finance-google-sheet-export/run-now", requirePermission("finance.m
 
 // Not permission-gated beyond plain ADMIN — diagnostic cron history, not a
 // distinct "section" a sub-admin's access would be scoped away from (see
-// lib/permissions.js's key list, which mirrors actual nav sections).
-router.get("/job-runs", async (req, res, next) => {
+// lib/permissions.js's key list, which mirrors actual nav sections). Kept on
+// an explicit requireRole("ADMIN") rather than requireAccess(), since this
+// route was never part of the grantable set and shouldn't become one by
+// accident just because the router's old blanket ADMIN gate was removed.
+router.get("/job-runs", requireRole("ADMIN"), async (req, res, next) => {
   try {
     const runs = await prisma.jobRun.findMany({ orderBy: { startedAt: "desc" }, take: 50 });
     res.json(runs);

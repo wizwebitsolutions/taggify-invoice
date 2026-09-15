@@ -38,7 +38,7 @@ test.describe("Indian number grouping", () => {
 
     // Pages now live on /inventory (newTask.md, 8 Sep — Assets folded in).
     await page.goto("/inventory");
-    await expect(page.getByText("1,50,000 followers")).toBeVisible();
-    await expect(page.getByText("150,000 followers")).toHaveCount(0);
+    await expect(page.getByTitle("1,50,000 followers")).toBeVisible();
+    await expect(page.getByTitle("150,000 followers")).toHaveCount(0);
   });
 });

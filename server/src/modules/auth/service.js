@@ -9,7 +9,7 @@ import {
   refreshExpiryDate,
 } from "../../lib/auth/jwt.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getEffectivePermissions, sanitizePermissionsInput, computeNewAdminOverlay } from "../../lib/permissions.js";
+import { getEffectivePermissions, sanitizePermissionsInput, computeNewAccountOverlay } from "../../lib/permissions.js";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -19,23 +19,30 @@ const BCRYPT_ROUNDS = 12;
  * the caller to relay to the new user (WhatsApp/SMS delivery channel is a
  * later integration, not required for this to function).
  *
- * `actor` is the admin performing the creation. `permissions` (only ever
- * meaningful when role is ADMIN — silently ignored otherwise, since no
- * other role's access comes from an overlay) makes this doubly the
- * sub-admin creation flow newTask.md asked for: an ADMIN account created
- * with a restricted overlay *is* a sub-admin, tagged with who created it
- * and logged to PermissionAuditLog for the same "who changed whose access"
- * trail an edit gets (see admin/service.js's updateUserPermissions).
+ * `actor` is the admin performing the creation. `permissions` makes this
+ * doubly the sub-admin/granted-access creation flow newTask.md (and its
+ * 15 Sep follow-up, "admin can give any user access permissions") asked
+ * for: an ADMIN account created with a restricted overlay *is* a sub-admin;
+ * any other role created with a granted overlay gets that overlay's keys
+ * on top of its normal role-gated access. Either way it's tagged with who
+ * created it and logged to PermissionAuditLog for the same "who changed
+ * whose access" trail an edit gets (see admin/service.js's
+ * updateUserPermissions).
  *
- * Whatever `permissions` asks for is run through computeNewAdminOverlay
+ * Whatever `permissions` asks for is run through computeNewAccountOverlay
  * against the *actor's own* effective permissions before it's stored —
  * otherwise a restricted sub-admin with users.manage could create a
  * brand-new, unrestricted ADMIN account (simply not sending `permissions`
  * used to mean "full admin", regardless of the actor's own restrictions),
  * see its one-time generated password in this very response, and log in as
- * an account with none of their own restrictions. A no-op for an
- * unrestricted admin (every key already true), so this never limits what a
- * real admin can hand out.
+ * an account with none of their own restrictions. The new account's own
+ * role baseline (ADMIN defaults every key true; every other role defaults
+ * every key false) is passed through as `defaultGrant` — a no-op for an
+ * unrestricted admin creating another admin (every key already true), and
+ * for any role when `permissions` isn't sent at all (a brand-new
+ * CREATOR/TEAM_MEMBER/FINANCE/PLAN_MAKER stays exactly as unprivileged as
+ * before this phase existed), so this never limits what a real admin can
+ * hand out and never grants more than what's explicitly requested.
  */
 export async function signup({ phoneNumber, name, role, permissions }, actor) {
   const existing = await prisma.user.findUnique({ where: { phoneNumber } });
@@ -46,15 +53,20 @@ export async function signup({ phoneNumber, name, role, permissions }, actor) {
   const plaintextPassword = generatePassword();
   const passwordHash = await bcrypt.hash(plaintextPassword, BCRYPT_ROUNDS);
 
+  const requested = sanitizePermissionsInput(permissions) ?? {};
+  const defaultGrant = role === "ADMIN";
+  // For ADMIN, always compute — even an empty request must still clamp a
+  // restricted actor's own missing keys (the escalation computeNewAccountOverlay
+  // guards against). For any other role, skip the extra actor lookup entirely
+  // when nothing was actually requested — an ordinary signup stays a single query.
   let overlay = null;
-  if (role === "ADMIN") {
-    const requested = sanitizePermissionsInput(permissions) ?? {};
+  if (defaultGrant || Object.keys(requested).length > 0) {
     const actorRecord = actor?.id ? await prisma.user.findUnique({ where: { id: actor.id } }) : null;
     if (!actorRecord) throw new ApiError(401, "UNAUTHENTICATED", "Acting user no longer exists");
-    const computed = computeNewAdminOverlay(actorRecord, requested);
+    const computed = computeNewAccountOverlay(actorRecord, requested, defaultGrant);
     overlay = Object.keys(computed).length > 0 ? computed : null;
   }
-  const isSubAdmin = role === "ADMIN" && overlay != null;
+  const hasOverlay = overlay != null;
 
   const user = await prisma.user.create({
     data: {
@@ -62,12 +74,12 @@ export async function signup({ phoneNumber, name, role, permissions }, actor) {
       name,
       role,
       passwordHash,
-      permissions: isSubAdmin ? overlay : undefined,
+      permissions: hasOverlay ? overlay : undefined,
       createdByAdminId: actor?.id,
     },
   });
 
-  if (isSubAdmin) {
+  if (hasOverlay) {
     await prisma.permissionAuditLog.create({
       data: { targetId: user.id, actorId: actor.id, before: null, after: overlay },
     });

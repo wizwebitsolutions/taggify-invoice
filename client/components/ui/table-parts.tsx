@@ -6,14 +6,14 @@ import type { ReactNode } from "react";
  * per frontend.md §3.
  */
 export function Th({ children }: { children: ReactNode }) {
-  return <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">{children}</div>;
+  return <div className="text-[0.72rem] font-medium tracking-[0.02em] text-text-muted">{children}</div>;
 }
 
 export function TableSkeleton({ rows = 5 }: { rows?: number }) {
   return (
     <div className="flex flex-col gap-3.5 p-5">
       {[...Array(rows)].map((_, i) => (
-        <div key={i} className="h-10 animate-pulse rounded-lg bg-surface-2" />
+        <div key={i} className="h-10 animate-pulse rounded-md bg-surface-2" />
       ))}
     </div>
   );
@@ -25,7 +25,7 @@ export function EmptyState({ label }: { label: string }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] font-medium text-rose">
+    <p className="rounded-md border border-rose-line bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] font-medium text-rose">
       {message}
     </p>
   );

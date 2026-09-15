@@ -3,156 +3,150 @@
  * value is ever typed. Every other file (tailwind.config.ts, every
  * component) reads these via var(--token-name) or a Tailwind utility
  * that maps to one. Change a value here and it propagates everywhere.
- * Source: frontend.md §2–3.
  *
- * Theming: dark is the product's default identity (unchanged values
- * below) and lives on bare :root so nothing regresses if JS hasn't run
- * yet. [data-theme="light"] overrides the same variable names — same
- * hue/chroma per accent (brand-consistent across themes), lightness
- * flipped for contrast. lib/theme-context.tsx sets the attribute on
- * <html> (localStorage, falling back to prefers-color-scheme, falling
- * back to dark) via a blocking inline script in app/layout.tsx so there
- * is no flash of the wrong theme.
+ * Premium system (Sep 2026, "Taggify Redesign" canvas, Premium · Geist
+ * page): light is the product's default identity and lives on bare :root.
+ * Zinc neutrals only — near-black ink, off-white ground, hairline borders.
+ * Black is the primary action. Blue is reserved for links/info. Green,
+ * amber and red appear only as status. No colour on chrome; that
+ * restraint is what makes the UI read as expensive.
  *
- * Palette v2 (Aug 2026) — X/Spotify-informed redesign: surfaces lifted a
- * step lighter than the original navy-black, accent pushed to a more
- * saturated/luminous green with a real glow behind it, and a violet
- * second hue replaces the old cool-indigo --accent-2. Every oklch()
- * literal below was converted from the approved swatch hexes (see the
- * "Taggify Preview — A2" artifact) rather than hand-tuned, so the shipped
- * colors match what was actually signed off.
+ * [data-theme="dark"] overrides the same variable names with a zinc-950
+ * dark set so the existing theme toggle keeps working. lib/theme-context
+ * .tsx sets the attribute on <html> via a blocking script in app/layout.
  */
 :root {
   /* Surfaces */
-  --bg: oklch(18.9% 0.010 248);
-  --sidebar: oklch(15.7% 0.008 248);
-  --surface: oklch(24.2% 0.015 257);
-  --surface-2: oklch(29.4% 0.019 255);
-  --surface-hover: oklch(33% 0.021 254);
+  --bg: #fafafa;
+  --sidebar: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --surface-hover: #ececee;
 
   /* Borders */
-  --border: oklch(100% 0 0 / 0.08);
-  --border-strong: oklch(100% 0 0 / 0.16);
+  --border: #e9e9ec;
+  --border-strong: #d9d9de;
 
   /* Text */
-  --text: oklch(97% 0.003 255);
-  --text-muted: oklch(76% 0.01 255);
-  --text-faint: oklch(54% 0.01 255);
+  --text: #09090b;
+  --text-2: #3f3f46;
+  --text-muted: #6b6b74;
+  --text-faint: #8a8a93;
 
-  /* Accent family — --accent is the new luminous spring-green (was a
-     muted hue-164 emerald); --accent-2 is now a violet (hue 286) used
-     for the second status tone and ambient glow variety, replacing the
-     old cool-indigo. --blue/--rose/--slate all got a mild vividness
-     bump alongside it so the whole status family reads as one refreshed
-     family instead of one loud color next to three muted ones. */
-  --accent: oklch(82.2% 0.194 155);
-  --accent-ink: oklch(16% 0.03 155); /* text painted on top of --accent */
-  --accent-soft: oklch(82.2% 0.194 155 / 0.15);
-  --accent-2: oklch(66.2% 0.189 286);
-  --accent-2-soft: oklch(66.2% 0.189 286 / 0.15);
+  /* Ink — the primary action colour (black buttons, active nav, bars) */
+  --ink: #09090b;
+  --ink-fg: #ffffff;
+  --ink-10: rgba(9, 9, 11, 0.1);
+  --ink-30: rgba(9, 9, 11, 0.3);
+  --surface-80: rgba(255, 255, 255, 0.8);
+  --surface-90: rgba(255, 255, 255, 0.9);
+  --blue-soft-40: rgba(37, 99, 235, 0.06);
+
+  /* Accent family. --accent stays the "done / money / approved" green
+     that STATUS semantics across the app already depend on (StatusPill
+     emerald tone, approved rows). It is no longer used on chrome. */
+  --accent: #15803d;
+  --accent-ink: #ffffff;
+  --accent-soft: #ecfdf3;
+  --accent-line: #bbf0cd;
+  /* --accent-2 was violet; it now maps to the "in flight / waiting" amber
+     so every pill that used it (pending review, invoiced, scheduled) reads
+     as "waiting on someone" the way the premium mockup's tags do. */
+  --accent-2: #b45309;
+  --accent-2-soft: #fffbeb;
+  --accent-2-line: #fde9b8;
 
   /* Status */
-  --blue: oklch(73.8% 0.145 245);
-  --blue-soft: oklch(73.8% 0.145 245 / 0.15);
-  --rose: oklch(69.5% 0.197 16);
-  --rose-soft: oklch(69.5% 0.197 16 / 0.15);
-  --slate: oklch(70.3% 0.02 258);
-  --slate-soft: oklch(70.3% 0.02 258 / 0.15);
+  --blue: #2563eb;
+  --blue-soft: #eff4ff;
+  --blue-line: #c7d7fe;
+  --rose: #d11e1e;
+  --rose-soft: #fef2f2;
+  --rose-line: #fecaca;
+  --slate: #3f3f46;
+  --slate-soft: #f4f4f5;
+  --slate-line: #e9e9ec;
 
-  /* Radius */
-  --radius-lg: 20px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
+  /* Radius — 8 / 12 everywhere. No pills except tags/avatars. */
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 
-  /* Elevation — card shadow carries a faint accent-tinted rim + bloom
-     (in addition to the black drop shadow) so every panel/box picks up a
-     bit of ambient glow along its edge, not just buttons. */
-  --shadow-card: 0 24px 60px -24px oklch(0% 0 0 / 0.6), 0 0 0 1px oklch(82.2% 0.194 155 / 0.06),
-    0 0 32px -12px oklch(82.2% 0.194 155 / 0.22);
-  --shadow-accent-glow: 0 10px 24px -8px oklch(82.2% 0.194 155 / 0.45);
+  /* Elevation — one-pixel shadows. */
+  --shadow-card: 0 1px 2px rgba(9, 9, 11, 0.04), 0 1px 3px rgba(9, 9, 11, 0.05);
+  --shadow-md: 0 6px 16px -6px rgba(9, 9, 11, 0.12), 0 1px 3px rgba(9, 9, 11, 0.06);
+  --shadow-lg: 0 16px 40px -12px rgba(9, 9, 11, 0.18), 0 2px 6px rgba(9, 9, 11, 0.06);
+  --shadow-accent-glow: var(--shadow-md);
+  --shadow-glow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 1px 2px rgba(9, 9, 11, 0.2);
+  --shadow-glow-hover: var(--shadow-glow);
+  --shadow-glow-rose: var(--shadow-card);
+  --shadow-glow-rose-hover: var(--shadow-card);
 
-  /* Glass buttons — translucent fill + backdrop-blur (Tailwind's
-     backdrop-blur-* utility) + a layered glow. Sheen is a 1px inset
-     highlight along the top edge that sells the "glass" read. */
-  --glass-blur: 14px;
-  --btn-primary-bg: oklch(82.2% 0.194 155 / 0.85);
-  --btn-primary-border: oklch(100% 0 0 / 0.22);
-  --btn-danger-bg: oklch(69.5% 0.197 16 / 0.16);
-  --btn-danger-border: oklch(69.5% 0.197 16 / 0.3);
-  --btn-secondary-bg: oklch(29.4% 0.019 255 / 0.6);
+  /* Buttons */
+  --glass-blur: 0px;
+  --btn-primary-bg: var(--ink);
+  --btn-primary-border: transparent;
+  --btn-danger-bg: var(--surface);
+  --btn-danger-border: var(--border-strong);
+  --btn-secondary-bg: var(--surface);
 
-  /* Button glow — was a 1px ring + a large blurred halo (0 10px 28px -6px
-     etc.) that visibly bled outside the button's own box, especially
-     noticeable since every button is a full pill. Down to just the ring +
-     inset top sheen, both contained within/at the button's own edge —
-     hover feedback is the sweep animation in button.tsx now, not a bigger
-     glow. -hover variants are unused now (button.tsx no longer swaps the
-     shadow on hover) but left defined in case another component wants them. */
-  --shadow-glow: 0 0 0 1px oklch(82.2% 0.194 155 / 0.3), inset 0 1px 0 0 oklch(100% 0 0 / 0.25);
-  --shadow-glow-hover: 0 0 0 1px oklch(82.2% 0.194 155 / 0.42), inset 0 1px 0 0 oklch(100% 0 0 / 0.35);
-  --shadow-glow-rose: 0 0 0 1px oklch(69.5% 0.197 16 / 0.24), inset 0 1px 0 0 oklch(100% 0 0 / 0.18);
-  --shadow-glow-rose-hover: 0 0 0 1px oklch(69.5% 0.197 16 / 0.34), inset 0 1px 0 0 oklch(100% 0 0 / 0.25);
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  /* Fonts — variable name populated by next/font in lib/fonts.ts. Chirp
-     (X) and Circular (Spotify) are both proprietary/not embeddable;
-     Inter is the standard open substitute for both (same tall x-height,
-     same small-size hinting) — see lib/fonts.ts. --font-display now
-     resolves to the same face as --font-ui (no more Instrument Serif);
-     the token stays distinct so a future one-off display face doesn't
-     require touching every component that reads --font-ui. */
-  --font-ui: var(--font-inter), system-ui, -apple-system, sans-serif;
-  --font-display: var(--font-inter), system-ui, -apple-system, sans-serif;
+  /* Fonts — populated by lib/fonts.ts (Geist via the `geist` package,
+     Instrument Serif via next/font). */
+  --font-ui: var(--font-geist-sans), "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-instrument-serif), Georgia, "Times New Roman", serif;
 }
 
-:root[data-theme="light"] {
-  /* Surfaces — bg a hair off-white so pure-white cards read as elevated */
-  --bg: oklch(97% 0.004 255);
-  --sidebar: oklch(99% 0.002 255);
-  --surface: oklch(99.5% 0.002 255);
-  --surface-2: oklch(96% 0.006 255);
-  --surface-hover: oklch(93% 0.007 255);
+:root[data-theme="dark"] {
+  --bg: #09090b;
+  --sidebar: #0f0f11;
+  --surface: #131316;
+  --surface-2: #1c1c21;
+  --surface-hover: #232329;
 
-  /* Borders */
-  --border: oklch(0% 0 0 / 0.08);
-  --border-strong: oklch(0% 0 0 / 0.14);
+  --border: #232329;
+  --border-strong: #2f2f36;
 
-  /* Text */
-  --text: oklch(20% 0.006 255);
-  --text-muted: oklch(42% 0.012 255);
-  --text-faint: oklch(58% 0.012 255);
+  --text: #fafafa;
+  --text-2: #d4d4d8;
+  --text-muted: #a1a1aa;
+  --text-faint: #6b6b74;
 
-  /* Accent family — same hue/chroma as dark (brand-consistent), lightness
-     dropped so it reads on white as both text and a fill. --accent-2 is
-     the same violet as dark mode (hue 286). */
-  --accent: oklch(58% 0.194 155);
-  --accent-ink: oklch(99% 0.01 155);
-  --accent-soft: oklch(58% 0.194 155 / 0.12);
-  --accent-2: oklch(52% 0.19 286);
-  --accent-2-soft: oklch(52% 0.19 286 / 0.14);
+  --ink: #fafafa;
+  --ink-fg: #09090b;
+  --ink-10: rgba(250, 250, 250, 0.1);
+  --ink-30: rgba(250, 250, 250, 0.3);
+  --surface-80: rgba(19, 19, 22, 0.8);
+  --surface-90: rgba(19, 19, 22, 0.9);
+  --blue-soft-40: rgba(96, 165, 250, 0.08);
 
-  /* Status */
-  --blue: oklch(52% 0.16 245);
-  --blue-soft: oklch(52% 0.16 245 / 0.12);
-  --rose: oklch(54% 0.2 16);
-  --rose-soft: oklch(54% 0.2 16 / 0.12);
-  --slate: oklch(48% 0.015 258);
-  --slate-soft: oklch(48% 0.015 258 / 0.1);
+  --accent: #4ade80;
+  --accent-ink: #052e16;
+  --accent-soft: rgba(74, 222, 128, 0.12);
+  --accent-line: rgba(74, 222, 128, 0.3);
+  --accent-2: #fbbf24;
+  --accent-2-soft: rgba(251, 191, 36, 0.12);
+  --accent-2-line: rgba(251, 191, 36, 0.3);
 
-  /* Elevation — softer, warmer-toned black shadow (heavy pure-black blur
-     reads muddy on white) plus the same faint accent-tinted rim/bloom
-     used in dark mode, tuned down so it doesn't overpower a light page. */
-  --shadow-card: 0 16px 40px -20px oklch(0% 0 0 / 0.16), 0 4px 12px -4px oklch(0% 0 0 / 0.08),
-    0 0 0 1px oklch(58% 0.194 155 / 0.08), 0 0 24px -12px oklch(58% 0.194 155 / 0.18);
-  --shadow-accent-glow: 0 8px 20px -8px oklch(58% 0.194 155 / 0.4);
+  --blue: #60a5fa;
+  --blue-soft: rgba(96, 165, 250, 0.12);
+  --blue-line: rgba(96, 165, 250, 0.3);
+  --rose: #f87171;
+  --rose-soft: rgba(248, 113, 113, 0.12);
+  --rose-line: rgba(248, 113, 113, 0.3);
+  --slate: #d4d4d8;
+  --slate-soft: #1c1c21;
+  --slate-line: #2f2f36;
 
-  --btn-primary-bg: oklch(58% 0.194 155 / 0.9);
-  --btn-primary-border: oklch(100% 0 0 / 0.35);
-  --btn-danger-bg: oklch(54% 0.2 16 / 0.1);
-  --btn-danger-border: oklch(54% 0.2 16 / 0.25);
-  --btn-secondary-bg: oklch(99.5% 0.002 255 / 0.7);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 20px -8px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 20px 48px -12px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-glow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
 
-  --shadow-glow: 0 0 0 1px oklch(58% 0.194 155 / 0.26), inset 0 1px 0 0 oklch(100% 0 0 / 0.4);
-  --shadow-glow-hover: 0 0 0 1px oklch(58% 0.194 155 / 0.38), inset 0 1px 0 0 oklch(100% 0 0 / 0.5);
-  --shadow-glow-rose: 0 0 0 1px oklch(54% 0.2 16 / 0.17), inset 0 1px 0 0 oklch(100% 0 0 / 0.3);
-  --shadow-glow-rose-hover: 0 0 0 1px oklch(54% 0.2 16 / 0.27), inset 0 1px 0 0 oklch(100% 0 0 / 0.4);
+  --btn-primary-bg: var(--ink);
+  --btn-danger-bg: var(--surface);
+  --btn-danger-border: var(--border-strong);
+  --btn-secondary-bg: var(--surface);
 }

@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
-import { requireRole } from "../../middleware/requireRole.js";
-import { requirePermission } from "../../middleware/requirePermission.js";
+import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
 import { createBillingProfileSchema, approvalSchema } from "./schemas.js";
 import * as billingService from "./service.js";
@@ -27,7 +26,7 @@ router.post("/", validateBody(createBillingProfileSchema), async (req, res, next
   }
 });
 
-router.put("/:id/approval", requireRole("ADMIN", "FINANCE"), requirePermission("finance.manage"), validateBody(approvalSchema), async (req, res, next) => {
+router.put("/:id/approval", requireAccess("finance.manage", "FINANCE"), validateBody(approvalSchema), async (req, res, next) => {
   try {
     res.json(await billingService.setApproval(req.params.id, req.body.approvalStatus));
   } catch (err) {

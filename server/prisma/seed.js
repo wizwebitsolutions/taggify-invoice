@@ -2,6 +2,7 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { generatePassword } from "../src/lib/auth/passwordGenerator.js";
+import { seedSampleData } from "./seedSample.js";
 
 const prisma = new PrismaClient();
 
@@ -156,6 +157,11 @@ async function main() {
         { jobName: "instagram_rescrape", status: "failed", startedAt: new Date(Date.now() - 9 * 60 * 60 * 1000), finishedAt: new Date(Date.now() - 9 * 60 * 60 * 1000 + 12000), error: "APIFY_TOKEN is not set" },
       ],
     });
+  }
+
+  // Sample data is for local/testing databases only — never on a production seed unless explicitly asked for.
+  if (process.env.NODE_ENV !== "production" || process.env.SEED_SAMPLE_DATA === "true") {
+    await seedSampleData(prisma, { admin });
   }
 
   console.log("Seed complete.", {

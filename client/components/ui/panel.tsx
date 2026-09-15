@@ -4,13 +4,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * The one "section box" in the app — every chart panel, list panel, and
- * grouped-content box on every screen renders through this instead of each
- * hand-repeating `rounded-lg border border-border bg-surface p-6
- * shadow-card` plus its own title/subtitle header markup (that exact string
- * was copy-pasted 47 times across 12 files before this existed — see
- * frontend.md §3's rule that repeated markup lives in one place). Doesn't
- * cover the grid-of-cards patterns (KpiCard, campaign/asset cards) — those
- * are their own components with their own hover/tone behavior.
+ * grouped-content box renders through this. Premium system: 12px radius,
+ * hairline border, 1px shadow, a 13.5px/600 title.
  */
 export function Panel({
   title,
@@ -29,12 +24,12 @@ export function Panel({
   children: ReactNode;
 }) {
   return (
-    <section className={cn("rounded-lg border border-border bg-surface p-6 shadow-card", className)}>
+    <section className={cn("rounded-lg border border-border bg-surface p-5 shadow-card md:p-6", className)}>
       {(title || subtitle || action) && (
-        <div className="mb-5 flex items-end justify-between gap-3">
+        <div className="mb-4 flex items-end justify-between gap-3">
           <div>
-            {title && <h2 className="text-[0.9375rem] font-bold">{title}</h2>}
-            {subtitle && <p className="mt-0.5 text-[0.8125rem] text-text-faint">{subtitle}</p>}
+            {title && <h2 className="text-[0.875rem] font-semibold tracking-[-0.01em]">{title}</h2>}
+            {subtitle && <p className="mt-0.5 text-[0.8rem] text-text-muted">{subtitle}</p>}
           </div>
           {action}
         </div>
@@ -44,33 +39,33 @@ export function Panel({
   );
 }
 
-/** The "View all →" link every Panel header can carry — one place for its
- * styling instead of the same three classes re-typed on every page. */
+/** The "View all →" link every Panel header can carry. */
 export function PanelAction({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <button onClick={onClick} className="flex items-center gap-1 text-[0.8125rem] font-semibold text-accent hover:text-accent-2">
+    <button onClick={onClick} className="flex items-center gap-1 text-[0.8rem] font-medium text-blue hover:text-text">
       {children}
     </button>
   );
 }
 
 /** A thin tone-aware progress track — budget consumed, storage used, etc.
- * `pct` isn't clamped to 100 on the caller's number (an over-budget spend
- * can genuinely exceed it) but the filled bar itself always clamps visually
- * so it never renders past the track. */
+ * The fill grows in from the left on mount (animate-grow-x). */
 export function ProgressBar({
   pct,
   tone = "accent",
   className,
 }: {
   pct: number;
-  tone?: "accent" | "rose";
+  tone?: "accent" | "rose" | "warn";
   className?: string;
 }) {
   return (
-    <div className={cn("h-[7px] overflow-hidden rounded-full bg-surface-2", className)}>
+    <div className={cn("h-1.5 overflow-hidden rounded-full bg-surface-2", className)}>
       <div
-        className={cn("h-full rounded-full", tone === "rose" ? "bg-rose" : "bg-accent")}
+        className={cn(
+          "h-full origin-left rounded-full motion-safe:animate-grow-x",
+          tone === "rose" ? "bg-rose" : tone === "warn" ? "bg-accent-2" : "bg-ink"
+        )}
         style={{ width: `${Math.min(Math.max(pct, 0), 100)}%` }}
       />
     </div>

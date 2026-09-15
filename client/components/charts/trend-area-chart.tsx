@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { smoothPath } from "./smooth-path";
+
 const W = 600;
 const H = 190;
 const PAD_X = 4;
@@ -9,29 +11,6 @@ const PAD_TOP = 34;
 const PAD_BOTTOM = 26;
 const BASELINE_Y = H - PAD_BOTTOM;
 const GRIDLINES = 3; // evenly spaced horizontal dotted rules across the plot area
-
-/** Catmull-Rom -> cubic-Bezier through every point — a true smooth curve
- * (the browser draws the actual bezier, not a polyline standing in for
- * one), not straight segments. Flat runs (several equal-value points, the
- * common case here since most months are 0) stay flat: matching neighbors
- * give a ~0 tangent, so there's no wobble on the baseline. */
-function smoothPath(points: { x: number; y: number }[]) {
-  if (points.length === 0) return "";
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-  let d = `M ${points[0].x} ${points[0].y}`;
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[i - 1] ?? points[i];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[i + 2] ?? p2;
-    const c1x = p1.x + (p2.x - p0.x) / 6;
-    const c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6;
-    const c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`;
-  }
-  return d;
-}
 
 /**
  * Single-series change-over-time as a smooth curve + soft area wash, in the
@@ -103,8 +82,8 @@ export function TrendAreaChart({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <p className="text-[0.9375rem] font-bold">{label}</p>
-        <p className="mt-1 text-[1.625rem] font-extrabold tracking-tight" style={{ color }}>
+        <p className="text-[0.9375rem] font-semibold">{label}</p>
+        <p className="mt-1 text-[1.625rem] font-semibold tracking-tight" style={{ color }}>
           {formatValue(total)}
         </p>
         <p className="text-[0.8125rem] text-text-faint">{subtitle}</p>
@@ -179,7 +158,7 @@ export function TrendAreaChart({
             style={{ left: `${(hovered.x / W) * 100}%`, top: `${(hovered.y / H) * 100}%` }}
           >
             <div className="font-semibold text-text-faint">{hovered.label}</div>
-            <div className="font-bold tabular-nums text-text">{formatValue(hovered.value)}</div>
+            <div className="font-semibold tabular-nums text-text">{formatValue(hovered.value)}</div>
           </div>
         )}
       </div>

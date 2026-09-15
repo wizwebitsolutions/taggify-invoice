@@ -42,6 +42,7 @@ function asset(overrides: Partial<Asset>): Asset {
     createdAt: new Date("2026-08-25").toISOString(),
     rateCards: [],
     engagement: { avgLikes: null, avgComments: null, avgViews: null, sampleSize: 0 },
+    campaigns: [],
     ...overrides,
   };
 }

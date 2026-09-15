@@ -13,6 +13,22 @@ export function buildScreenshotKey(linkId) {
   return `screenshots/${linkId}/${randomUUID()}`;
 }
 
+/** The creator's own invoice document attached to an Invoice (12 Sep) — same one-folder-per-record layout as screenshots. */
+export function buildInvoiceAttachmentKey(invoiceId) {
+  return `invoice-attachments/${invoiceId}/${randomUUID()}`;
+}
+
+/**
+ * A PDF invoice document attached to a Plan by Admin / Plan Maker (14 Sep) —
+ * same layout, its own folder. Ops note: this one is PDF-only, and
+ * Cloudinary serves PDFs only when "PDF and ZIP files delivery" is enabled
+ * under Settings → Security on the account — upload + confirm succeed
+ * regardless, but the delivered link 401s until that's switched on.
+ */
+export function buildPlanInvoiceAttachmentKey(planId) {
+  return `plan-invoice-attachments/${planId}/${randomUUID()}`;
+}
+
 /**
  * Returns a short-lived signed upload payload so the client uploads the
  * binary directly to Cloudinary — the API server never touches the file bytes.
@@ -42,7 +58,11 @@ export async function objectExists(publicId) {
     await cloudinary.api.resource(publicId);
     return true;
   } catch (err) {
-    if (err?.http_code === 404) return false;
+    // The Admin API SDK rejects with `{ error: { message, http_code } }`
+    // (nested), not a bare `http_code` — found driving the plan invoice
+    // attachment for real (14 Sep): a confirm for a key nothing had landed
+    // at came back 500 instead of the intended 422 UPLOAD_NOT_FOUND.
+    if (err?.http_code === 404 || err?.error?.http_code === 404) return false;
     throw err;
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "@/lib/utils";
@@ -8,13 +8,17 @@ import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
-import { Field, TextField, Select } from "@/components/ui/form-field";
+import { Field, TextField, Select, MoneyField, PhoneField } from "@/components/ui/form-field";
 import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
-import { PlusIcon, TeamIcon, AssetIcon } from "@/components/icons";
+import { PlusIcon, TeamIcon, AssetIcon, SearchIcon } from "@/components/icons";
+import { PageHeader } from "@/components/ui/page-header";
+import { Tabs } from "@/components/ui/chips";
+import { Tag } from "@/components/ui/tag";
+import { Card, CardHeader, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
 import { useAuth } from "@/lib/auth-context";
-import { admin as adminApi, auth as authApi, assets as assetsApi, LINK_FORMATS, ApiError, type User, type Role, type Permissions } from "@/lib/api-client";
-import { initialsOf, roleLabel } from "@/lib/format";
+import { admin as adminApi, auth as authApi, assets as assetsApi, LINK_FORMATS, ApiError, hasAccess, type User, type Role, type Permissions, type Asset } from "@/lib/api-client";
+import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
 
 const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
 
@@ -58,16 +62,43 @@ function UsersContent() {
   const [showCreate, setShowCreate] = useState(false);
   const [resettingUser, setResettingUser] = useState<User | null>(null);
   const [editingAccessUser, setEditingAccessUser] = useState<User | null>(null);
+  const [tab, setTab] = useState<Role | "ALL">("CREATOR");
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const token = accessToken!;
-  const isAdmin = user?.role === "ADMIN";
+  // "Admin" in the loose sense of "can manage People" — a plain ADMIN by
+  // default, or (15 Sep) any other role explicitly granted users.manage.
+  const isAdmin = hasAccess(user, "users.manage");
 
   const usersQuery = useQuery({ queryKey: ["adminUsers"], queryFn: () => adminApi.users(token), enabled: isAdmin });
+  const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token), enabled: isAdmin });
   const items = usersQuery.data ?? [];
+  const pagesByOwner = useMemo(() => {
+    const map = new Map<string, Asset[]>();
+    for (const a of assetsQuery.data ?? []) map.set(a.ownerId, [...(map.get(a.ownerId) ?? []), a]);
+    return map;
+  }, [assetsQuery.data]);
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { ALL: items.length };
+    for (const r of ROLES) c[r] = items.filter((u) => u.role === r).length;
+    return c;
+  }, [items]);
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return items.filter((u) => tab === "ALL" || u.role === tab).filter((u) => !q || (u.name ?? "").toLowerCase().includes(q) || u.phoneNumber.includes(q));
+  }, [items, tab, search]);
+  const selected = visible.find((u) => u.id === selectedId) ?? null;
 
   const roleMutation = useMutation({
     mutationFn: ({ id, role }: { id: string; role: Role }) => adminApi.updateUserRole(token, id, role),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adminUsers"] }),
   });
+
+  const isSubAdmin = (u: User) => u.role === "ADMIN" && !!u.permissions && PERMISSION_KEYS.some((k) => u.permissions![k] === false);
+  // The non-ADMIN counterpart (15 Sep) — a Creator/Team member/Finance/
+  // Planner whose overlay turns at least one of the six sections on.
+  const hasGrantedAccess = (u: User) => u.role !== "ADMIN" && !!u.permissions && PERMISSION_KEYS.some((k) => u.permissions![k] === true);
 
   return (
     <AppShell
@@ -76,123 +107,193 @@ function UsersContent() {
       searchPlaceholder="Search users…"
       topbarActions={
         isAdmin ? (
-          <Button size="default" onClick={() => setShowCreate(true)}>
-            <PlusIcon className="h-[15px] w-[15px] text-accent-ink" />
+          <Button onClick={() => setShowCreate(true)}>
+            <PlusIcon className="h-4 w-4" />
             Add user
           </Button>
         ) : undefined
       }
+      fab={
+        isAdmin ? (
+          <Button size="icon" className="h-12 w-12 rounded-full shadow-lg" onClick={() => setShowCreate(true)} aria-label="Add user">
+            <PlusIcon className="h-5 w-5" />
+          </Button>
+        ) : undefined
+      }
     >
-      <div className="flex flex-col gap-7">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Admin</p>
-            <h1 className="mb-1.5 text-[1.625rem] font-bold">Users</h1>
-            <p className="text-[0.9375rem] text-text-muted">Every account on Taggify, and who can create new ones.</p>
-          </div>
-          {/* Desktop carries this same action in the topbar (hidden below md). */}
-          {isAdmin && (
-            <Button size="icon" className="shrink-0 md:hidden" onClick={() => setShowCreate(true)} aria-label="Add user">
-              <PlusIcon className="h-4 w-4 text-accent-ink" />
-            </Button>
-          )}
-        </div>
+      <div className="flex flex-col gap-5">
+        <PageHeader title="People" subtitle="Creators, team members, planners and finance. Every creator owns at least one page." />
 
         {!isAdmin ? (
-          <div className="rounded-lg border border-border bg-surface p-8 text-center shadow-card">
-            <p className="text-[0.9375rem] text-text-muted">User management is available to Admin accounts.</p>
-          </div>
-        ) : usersQuery.isLoading ? (
-          <div className="rounded-lg border border-border bg-surface shadow-card">
-            <TableSkeleton />
-          </div>
-        ) : items.length === 0 ? (
-          <div className="rounded-lg border border-border bg-surface shadow-card">
-            <EmptyState label="No users yet." />
-          </div>
+          <Card className="p-8 text-center">
+            <p className="text-[0.875rem] text-text-muted">User management is available to Admin accounts, or any account granted access to it.</p>
+          </Card>
         ) : (
-          // overflow-x-auto + a min-width floor (rather than a mobile card
-          // rewrite, out of proportion for an admin-only, occasional-use
-          // table) — the table scrolls within its own card on a narrow
-          // screen instead of forcing the whole page to scroll sideways.
-          <div className="overflow-x-auto rounded-lg border border-border bg-surface shadow-card">
-            <div className="grid min-w-[680px] grid-cols-[2fr_1.5fr_1fr_1fr_1fr] gap-3 border-b border-border px-5 py-3.5">
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Name</div>
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Phone</div>
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Role</div>
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Joined</div>
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Action</div>
-            </div>
-            {items.map((u) => (
-              <div key={u.id} className="grid min-w-[680px] grid-cols-[2fr_1.5fr_1fr_1fr_1fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2">
-                    <TeamIcon className="h-4 w-4 text-text-muted" />
-                  </div>
-                  <span className="truncate text-[0.8438rem] font-semibold">{u.name ?? "—"}</span>
-                </div>
-                <span className="truncate text-[0.8125rem] text-text-muted">{u.phoneNumber}</span>
-                <div className="flex flex-col gap-1">
-                  <select
-                    value={u.role}
-                    onChange={(e) => roleMutation.mutate({ id: u.id, role: e.target.value as Role })}
-                    disabled={roleMutation.isPending || u.id === user?.id}
-                    title={u.id === user?.id ? "You can't change your own role" : "Change role"}
-                    className="h-8 w-fit rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>
-                        {roleLabel(r)}
-                      </option>
-                    ))}
-                  </select>
-                  {/* Sub-admin (newTask.md, 8 Sep) isn't a separate role — it's
-                      an Admin account with at least one permission key turned
-                      off. Flag it here so it doesn't read as a plain admin. */}
-                  {u.role === "ADMIN" && u.permissions && PERMISSION_KEYS.some((k) => u.permissions![k] === false) && (
-                    <span className="w-fit rounded-full bg-accent-2-soft px-2 py-0.5 text-[0.6875rem] font-semibold text-accent-2">Sub-admin</span>
-                  )}
-                </div>
-                <span className="text-xs text-text-faint">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</span>
-                <div className="flex flex-col items-start gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setResettingUser(u)}
-                    className="w-fit text-[0.75rem] font-semibold text-accent hover:text-accent-2"
-                  >
-                    Reset password
-                  </button>
-                  {u.role === "ADMIN" && u.id !== user?.id && (
-                    <button
-                      type="button"
-                      onClick={() => setEditingAccessUser(u)}
-                      className="w-fit text-[0.75rem] font-semibold text-accent hover:text-accent-2"
-                    >
-                      Edit access
-                    </button>
-                  )}
-                </div>
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <Tabs
+                  value={tab}
+                  onChange={setTab}
+                  tabs={[
+                    { value: "CREATOR" as const, label: "Creators", count: counts.CREATOR },
+                    { value: "TEAM_MEMBER" as const, label: "Team members", count: counts.TEAM_MEMBER },
+                    { value: "PLAN_MAKER" as const, label: "Planners", count: counts.PLAN_MAKER },
+                    { value: "FINANCE" as const, label: "Finance", count: counts.FINANCE },
+                    { value: "ADMIN" as const, label: "Admins", count: counts.ADMIN },
+                    { value: "ALL" as const, label: "All", count: counts.ALL },
+                  ]}
+                />
               </div>
-            ))}
-          </div>
+              <label className="relative block w-full sm:w-[240px]">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-faint" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or phone" aria-label="Search users" className="h-9 w-full rounded-md border border-border bg-surface pl-8 pr-3 text-[0.8125rem] shadow-card placeholder:text-text-faint focus:border-ink focus:outline-none focus:ring-[3px] focus:ring-ink-10" />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
+              <Card>
+                {usersQuery.isLoading ? (
+                  <TableSkeleton />
+                ) : visible.length === 0 ? (
+                  <EmptyState label={items.length === 0 ? "No users yet." : "No one matches."} />
+                ) : (
+                  <Table data-testid="users-table">
+                    <THead>
+                      <tr>
+                        <TH>Name</TH>
+                        <TH className="hidden md:table-cell">Phone</TH>
+                        <TH className="hidden xl:table-cell">Pages</TH>
+                        <TH>Role</TH>
+                        <TH className="hidden xl:table-cell">Joined</TH>
+                        <TH />
+                      </tr>
+                    </THead>
+                    <tbody>
+                      {visible.map((u, i) => {
+                        const pages = pagesByOwner.get(u.id) ?? [];
+                        return (
+                          <TR key={u.id} interactive selected={selected?.id === u.id} onClick={() => setSelectedId(u.id)} style={{ animationDelay: `${0.15 + i * 0.03}s` }}>
+                            <TD>
+                              <div className="flex items-center gap-3">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[0.72rem] font-semibold text-text-2 ring-1 ring-inset ring-border">{initialsOf(u.name)}</span>
+                                <Cell2 primary={u.name ?? "—"} secondary={<span className="md:hidden">{u.phoneNumber}</span>} />
+                              </div>
+                            </TD>
+                            <TD className="hidden whitespace-nowrap tabular-nums text-text-muted md:table-cell">{u.phoneNumber}</TD>
+                            <TD className="hidden max-w-[220px] truncate text-text-muted xl:table-cell">{pages.length === 0 ? <span className="text-text-faint">—</span> : pages.map((p) => `@${p.handle}`).join(", ")}</TD>
+                            <TD onClick={(e) => e.stopPropagation()}>
+                              <div className="flex flex-col items-start gap-1">
+                                <select
+                                  value={u.role}
+                                  onChange={(e) => roleMutation.mutate({ id: u.id, role: e.target.value as Role })}
+                                  disabled={roleMutation.isPending || u.id === user?.id}
+                                  title={u.id === user?.id ? "You can't change your own role" : "Change role"}
+                                  className="h-8 w-fit rounded-[6px] border border-border-strong bg-surface px-2 text-[0.78rem] text-text shadow-card focus:border-ink focus:outline-none disabled:opacity-50"
+                                >
+                                  {ROLES.map((r) => (
+                                    <option key={r} value={r}>
+                                      {roleLabel(r)}
+                                    </option>
+                                  ))}
+                                </select>
+                                {isSubAdmin(u) && <Tag tone="wait">Sub-admin</Tag>}
+                                {hasGrantedAccess(u) && <Tag tone="wait">Granted access</Tag>}
+                              </div>
+                            </TD>
+                            <TD className="hidden whitespace-nowrap text-text-muted xl:table-cell">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</TD>
+                            <TD right onClick={(e) => e.stopPropagation()}>
+                              <div className="flex flex-col items-end gap-1">
+                                <button type="button" onClick={() => setResettingUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
+                                  Reset password
+                                </button>
+                                {u.id !== user?.id && (
+                                  <button type="button" onClick={() => setEditingAccessUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
+                                    Edit access
+                                  </button>
+                                )}
+                              </div>
+                            </TD>
+                          </TR>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                )}
+              </Card>
+
+              <div className="hidden lg:block">
+                {selected ? (
+                  <Card className="flex flex-col" data-testid="person-detail">
+                    <CardHeader
+                      title={selected.name ?? "—"}
+                      meta={<span className="text-[0.78rem] text-text-muted">{roleLabel(selected.role)} · {selected.phoneNumber}</span>}
+                      action={
+                        <Button size="sm" variant="secondary" onClick={() => setResettingUser(selected)}>
+                          Reset password
+                        </Button>
+                      }
+                    />
+                    <div className="flex flex-col gap-4 p-[18px]">
+                      <div>
+                        <p className="mb-2 text-[0.8125rem] font-semibold">Pages</p>
+                        {(pagesByOwner.get(selected.id) ?? []).length === 0 ? (
+                          <p className="text-[0.8125rem] text-text-muted">No pages yet.</p>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {(pagesByOwner.get(selected.id) ?? []).map((p) => {
+                              const reel = p.rateCards.find((r) => r.format === "reel");
+                              const story = p.rateCards.find((r) => r.format === "story");
+                              return (
+                                <div key={p.id} className="flex items-center gap-3 rounded-[10px] border border-border px-3 py-2.5">
+                                  <Cell2 primary={`@${p.handle}`} secondary={`${p.category ?? "—"} · ${compactNumber(p.followers)}`} />
+                                  <div className="ml-auto text-right">
+                                    <p className="text-[0.7rem] text-text-muted">Reel / Story</p>
+                                    <p className="text-[0.78rem] font-semibold tabular-nums">
+                                      {reel ? money(reel.amount) : "—"} / {story ? money(story.amount) : "—"}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      {selected.permissions && (
+                        <div>
+                          <p className="mb-2 text-[0.8125rem] font-semibold">Permissions</p>
+                          <div className="flex flex-col gap-1.5">
+                            {PERMISSION_KEYS.map((k) => (
+                              <div key={k} className="flex items-center justify-between text-[0.8125rem]">
+                                <span className="text-text-2">{PERMISSION_LABELS[k].split(" — ")[0]}</span>
+                                <span className={cn("h-5 w-9 rounded-full", selected.permissions![k] ? "bg-ink" : "bg-border-strong")} aria-label={selected.permissions![k] ? "on" : "off"} />
+                              </div>
+                            ))}
+                          </div>
+                          {selected.id !== user?.id && (
+                            <Button size="sm" variant="secondary" className="mt-3" onClick={() => setEditingAccessUser(selected)}>
+                              Edit access
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-[0.75rem] text-text-muted">Joined {selected.createdAt ? new Date(selected.createdAt).toLocaleDateString() : "—"}</p>
+                    </div>
+                  </Card>
+                ) : (
+                  <Card className="p-8 text-center text-[0.8125rem] text-text-muted">Select a person to see their pages and access.</Card>
+                )}
+              </div>
+            </div>
+          </>
         )}
 
-        {roleMutation.isError && (
-          <ErrorNotice message={roleMutation.error instanceof ApiError ? roleMutation.error.message : "Couldn't update that user's role."} />
-        )}
+        {roleMutation.isError && <ErrorNotice message={roleMutation.error instanceof ApiError ? roleMutation.error.message : "Couldn't update that user's role."} />}
       </div>
 
-      {showCreate && (
-        <CreateUserModal
-          token={token}
-          onClose={() => setShowCreate(false)}
-          onCreated={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })}
-        />
-      )}
+      {showCreate && <CreateUserModal token={token} onClose={() => setShowCreate(false)} onCreated={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })} />}
 
-      {resettingUser && (
-        <ResetPasswordModal token={token} targetUser={resettingUser} onClose={() => setResettingUser(null)} />
-      )}
+      {resettingUser && <ResetPasswordModal token={token} targetUser={resettingUser} onClose={() => setResettingUser(null)} />}
 
       {editingAccessUser && (
         <EditAccessModal
@@ -210,13 +311,16 @@ function UsersContent() {
 }
 
 /**
- * Sub-admin permission editing (newTask.md, 8 Sep — "Admin can create
+ * Permission editing for any account (newTask.md, 8 Sep — "Admin can create
  * Sub-admins, each with a hand-picked selection of what they can
- * see/access"). Every checkbox starts from the target's *current* effective
- * permissions (adminApi.users() already resolves role defaults + overlay —
- * see admin/routes.js), so unchecking one box and saving only sends that
- * one key as a change; the server merges it onto the existing overlay
- * rather than replacing the whole thing (admin/service.js's updateUserPermissions).
+ * see/access"; extended 15 Sep so this same panel works on a Creator/Team
+ * member/Finance/Planner row too, not just an ADMIN one — "admin can give
+ * any user access permissions"). Every checkbox starts from the target's
+ * *current* effective permissions (adminApi.users() already resolves role
+ * defaults + overlay — see admin/routes.js), so toggling one box and saving
+ * only sends that one key as a change; the server merges it onto the
+ * existing overlay rather than replacing the whole thing
+ * (admin/service.js's updateUserPermissions).
  */
 function EditAccessModal({
   token,
@@ -243,10 +347,10 @@ function EditAccessModal({
     <Sheet onClose={onClose} panelClassName="md:max-w-[480px]">
       <div className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto p-6 pt-1">
         <div>
-          <h2 className="text-lg font-bold">Edit access</h2>
+          <h2 className="text-lg font-semibold">Edit access</h2>
           <p className="mt-1 text-[0.8125rem] text-text-muted">
-            What <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> can see and do. Unchecking a section
-            hides it and blocks its actions server-side, even if they still have the link.
+            What <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> can see and do. Checking a section grants
+            it, unchecking hides it and blocks its actions server-side, even if they still have the link.
           </p>
         </div>
 
@@ -297,7 +401,7 @@ function ResetPasswordModal({ token, targetUser, onClose }: { token: string; tar
   return (
     <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
       <div className="flex flex-col gap-5 overflow-y-auto p-6 pt-1">
-        <h2 className="text-lg font-bold">Reset password</h2>
+        <h2 className="text-lg font-semibold">Reset password</h2>
 
         {resetMutation.data ? (
           <div className="flex flex-col gap-3">
@@ -305,7 +409,7 @@ function ResetPasswordModal({ token, targetUser, onClose }: { token: string; tar
               New password for <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong>. Share it with them now
               — it&apos;s shown only this once and can&apos;t be retrieved again. They&apos;ve been signed out everywhere.
             </p>
-            <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-bold tracking-wide">
+            <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-semibold tracking-wide">
               {resetMutation.data.generatedPassword}
             </div>
             <Button className="w-full" onClick={onClose}>
@@ -350,14 +454,20 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
   const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("CREATOR");
-  // Sub-admin creation (newTask.md, 8 Sep) — only reachable/relevant when
-  // role is ADMIN; starts fully-checked (a plain admin), so only sent to
-  // the server at all once something's actually been unchecked (see
-  // createMutation below) — otherwise this account is indistinguishable
-  // from an admin created before this feature existed.
+  // Sub-admin creation (newTask.md, 8 Sep) for ADMIN — starts fully-checked
+  // (a plain admin), so only sent to the server once something's actually
+  // been unchecked. Granted-access creation (15 Sep) for every other role —
+  // starts fully-unchecked there, so only sent once something's actually
+  // been checked; either way this account stays indistinguishable from one
+  // created before this feature existed unless something was deliberately
+  // toggled. Reset whenever Role changes so leftover checks from one role
+  // don't silently carry over as a grant on another.
   const [permissions, setPermissions] = useState<Record<keyof Permissions, boolean>>(
-    () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true])) as Record<keyof Permissions, boolean>
+    () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, role === "ADMIN"])) as Record<keyof Permissions, boolean>
   );
+  useEffect(() => {
+    setPermissions(Object.fromEntries(PERMISSION_KEYS.map((k) => [k, role === "ADMIN"])) as Record<keyof Permissions, boolean>);
+  }, [role]);
   const [pages, setPages] = useState<DraftPage[]>([emptyPage()]);
   // Page creation happens after signup succeeds, one request per page — a
   // single bad handle shouldn't roll back the account that was just
@@ -397,7 +507,12 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
     setPages((prev) => prev.filter((_, i) => i !== index));
   }
 
-  const isRestrictedAdmin = role === "ADMIN" && PERMISSION_KEYS.some((k) => !permissions[k]);
+  // Only send `permissions` at all once it actually deviates from this
+  // role's own baseline (ADMIN: everything true; every other role:
+  // everything false) — see auth/service.js's signup for the matching
+  // server-side default.
+  const hasCustomAccess =
+    role === "ADMIN" ? PERMISSION_KEYS.some((k) => !permissions[k]) : PERMISSION_KEYS.some((k) => permissions[k]);
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -405,7 +520,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
         phoneNumber: `+91${phoneDigits}`,
         name: name || undefined,
         role,
-        permissions: isRestrictedAdmin ? permissions : undefined,
+        permissions: hasCustomAccess ? permissions : undefined,
       });
       const failures: string[] = [];
       for (const page of submittedPages) {
@@ -443,7 +558,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
         }}
         className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
-        <h2 className="text-lg font-bold">Add a user</h2>
+        <h2 className="text-lg font-semibold">Add a user</h2>
 
         {created ? (
           <div className="flex flex-col gap-3">
@@ -451,7 +566,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
               Account created for <strong className="text-text">{created.user.phoneNumber}</strong>. Share this password with them now —
               it&apos;s shown only this once and can&apos;t be retrieved again.
             </p>
-            <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-bold tracking-wide">
+            <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-semibold tracking-wide">
               {created.generatedPassword}
             </div>
             {submittedPages.length > 0 && (
@@ -466,25 +581,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
         ) : (
           <>
             <Field label="Phone number">
-              <div
-                className={cn(
-                  "flex h-11 items-center gap-2 rounded-md border bg-surface-2 px-3.5 focus-within:ring-2 focus-within:ring-accent",
-                  showPhoneError ? "border-rose" : "border-border-strong"
-                )}
-              >
-                <span className="text-[0.9375rem] text-text-faint">+91</span>
-                <input
-                  required
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  onBlur={() => setPhoneBlurred(true)}
-                  placeholder="98765 43210"
-                  aria-invalid={showPhoneError}
-                  className="w-full bg-transparent text-[0.9375rem] text-text placeholder:text-text-faint focus:outline-none"
-                />
-              </div>
-              {showPhoneError && <p className="mt-1 text-[0.75rem] text-rose">Enter a valid 10-digit mobile number.</p>}
+              <PhoneField required value={phoneNumber} onChange={setPhoneNumber} onBlur={() => setPhoneBlurred(true)} placeholder="98765 43210" error={showPhoneError ? "Enter a valid 10-digit mobile number." : null} />
             </Field>
             <Field label="Name (optional)">
               <TextField value={name} onChange={setName} placeholder="Their name" />
@@ -499,27 +596,27 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
               </Select>
             </Field>
 
-            {role === "ADMIN" && (
-              <div className="flex flex-col gap-3 border-t border-border pt-4">
-                <div>
-                  <p className="text-[0.8125rem] font-semibold">Access (Sub-admin)</p>
-                  <p className="text-[0.75rem] text-text-faint">
-                    Leave everything checked for a full admin. Uncheck a section to create a Sub-admin restricted to the rest.
-                  </p>
-                </div>
-                {PERMISSION_KEYS.map((key) => (
-                  <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-surface-2">
-                    <input
-                      type="checkbox"
-                      checked={permissions[key]}
-                      onChange={(e) => setPermissions((prev) => ({ ...prev, [key]: e.target.checked }))}
-                      className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
-                    />
-                    <span className="text-[0.8125rem] text-text">{PERMISSION_LABELS[key]}</span>
-                  </label>
-                ))}
+            <div className="flex flex-col gap-3 border-t border-border pt-4">
+              <div>
+                <p className="text-[0.8125rem] font-semibold">{role === "ADMIN" ? "Access (Sub-admin)" : "Access (optional)"}</p>
+                <p className="text-[0.75rem] text-text-faint">
+                  {role === "ADMIN"
+                    ? "Leave everything checked for a full admin. Uncheck a section to create a Sub-admin restricted to the rest."
+                    : `Leave everything unchecked for a plain ${roleLabel(role)}. Check a section to also grant that admin page.`}
+                </p>
               </div>
-            )}
+              {PERMISSION_KEYS.map((key) => (
+                <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-surface-2">
+                  <input
+                    type="checkbox"
+                    checked={permissions[key]}
+                    onChange={(e) => setPermissions((prev) => ({ ...prev, [key]: e.target.checked }))}
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                  />
+                  <span className="text-[0.8125rem] text-text">{PERMISSION_LABELS[key]}</span>
+                </label>
+              ))}
+            </div>
 
             {requiresPage && (
               <div className="flex flex-col gap-3 border-t border-border pt-4">
@@ -536,7 +633,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
                         value={page.handle}
                         onChange={(e) => updatePage(i, { handle: e.target.value })}
                         placeholder="Instagram handle (without @)"
-                        className="h-9 flex-1 rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        className="h-9 flex-1 rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
                       />
                       {pages.length > 1 && (
                         <button
@@ -554,14 +651,7 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
                       {LINK_FORMATS.map((format) => (
                         <div key={format} className="flex items-center justify-between gap-2">
                           <span className="text-[0.75rem] capitalize text-text-faint">{format}</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={page.rates[format] ?? ""}
-                            onChange={(e) => updatePage(i, { rates: { ...page.rates, [format]: e.target.value } })}
-                            placeholder="₹ rate"
-                            className="h-7 w-20 rounded-md border border-border-strong bg-surface-2 px-2 text-right text-[0.75rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                          />
+                          <MoneyField compact value={page.rates[format] ?? ""} onChange={(v) => updatePage(i, { rates: { ...page.rates, [format]: v } })} placeholder="rate" aria-label={`${format} rate`} className="w-28" />
                         </div>
                       ))}
                     </div>

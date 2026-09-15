@@ -12,16 +12,47 @@ costs, and the conventions for extending it. The short policy version lives in
 
 - **`server/`** — `vitest`, mocked-Prisma unit tests (no DB needed to run these; see
   `npm test`):
-  - `src/modules/invoices/service.test.js` — invoice eligibility (screenshot-approved
-    is enough, insights aren't required), GST math (exactly 18% on the subtotal, `amount
-    = subtotal + gstAmount`), and that rejecting an invoice restores each link to its
-    *actual* prior status rather than hardcoding `INSIGHTS_APPROVED`.
+  - `src/modules/invoices/service.test.js` — invoice eligibility (a bare SUBMITTED
+    link is enough — screenshot and insights are both optional proof; only
+    SCREENSHOT_REJECTED/INVALID/already-invoiced are excluded), GST math (exactly 18%
+    on the subtotal, `amount = subtotal + gstAmount`), and that rejecting an invoice
+    restores each link to its *actual* prior status (falling back to `SUBMITTED`).
   - `src/modules/campaigns/service.test.js` — the campaign-card preview picks the most
     recently posted link with a thumbnail, falls back gracefully when none has one yet,
     and excludes Apify's `-1` "unknown" sentinel from the total-likes sum.
   - `src/modules/assets/service.test.js` — only an admin can register a page on
     someone else's behalf (the "create a user with their first page(s)" flow); a
     creator can still only ever create their own.
+  - `src/modules/assets/importParser.test.js` — Inventory "Import pages" (14
+    Sep): the .xlsx/.csv parser, pure. Handles pasted as "@handle" or a profile
+    URL, "1.2M"/"1.5L" follower counts, quoted CSV cells + BOM, a title row
+    above the header, no handle column, the 500-row cap, unsupported/legacy
+    file types, and a *real* exceljs round-trip for the xlsx path.
+  - `src/modules/assets/importAssets.test.js` — the preview/confirm half:
+    owner cell → creator account (phone in any formatting, then email, then
+    exact name; two creators with the same name is "ambiguous", not a guess),
+    per-row status (ready / duplicate-in-sheet / exists under same account /
+    conflict under another account / owner missing or unknown / invalid), and
+    that confirm re-validates and skips-not-fails bad rows; a pasted Google
+    Sheet link goes through the same fetch helper as campaigns/plans and the
+    same parser/preview. `fetchImportFollowers` batches the previewed
+    handles into ONE Apify run (null per private/missing profile, a 502 on
+    outage that the modal shows without blocking), and a confirmed import
+    stores that scrape directly instead of re-scraping. `src/lib/
+    apifyClientBatch.test.js` (mocked apify-client) pins that a run still
+    RUNNING after the wait is aborted and thrown (never read as "not
+    found"), batches go out in chunks of 25, and one failed chunk only
+    leaves its own handles unknown. Also (14 Sep,
+    follow-up): an ADMIN-created page is approved on creation and can carry
+    its reel/story rates in the same insert; a creator's own page still
+    starts pending; `getAvgEngagement` falls back to the profile scrape's
+    averages (`source: "profile"`) until the page has link snapshots.
+  - `src/lib/apifyClient.test.js` + `src/modules/scraping/service.test.js` —
+    the profile scrape now averages the profile's `latestPosts` into
+    avg views/likes/comments (views over video posts only, hidden counts
+    skipped, nulls not zeros), stores them plus `lastScrapedAt`, keeps an
+    earlier sample when a scrape sees no posts, and records
+    `lastScrapeError` on failure so Inventory can say why.
   - `src/modules/campaigns/service.test.js` also covers: remaining-budget math
     (costCap - spent, rejected-screenshot links excluded from spend), a sheet
     row matching an existing page by handle vs. staying pending, and resolving
@@ -36,7 +67,17 @@ costs, and the conventions for extending it. The short policy version lives in
   - `src/modules/plans/service.test.js` — "Inventory" (newTask.md #13): item
     cost falls back to the page's rate card unless overridden, budget
     variance is positive/negative/null correctly, and a page picked under
-    two formats only counts once toward expected engagement.
+    two formats only counts once toward expected engagement. Also the
+    client invoice (13 Sep): details from the popup are saved onto the plan,
+    the CINV number is minted once and kept on regeneration, a GST plan
+    requires the client's GST number, and only an approved plan with a
+    client-facing cost can be invoiced.
+  - `src/lib/clientInvoicePdf.test.js` — the Taggify → client invoice mapping
+    (Billed-to block from the plan's client details, one line per page × posts
+    that adds up to the subtotal, a single consolidated line once the client
+    cost is overridden, Taggify's own bank block) plus PDF smoke renders.
+  - `src/modules/invoices/service.test.js` also pins that only a CREATOR can
+    raise an invoice (13 Sep — Admin/Plan Maker generation removed).
   - `src/lib/financeWorkbook.test.js` — the daily finance export (newTask.md
     #2): a *real round-trip* test (build the workbook, re-load the actual
     bytes with the same library) proving the generated file is a genuinely
@@ -52,6 +93,34 @@ costs, and the conventions for extending it. The short policy version lives in
   - `fixtures.ts` — shared test helpers, see below.
   - `login.spec.ts` — the login form renders, a failed login shows the server's error
     message, an already-signed-in visitor is redirected off `/login`.
+  - `plan-client-invoice.spec.ts` — Plans → "Generate invoice" popup: prefilled
+    from the plan, posts the details then fetches the PDF, inline validation
+    (GST number on a GST plan, company/address), Regenerate + download chip
+    once generated, hidden on unapproved plans and on other Plan Makers' plans.
+  - `campaign-invoices.spec.ts` / `invoice-raise-creator-only.spec.ts` — no
+    invoice generator on the campaign page for any role, and no "New invoice"
+    on /invoices for anyone but a CREATOR (13 Sep).
+  - `inventory-import-pages.spec.ts` — Inventory "Create page" / "Import pages"
+    (14 Sep): both buttons for ADMIN only (CREATOR keeps "Add page"), the
+    create form's inline validation (account required, handle rules, a pasted
+    profile link is normalized) and the exact POST body; the import modal's
+    client-side file-type rejection, the server's parse error surfaced, and
+    the full preview → pick accounts → confirm → result flow against a mocked
+    preview (asserts the exact rows/ownerIds sent and that Inventory refetches).
+    Also the searchable account picker (type-to-filter, option pick), the
+    optional reel/story rate fields in the POST body, the "Fetching from
+    Instagram…" indicator that polls until followers/avg views land, and
+    the "Couldn't fetch from Instagram" note when the first scrape failed, and
+    the Google Sheet link path (non-Sheets URL rejected client-side; a valid
+    link posts to the preview-url route and renders the same preview), live
+    followers/avg views filling in after the preview (only placeable handles
+    requested; "Not found on Instagram" per missing profile), and "Category
+    for all" + per-row category overrides landing in the confirm body. Also
+    (14 Sep, UI pass): the handle links to the page's Instagram profile
+    (new tab), a selection's "Refresh from Instagram" posts the selected ids
+    to the bulk-refresh route, and "Fetching…" is driven by the server's
+    `scrapeQueuedAt` marker (set on create/import/bulk refresh, cleared when
+    the scrape finishes either way) rather than a createdAt guess.
   - `nav-links.spec.ts` — every desktop sidebar item, every mobile bottom-nav tab, and
     every "More" sheet row navigates to the right place and renders without an
     uncaught error. Two roles matter here (see "What this does and doesn't catch").

@@ -26,12 +26,12 @@ const TABS = [
  */
 export function BottomNav({ active, user }: { active: string; user: SidebarUser }) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs";
+  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs" || active === "plans";
 
   return (
     <>
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 flex h-16 border-t border-border bg-sidebar md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 flex h-16 border-t border-border bg-surface-90 backdrop-blur-md md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {TABS.map((tab) => {
@@ -42,21 +42,21 @@ export function BottomNav({ active, user }: { active: string; user: SidebarUser 
               key={tab.key}
               href={tab.href}
               className={cn(
-                "flex flex-1 flex-col items-center justify-center gap-1 text-text-faint",
-                isActive && "text-accent"
+                "relative flex flex-1 flex-col items-center justify-center gap-1 text-text-faint transition-colors",
+                isActive && "text-text before:absolute before:top-0 before:h-[2px] before:w-7 before:rounded-b before:bg-ink before:content-['']"
               )}
             >
               <Icon className="h-[21px] w-[21px]" />
-              <span className={cn("text-[10px] leading-none", isActive ? "font-bold" : "font-semibold")}>{tab.label}</span>
+              <span className={cn("text-[10px] leading-none", isActive ? "font-semibold" : "font-medium")}>{tab.label}</span>
             </Link>
           );
         })}
         <button
           onClick={() => setMoreOpen(true)}
-          className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-text-faint", isMore && "text-accent")}
+          className={cn("relative flex flex-1 flex-col items-center justify-center gap-1 text-text-faint transition-colors", isMore && "text-text before:absolute before:top-0 before:h-[2px] before:w-7 before:rounded-b before:bg-ink before:content-['']")}
         >
           <MoreIcon className="h-[21px] w-[21px]" />
-          <span className={cn("text-[10px] leading-none", isMore ? "font-bold" : "font-semibold")}>More</span>
+          <span className={cn("text-[10px] leading-none", isMore ? "font-semibold" : "font-medium")}>More</span>
         </button>
       </nav>
 

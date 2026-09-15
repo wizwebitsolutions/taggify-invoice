@@ -52,9 +52,9 @@ function TeamContent() {
       <div className="flex flex-col gap-7">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="mb-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-text-faint">Admin</p>
-            <h1 className="mb-1.5 text-[1.625rem] font-bold">Team</h1>
-            <p className="text-[0.9375rem] text-text-muted">People helping manage your pages and links.</p>
+            <p className="mb-1 text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Admin</p>
+            <h1 className="mb-1 text-[1.5rem] font-semibold leading-tight tracking-[-0.03em] md:text-[1.625rem]">Team</h1>
+            <p className="max-w-[56ch] text-[0.875rem] text-text-muted">People helping manage your pages and links.</p>
           </div>
           {/* Desktop carries this same action in the topbar (hidden below md). */}
           {isCreator && (
@@ -66,7 +66,7 @@ function TeamContent() {
 
         {!isCreator ? (
           <div className="rounded-lg border border-border bg-surface p-8 text-center shadow-card">
-            <p className="text-[0.9375rem] text-text-muted">Team management is available to Creator accounts.</p>
+            <p className="max-w-[56ch] text-[0.875rem] text-text-muted">Team management is available to Creator accounts.</p>
           </div>
         ) : teamQuery.isLoading ? (
           <div className="rounded-lg border border-border bg-surface shadow-card">
@@ -83,9 +83,9 @@ function TeamContent() {
           // screen instead of forcing the whole page to scroll sideways.
           <div className="overflow-x-auto rounded-lg border border-border bg-surface shadow-card">
             <div className="grid min-w-[480px] grid-cols-[2fr_1fr_1fr] gap-3 border-b border-border px-5 py-3.5">
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">User ID</div>
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Can see money</div>
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.06em] text-text-faint">Added</div>
+              <div className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">User ID</div>
+              <div className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Can see money</div>
+              <div className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Added</div>
             </div>
             {(teamQuery.data ?? []).map((m) => (
               <div key={m.id} className="grid min-w-[480px] grid-cols-[2fr_1fr_1fr] items-center gap-3 border-b border-border px-5 py-4 last:border-b-0">
@@ -135,7 +135,7 @@ function AddMemberModal({ token, onClose, onAdded }: { token: string; onClose: (
         }}
         className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
-        <h2 className="text-lg font-bold">Add a team member</h2>
+        <h2 className="text-lg font-semibold">Add a team member</h2>
         <Field label="Team member's user ID">
           <TextField required value={userId} onChange={setUserId} placeholder="Their account must already exist with role Team Member" />
         </Field>

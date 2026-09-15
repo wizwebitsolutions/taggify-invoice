@@ -59,6 +59,12 @@ test.describe("Google Sheet link import", () => {
 
     await page.goto("/campaigns");
     await page.getByRole("button", { name: "New campaign", exact: true }).click();
+    // The wizard's sheet import lives on step 3 (Pages); steps 1–2 need a
+    // brand and title before Continue enables.
+    await page.getByPlaceholder("e.g. Zomato", { exact: true }).fill("Northfield");
+    await page.getByPlaceholder("e.g. Zomato Diwali").fill("Derby Series");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
     await page.getByPlaceholder("https://docs.google.com/spreadsheets/…").fill("https://docs.google.com/spreadsheets/d/abc123/edit");
     await page.getByRole("button", { name: "Fetch rows" }).click();
 

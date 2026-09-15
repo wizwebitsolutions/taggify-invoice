@@ -115,3 +115,74 @@ export async function parseWorkImportSheet(source: CsvSource): Promise<ParsedWor
   }
   return rows;
 }
+
+/**
+ * "Attach a Google Sheet of pages" at the plan wizard's Pages step (user
+ * request, 10 Sep). Reuses the same header-name conventions as the sheets
+ * above — same shared HANDLE/FORMAT/COST headers — plus a followers column,
+ * since a brand-new page has no scrape history yet to show a follower count
+ * from.
+ */
+export interface ParsedPlanPageRow {
+  handle: string;
+  category?: string;
+  followers?: number;
+  format?: string;
+  cost?: number;
+  postsPerProfile?: number;
+}
+
+const FOLLOWERS_HEADERS = ["followers", "follower count", "audience"];
+const CATEGORY_HEADERS = ["category", "type", "page type"];
+const POSTS_HEADERS = ["post per profile", "posts per profile", "posts", "post count"];
+
+/**
+ * A raw follower count as it actually shows up in analytics-tool exports —
+ * "1.2M", "850K", or (India-specific, same abbreviations the app's own
+ * `count()`/`compactNumber()` formatters produce) "1.5L"/"2Cr" — not just
+ * plain digits (code review, 10 Sep: the previous `.replace(/[^\d]/g, "")`
+ * silently stripped the '.' and letter, turning "1.2M" into 12).
+ */
+function parseFollowerCount(raw: string | undefined): number | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  const match = trimmed.match(/^([\d,]*\.?\d+)\s*(k|m|l|cr)?$/i);
+  if (!match) return undefined;
+  const base = Number(match[1].replace(/,/g, ""));
+  if (Number.isNaN(base)) return undefined;
+  const multiplier = { k: 1_000, m: 1_000_000, l: 100_000, cr: 10_000_000 }[match[2]?.toLowerCase() ?? ""] ?? 1;
+  return Math.round(base * multiplier);
+}
+
+export async function parsePlanPageSheet(source: CsvSource): Promise<ParsedPlanPageRow[]> {
+  const text = await readText(source);
+  const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+
+  const rows: ParsedPlanPageRow[] = [];
+  for (const row of data) {
+    const keys = Object.keys(row);
+    const find = (headers: string[]) => keys.find((k) => headers.includes(k.trim().toLowerCase()));
+    const handleKey = find(HANDLE_HEADERS) ?? keys[0];
+    const handle = handleKey ? row[handleKey]?.trim() : "";
+    if (!handle) continue;
+
+    const categoryKey = find(CATEGORY_HEADERS);
+    const followersKey = find(FOLLOWERS_HEADERS);
+    const formatKey = find(FORMAT_HEADERS);
+    const costKey = find(COST_HEADERS);
+    const postsKey = find(POSTS_HEADERS);
+
+    const rawCost = costKey ? row[costKey]?.trim().replace(/[^\d.]/g, "") : "";
+    const rawPosts = postsKey ? row[postsKey]?.trim().replace(/[^\d]/g, "") : "";
+
+    rows.push({
+      handle,
+      category: (categoryKey ? row[categoryKey]?.trim() : "") || undefined,
+      followers: parseFollowerCount(followersKey ? row[followersKey] : undefined),
+      format: (formatKey ? row[formatKey]?.trim() : "")?.toLowerCase() || undefined,
+      cost: rawCost && !Number.isNaN(Number(rawCost)) ? Number(rawCost) : undefined,
+      postsPerProfile: rawPosts ? Number(rawPosts) : undefined,
+    });
+  }
+  return rows;
+}

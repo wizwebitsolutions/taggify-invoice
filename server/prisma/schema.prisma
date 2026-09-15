@@ -96,20 +96,21 @@ model User {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  createdByAdmin    User?               @relation("AdminCreatedSubAdmins", fields: [createdByAdminId], references: [id])
-  createdSubAdmins  User[]              @relation("AdminCreatedSubAdmins")
-  memberships       TeamMembership[]    @relation("MemberUser")
-  refreshTokens     RefreshToken[]
-  assets            Asset[]
-  invoices          Invoice[]
-  notifications     Notification[]
-  submittedLinks    Link[]              @relation("SubmittedByUser")
-  statusEvents      LinkStatusEvent[]
-  billingProfiles   BillingProfile[]
-  costRevisions     LinkCostRevision[]
-  plans             Plan[]
-  approvedPlans     Plan[]              @relation("PlanApprovals")
-  permissionChangesMade    PermissionAuditLog[] @relation("PermissionChangeActor")
+  createdByAdmin            User?                @relation("AdminCreatedSubAdmins", fields: [createdByAdminId], references: [id])
+  createdSubAdmins          User[]               @relation("AdminCreatedSubAdmins")
+  memberships               TeamMembership[]     @relation("MemberUser")
+  refreshTokens             RefreshToken[]
+  assets                    Asset[]
+  invoices                  Invoice[]
+  raisedInvoices            Invoice[]            @relation("RaisedInvoices")
+  notifications             Notification[]
+  submittedLinks            Link[]               @relation("SubmittedByUser")
+  statusEvents              LinkStatusEvent[]
+  billingProfiles           BillingProfile[]
+  costRevisions             LinkCostRevision[]
+  plans                     Plan[]
+  approvedPlans             Plan[]               @relation("PlanApprovals")
+  permissionChangesMade     PermissionAuditLog[] @relation("PermissionChangeActor")
   permissionChangesReceived PermissionAuditLog[] @relation("PermissionChangeTarget")
 }
 
@@ -119,12 +120,12 @@ model User {
 // updated or deleted, so it stays a true history even if permissions are
 // changed again later.
 model PermissionAuditLog {
-  id         String   @id @default(cuid())
-  targetId   String
-  actorId    String
-  before     Json?
-  after      Json
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  targetId  String
+  actorId   String
+  before    Json?
+  after     Json
+  createdAt DateTime @default(now())
 
   target User @relation("PermissionChangeTarget", fields: [targetId], references: [id])
   actor  User @relation("PermissionChangeActor", fields: [actorId], references: [id])
@@ -189,6 +190,25 @@ model Asset {
   profilePicUrl  String? // Instagram CDN URL, synced from Apify — re-synced every 24h so it doesn't go stale
   category       String? // free-form, e.g. "Meme page", "News page" — not a fixed enum, same convention as RateCard.format
   approvalStatus String   @default("pending") // pending | approved | rejected
+  // Profile-level engagement from the same Apify profile scrape that syncs
+  // followers (Inventory "Create page", 14 Sep — "on creation automatic
+  // fetching of followers count, avg views"): averaged over the profile's
+  // latest posts, so a page with no links submitted through the app yet
+  // still shows real numbers. getAvgEngagement() prefers the app's own
+  // per-link snapshots once there are any.
+  profileAvgViews    Int?
+  profileAvgLikes    Int?
+  profileAvgComments Int?
+  profileSampleSize  Int      @default(0)
+  // When the last profile scrape succeeded / why the last one failed — lets
+  // the Inventory row say "Fetching from Instagram…" right after creation,
+  // or "Couldn't fetch (private / bad handle)" instead of a silent 0.
+  lastScrapedAt   DateTime?
+  lastScrapeError String?
+  // Set the moment a profile scrape is queued (create / import / bulk
+  // refresh), cleared when it finishes either way — the Inventory row's
+  // "Fetching from Instagram…" state, without guessing from createdAt.
+  scrapeQueuedAt  DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -208,8 +228,9 @@ model Asset {
 // even after matching for reference. `assetId` is filled in once matched to
 // an existing page, or once an admin creates the missing page for a
 // still-pending row (newTask.md #11's approval-before-creation gate is the
-// existing Asset.approvalStatus flow on whatever gets created here — a page
-// created this way starts "pending" exactly like any other new page).
+// existing Asset.approvalStatus flow on whatever gets created here — since
+// 14 Sep a page an ADMIN creates is approved on the spot; only a creator's
+// own additions start "pending").
 //
 // `postUrl`/`format`/`cost` (newTask.md, 8 Sep — "if a post link is already
 // mentioned in the attached sheet, it should get added directly to that
@@ -273,10 +294,12 @@ model Campaign {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  parentCampaign Campaign?  @relation("CampaignPhases", fields: [parentCampaignId], references: [id])
-  phases         Campaign[] @relation("CampaignPhases")
+  parentCampaign Campaign?            @relation("CampaignPhases", fields: [parentCampaignId], references: [id])
+  phases         Campaign[]           @relation("CampaignPhases")
   links          Link[]
   assignments    CampaignAssignment[]
+  invoices       Invoice[]
+  Plan           Plan?
 
   @@index([parentCampaignId])
 }
@@ -295,14 +318,14 @@ model Link {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  campaign      Campaign          @relation(fields: [campaignId], references: [id])
-  asset         Asset             @relation(fields: [assetId], references: [id])
-  submittedBy   User              @relation("SubmittedByUser", fields: [submittedById], references: [id])
-  screenshot    Screenshot?
-  postSnapshots PostSnapshot[]
-  invoiceItem   InvoiceItem?
-  statusEvents  LinkStatusEvent[]
-  costRevisions LinkCostRevision[]
+  campaign           Campaign            @relation(fields: [campaignId], references: [id])
+  asset              Asset               @relation(fields: [assetId], references: [id])
+  submittedBy        User                @relation("SubmittedByUser", fields: [submittedById], references: [id])
+  screenshot         Screenshot?
+  postSnapshots      PostSnapshot[]
+  invoiceItem        InvoiceItem?
+  statusEvents       LinkStatusEvent[]
+  costRevisions      LinkCostRevision[]
   // Back-reference for CampaignAssignment.linkId — set only when this Link
   // was auto-attached from a sheet row rather than submitted normally.
   campaignAssignment CampaignAssignment?
@@ -316,16 +339,16 @@ model Link {
 // #10) — Link.cost itself always holds the current value; this is the
 // history of what it used to be and why.
 model LinkCostRevision {
-  id            String   @id @default(cuid())
-  linkId        String
-  previousCost  Decimal  @db.Decimal(12, 2)
-  newCost       Decimal  @db.Decimal(12, 2)
-  note          String?
-  revisedById   String
-  createdAt     DateTime @default(now())
+  id           String   @id @default(cuid())
+  linkId       String
+  previousCost Decimal  @db.Decimal(12, 2)
+  newCost      Decimal  @db.Decimal(12, 2)
+  note         String?
+  revisedById  String
+  createdAt    DateTime @default(now())
 
-  link       Link @relation(fields: [linkId], references: [id], onDelete: Cascade)
-  revisedBy  User @relation(fields: [revisedById], references: [id])
+  link      Link @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  revisedBy User @relation(fields: [revisedById], references: [id])
 
   @@index([linkId])
 }
@@ -338,8 +361,8 @@ model LinkStatusEvent {
   note      String?
   createdAt DateTime   @default(now())
 
-  link     Link  @relation(fields: [linkId], references: [id], onDelete: Cascade)
-  actedBy  User? @relation(fields: [actedById], references: [id])
+  link    Link  @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  actedBy User? @relation(fields: [actedById], references: [id])
 
   @@index([linkId])
 }
@@ -347,7 +370,7 @@ model LinkStatusEvent {
 model Screenshot {
   id           String   @id @default(cuid())
   linkId       String   @unique
-  publicId     String   // Cloudinary public_id
+  publicId     String // Cloudinary public_id
   reviewedById String?
   approved     Boolean?
   createdAt    DateTime @default(now())
@@ -395,20 +418,39 @@ model Invoice {
   amount        Decimal       @db.Decimal(12, 2) // final billed total = subtotal + gstAmount
   subtotal      Decimal       @db.Decimal(12, 2) // sum of the invoiced links' cost, pre-GST
   isGstInvoice  Boolean       @default(false)
-  gstAmount     Decimal       @db.Decimal(12, 2) @default(0) // 18% of subtotal when isGstInvoice, else 0
+  gstAmount     Decimal       @default(0) @db.Decimal(12, 2) // 18% of subtotal when isGstInvoice, else 0
   status        InvoiceStatus @default(DRAFT)
   paymentStatus PaymentStatus @default(PENDING)
   gstStatus     GstStatus     @default(PENDING)
   remarks       String? // e.g. rejection reason
   dueDate       DateTime?
   paidAt        DateTime?
+  // 12 Sep — invoices generated per creator from a campaign page (by Admin
+  // or the Plan Maker whose plan spawned the campaign). campaignId is what
+  // the campaign page lists "its" invoices by and what scopes a Plan
+  // Maker's invoice visibility; raisedById records who generated it (null
+  // for older rows). A creator-raised invoice also gets campaignId when
+  // every link on it belongs to one campaign.
+  campaignId    String?
+  raisedById    String?
+  // 12 Sep — the creator's own invoice document (their GST invoice PDF/
+  // image) attached to this record, so Finance has it next to the
+  // system-generated one. Cloudinary public_id, like Screenshot; the
+  // original file name is kept for display since public_ids carry none.
+  attachmentPublicId    String?
+  attachmentName        String?
+  attachmentUploadedById String?
+  attachmentUploadedAt  DateTime?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  creator User          @relation(fields: [creatorId], references: [id])
-  items   InvoiceItem[]
+  creator  User          @relation(fields: [creatorId], references: [id])
+  campaign Campaign?     @relation(fields: [campaignId], references: [id])
+  raisedBy User?         @relation("RaisedInvoices", fields: [raisedById], references: [id])
+  items    InvoiceItem[]
 
   @@index([creatorId])
+  @@index([campaignId])
   @@index([status])
 }
 
@@ -435,6 +477,18 @@ model Notification {
   @@index([userId, readAt])
 }
 
+// Small generic key/value store for state that isn't tied to any one
+// row — currently just the Google OAuth refresh token (see
+// googleOAuthClient.js: per-plan spreadsheet creation needs a real Google
+// account's Drive quota, which means user-consent OAuth instead of the
+// zero-quota service account) and the reusable execution-sheet template's
+// spreadsheet id.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
 model JobRun {
   id         String    @id @default(cuid())
   jobName    String
@@ -452,43 +506,122 @@ model JobRun {
 // become one. cost/expected engagement are computed at read time from the
 // selected pages (service.js), not stored, same as Campaign's budget fields.
 model Plan {
-  id            String   @id @default(cuid())
-  name          String
-  clientName    String
-  clientContact String?
-  budget        Decimal? @db.Decimal(12, 2)
+  id              String     @id @default(cuid())
+  name            String
+  clientName      String
+  clientContact   String?
+  // Client-details block (user request, 10 Sep — "client details to be
+  // filled option ... company name, gst number, address etc").
+  clientCompany   String?
+  clientGstNumber String?
+  clientAddress   String?
+  // Free-form brief/note from the wizard's Basics step, rendered as an
+  // extra NOTES bullet on the PDF alongside the two fixed ones.
+  notes           String?
+  budget          Decimal?   @db.Decimal(12, 2)
   // Same convention as Invoice.isGstInvoice (newTask.md #4) — whether the
   // PDF/overview adds 18% GST on top of the client subtotal.
-  isGstPlan     Boolean    @default(false)
-  status        PlanStatus @default(DRAFT)
-  approvedById  String?
-  approvedAt    DateTime?
-  createdById   String
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  isGstPlan       Boolean    @default(false)
+  status          PlanStatus @default(DRAFT)
+  approvedById    String?
+  approvedAt      DateTime?
+  createdById     String
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Plan B/C/etc (user request, 10 Sep — "option of making plan b or other
+  // plan"): a plain shared tag, not a FK to a group table — two Plan rows
+  // with the same pitchGroupId started from one shared client-details/
+  // budget shell (see plans/service.js's createPlanVariant) and are fully
+  // independent after that, deliberately not kept in sync. No relation
+  // annotation needed since nothing but this id is shared.
+  pitchGroupId String?
+  variantLabel String  @default("Plan A")
+
+  // Step 3's editable client-facing overview numbers (user request, 10 Sep
+  // — "client side facing overview, budget total cost, impressions that
+  // can be editable"). Null = keep showing the computed value, same as
+  // every plan before this column existed — see plans/service.js's
+  // annotatePlan.
+  overrideFollowers   Int?
+  overridePosts       Int?
+  overrideImpressions Int?
+  overrideCost        Decimal? @db.Decimal(12, 2)
+
+  // The generated deliverables (user request, 10 Sep — "plan will be of
+  // google sheet, not in pdf, it'll generate google sheet and will provide
+  // link" / "list of plans ... option of viewing googlesheet of plan for
+  // client or internal"). Cached here so revisiting Build (or the Plans
+  // list) doesn't spin up a fresh spreadsheet tab pair every time;
+  // "Regenerate" overwrites in place (see plans/service.js's
+  // generatePlanSheet).
+  clientSheetUrl   String?
+  internalSheetUrl String?
+  // A pasted reference link (user request, 10 Sep — "there'll be option of
+  // attaching execution sheet after plan creation, execution sheet will be
+  // page name, links of their reel uploaded, date, page followers etc") —
+  // kept as a plain link, not live-fetched or parsed, same convention as
+  // Campaign.sheetLink. Whoever's actually posting fills this sheet in
+  // themselves, using the shape the sample template (see plans/service.js's
+  // getExecutionSheetTemplate) shows them.
+  executionSheetUrl String?
+
+  // Client invoice (user request, 13 Sep — "on clicking generate invoice,
+  // it'll ask for client details like gst, company address, phone number"):
+  // the Taggify → client invoice for this plan's client-facing total. The
+  // details are asked for in a popup and saved back here (clientPhone is
+  // new; company/GST/address reuse the columns above), the number is
+  // minted once and kept across regenerations so the client never sees
+  // two numbers for one plan. See plans/service.js's generateClientInvoice.
+  clientPhone         String?
+  clientInvoiceNumber String?   @unique
+  clientInvoiceAt     DateTime?
+
+  // Attached invoice document (user request, 14 Sep — "in plans for
+  // admin, plan maker side, there'll be option of attaching invoice
+  // document in pdf format as well"): a PDF the Admin / Plan Maker uploads
+  // and keeps on the plan next to the generated client invoice — e.g. the
+  // signed copy, or one raised outside the system. Same Cloudinary
+  // public_id + original-name layout as Invoice.attachment*.
+  invoiceAttachmentPublicId     String?
+  invoiceAttachmentName         String?
+  invoiceAttachmentUploadedById String?
+  invoiceAttachmentUploadedAt   DateTime?
+
+  // Set once, on approval (user request, 10 Sep — "on his marking all pages
+  // mentioned in the plan will get the campaign visible"): a real Campaign
+  // is created from the plan's pages, one CampaignAssignment per distinct
+  // page, already "matched" so each page's owner sees it immediately in
+  // their own dashboard — same visibility path every other campaign
+  // already uses, not a parallel one. Only ever set once; a plan is
+  // APPROVED exactly one time (see plans/service.js's decidePlan).
+  campaignId String? @unique
 
   createdBy  User       @relation(fields: [createdById], references: [id])
   approvedBy User?      @relation("PlanApprovals", fields: [approvedById], references: [id])
+  campaign   Campaign?  @relation(fields: [campaignId], references: [id])
   items      PlanItem[]
+
+  @@index([pitchGroupId])
 }
 
 model PlanItem {
-  id      String  @id @default(cuid())
-  planId  String
-  assetId String
-  format  String // reel | story | carousel | collaboration | video — mirrors RateCard.format
-  cost    Decimal @db.Decimal(12, 2) // internal — snapshot of the rate at the time it was added to the plan
+  id              String   @id @default(cuid())
+  planId          String
+  assetId         String
+  format          String // reel | story | carousel | collaboration | video — mirrors RateCard.format
+  cost            Decimal  @db.Decimal(12, 2) // internal — snapshot of the rate at the time it was added to the plan
   // Client-facing price for this line, when it differs from the internal
   // cost above (markup/margin) — newTask.md, 8 Sep. Null = show the
   // internal cost as-is. NEVER read directly by anything client-facing
   // (PDF) without going through plans/service.js's forClientPdf(), which
   // resolves this fallback once in one place rather than leaving every
   // call site to remember `clientCost ?? cost` itself.
-  clientCost Decimal? @db.Decimal(12, 2)
+  clientCost      Decimal? @db.Decimal(12, 2)
   // How many posts on this one page this line covers — newTask.md, 8 Sep
   // (the example sheet's "Post Per Profile" column). Cost above is
   // per-post; totals multiply by this.
-  postsPerProfile Int @default(1)
+  postsPerProfile Int      @default(1)
 
   plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
   asset Asset @relation(fields: [assetId], references: [id])

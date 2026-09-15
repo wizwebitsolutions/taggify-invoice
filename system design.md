@@ -82,7 +82,7 @@ Creator submits post link
    → node-cron / on-demand job calls Apify to fetch post metrics
    → Admin approves insights → status: insights_approved
    → Link becomes eligible for invoicing (uninvoiced_links pool)
-   → Creator/Admin generates invoice from eligible links (bulk)
+   → Creator generates invoice from eligible links (bulk); Admin approves
    → Invoice status: raised → Finance marks paid manually → status: paid; GST status tracked separately
 ```
 
@@ -380,7 +380,7 @@ server/
 | `POST /links/:id/review-screenshot` | Admin | approve/reject |
 | `POST /links/:id/refresh-metrics` | Admin (or cron) | trigger Apify post scrape |
 | `POST /links/:id/approve-insights` | Admin | mark insights approved |
-| `POST /links/bulk-invoice` | Creator/Admin | generate invoice from eligible links |
+| `POST /links/bulk-invoice` | Creator | generate invoice from eligible links (creator-only since 13 Sep) |
 | `GET /invoices` | Creator/Admin/Finance | list + filters |
 | `POST /invoices/:id/mark-paid` | Finance | manual payment confirmation |
 | `PUT /invoices/:id/gst-status` | Finance | update GST status |

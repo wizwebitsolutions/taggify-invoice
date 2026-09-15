@@ -42,13 +42,13 @@ export function StackedBar({
               onClick={onSelect ? () => onSelect(s.key) : undefined}
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[0.8125rem]",
-                onSelect && "cursor-pointer hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                onSelect && "cursor-pointer hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30",
                 s.active && "bg-accent-soft"
               )}
             >
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
               <span className="text-text-muted">{s.label}</span>
-              <span className="font-bold tabular-nums text-text">{s.value}</span>
+              <span className="font-semibold tabular-nums text-text">{s.value}</span>
               <span className="text-text-faint">({pct}%)</span>
             </Comp>
           );

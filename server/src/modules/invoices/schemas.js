@@ -21,7 +21,15 @@ export const rejectInvoiceSchema = z.object({
   remarks: z.string().min(1).max(500),
 });
 
+// Step 2 of the attachment upload (see confirmAttachment) — the key the
+// server minted, echoed back, plus the original file name for display.
+export const confirmAttachmentSchema = z.object({
+  publicId: z.string().min(1).max(300),
+  fileName: z.string().min(1).max(200),
+});
+
 export const listInvoicesQuerySchema = z.object({
+  campaignId: z.string().min(1).optional(),
   status: z.enum(["DRAFT", "RAISED", "APPROVED", "REJECTED", "PAID"]).optional(),
   paymentStatus: z.enum(["PENDING", "COMPLETED", "CANCELLED"]).optional(),
   search: z.string().max(60).optional(), // matches Inv No, per creator.wldd.in's "Search by Invoice Number"

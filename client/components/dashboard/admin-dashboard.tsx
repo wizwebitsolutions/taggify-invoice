@@ -1,23 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
-import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
-import { DashboardHero } from "@/components/dashboard/dashboard-hero";
-import { LinkDetailPanel, STATUS_LABEL } from "@/components/dashboard/link-detail-panel";
-import { TrendAreaChart } from "@/components/charts/trend-area-chart";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card, CardHeader, Thumb } from "@/components/ui/data-table";
+import { Tag } from "@/components/ui/tag";
+import { Panel, PanelAction, ProgressBar } from "@/components/ui/panel";
 import { RankedBarList } from "@/components/charts/ranked-bar-list";
 import { StackedBar } from "@/components/charts/stacked-bar";
 import { TONE_COLOR } from "@/components/charts/tone-color";
 import { STATUS_CONFIG, StatusPill } from "@/components/ui/status-pill";
-import { Panel, PanelAction } from "@/components/ui/panel";
-import { Th, TableSkeleton, EmptyState } from "@/components/ui/table-parts";
-import { InvoiceIcon, AlertIcon, CheckCircleIcon, AssetIcon, CampaignIcon, ClockIcon, TeamIcon, ChevronRightIcon, ArrowRightIcon } from "@/components/icons";
+import { TableSkeleton, EmptyState } from "@/components/ui/table-parts";
+import { ComparePagesPanel } from "@/components/dashboard/compare-pages-panel";
+import { InvoiceIcon, AlertIcon, CampaignIcon, ClockIcon, TeamIcon, ArrowRightIcon, PlusIcon, DownloadIcon, EyeIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import {
   links as linksApi,
@@ -25,13 +26,16 @@ import {
   assets as assetsApi,
   campaigns as campaignsApi,
   billing as billingApi,
+  plans as plansApi,
   admin as adminApi,
-  type Link,
+  type Link as LinkRow,
   type Invoice,
+  type Campaign,
 } from "@/lib/api-client";
-import { money, count, initialsOf, roleLabel } from "@/lib/format";
+import { money, initialsOf, roleLabel } from "@/lib/format";
+import { lastNMonths } from "@/lib/dates";
 
-const LINK_PIPELINE_ORDER: Link["status"][] = [
+const LINK_PIPELINE_ORDER: LinkRow["status"][] = [
   "SUBMITTED",
   "PENDING_SCREENSHOT_REVIEW",
   "SCREENSHOT_REJECTED",
@@ -39,99 +43,76 @@ const LINK_PIPELINE_ORDER: Link["status"][] = [
   "INSIGHTS_PENDING",
   "INSIGHTS_APPROVED",
   "INVOICED",
-  // Included in the funnel chart (so a broken link is actually *visible*,
-  // not just silently excluded — newTask.md, 8 Sep) but treated as a
-  // terminal outcome everywhere else below, same as INVOICED.
   "INVALID",
 ];
 const INVOICE_STATUS_ORDER: Invoice["status"][] = ["DRAFT", "RAISED", "APPROVED", "REJECTED", "PAID"];
 
-// Links awaiting an admin action, as opposed to just sitting in the pipeline
-// waiting on the creator or the scrape cron — this is the default slice the
-// review queue below shows.
-const ACTIONABLE_STATUSES = "PENDING_SCREENSHOT_REVIEW,INSIGHTS_PENDING";
-// Everything the "Links in pipeline" KPI counts (not yet invoiced, not
-// confirmed dead) — so clicking that tile shows exactly what it counted,
-// not just the narrower actionable-only default.
-const IN_PIPELINE_STATUSES = LINK_PIPELINE_ORDER.filter((s) => s !== "INVOICED" && s !== "INVALID").join(",");
+const DAY = 24 * 60 * 60 * 1000;
+const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / DAY));
+const shortDate = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "—");
 
-function lastNMonths(n: number) {
-  const now = new Date();
-  return Array.from({ length: n }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1);
-    return { key: `${d.getFullYear()}-${d.getMonth()}`, label: d.toLocaleDateString(undefined, { month: "short" }) };
-  });
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
-function scrollToId(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
+/** One row of the "Needs your decision" queue on the admin home. */
+type Decision = {
+  id: string;
+  title: string;
+  sub: string;
+  href: string;
+  waitingDays?: number;
+  primary?: { label: string; onClick: () => void; pending?: boolean };
+  secondary?: { label: string; href: string };
+  thumb?: string | null;
+  initials?: string;
+};
 
 /**
- * Admin/Finance's landing page — a bird's-eye view (finance, pipeline
- * health, pages) instead of the creator's per-link "My Works" table, since
- * neither role submits or owns links themselves. Full review capability
- * (approve screenshot/insights, refresh metrics) still lives here via the
- * "Needs your review" queue, reusing the same LinkDetailPanel the creator
- * dashboard uses — nothing an admin could do before is gone, it's just no
- * longer the whole page.
+ * Admin's landing page (premium mockup 02): a decision queue, not a chart
+ * wall. Greeting + count, four KPIs, "Needs your decision" on the left,
+ * campaign budgets and the six-month expenditure bars on the right. The
+ * deeper analytics (pipeline funnel, page comparison, invoice mix, system
+ * health) stay further down the page. Reviewing individual proofs happens
+ * on /approvals, the list-left/detail-right queue.
  */
 export function AdminDashboard() {
   const { user, accessToken } = useAuth();
   const router = useRouter();
   const queryClient = useQueryClient();
   const token = accessToken!;
-  const isAdmin = user?.role === "ADMIN"; // true admin only — Finance can't reach /admin/* routes
+  const isAdmin = user?.role === "ADMIN";
 
-  // 100 is the server's hard cap (listLinksQuerySchema/listInvoicesQuerySchema)
-  // — matches every other page's own list call (Invoices, the creator
-  // dashboard). A pageSize above it 400s the whole query, which silently
-  // renders as "0" everywhere below rather than an error, so don't raise this
-  // without raising the server cap first.
+  // 100 is the server's hard cap for every list endpoint.
   const linksQuery = useQuery({ queryKey: ["links", "admin-overview"], queryFn: () => linksApi.list(token, { pageSize: 100 }) });
   const invoicesQuery = useQuery({ queryKey: ["invoices", "admin-overview"], queryFn: () => invoicesApi.list(token, { pageSize: 100 }) });
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
   const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
   const billingQuery = useQuery({ queryKey: ["billingProfiles"], queryFn: () => billingApi.list(token) });
+  const plansQuery = useQuery({ queryKey: ["plans"], queryFn: () => plansApi.list(token), enabled: isAdmin });
   const usersQuery = useQuery({ queryKey: ["adminUsers"], queryFn: () => adminApi.users(token), enabled: isAdmin });
   const jobRunsQuery = useQuery({ queryKey: ["job-runs"], queryFn: () => adminApi.jobRuns(token), enabled: isAdmin });
 
   const links = linksQuery.data?.items ?? [];
   const invoices = invoicesQuery.data?.items ?? [];
   const assets = assetsQuery.data ?? [];
+  const campaigns = campaignsQuery.data ?? [];
   const billingProfiles = billingQuery.data ?? [];
+  const plans = plansQuery.data ?? [];
 
-  // ── Finance KPIs — same definitions as the Invoices page's own tiles, so the two never disagree.
-  const financeKpis = useMemo(() => {
-    const totalRaised = invoices.reduce((sum, i) => sum + Number(i.amount), 0);
-    const pending = invoices.filter((i) => i.status === "RAISED" || i.status === "APPROVED");
-    const overdue = pending.filter((i) => i.overdueDays > 0);
-    const paid = invoices.filter((i) => i.status === "PAID");
-    return {
-      totalRaised,
-      pendingAmount: pending.reduce((sum, i) => sum + Number(i.amount), 0),
-      pendingCount: pending.length,
-      overdueAmount: overdue.reduce((sum, i) => sum + Number(i.amount), 0),
-      overdueCount: overdue.length,
-      collectedAmount: paid.reduce((sum, i) => sum + Number(i.amount), 0),
-      collectedCount: paid.length,
-    };
-  }, [invoices]);
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["links"] });
+    queryClient.invalidateQueries({ queryKey: ["assets"] });
+    queryClient.invalidateQueries({ queryKey: ["billingProfiles"] });
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
+  };
+  const approveScreenshot = useMutation({ mutationFn: (id: string) => linksApi.reviewScreenshot(token, id, true), onSuccess: invalidateAll });
+  const approveInsights = useMutation({ mutationFn: (id: string) => linksApi.approveInsights(token, id), onSuccess: invalidateAll });
+  const approveAsset = useMutation({ mutationFn: (id: string) => assetsApi.setApproval(token, id, "approved"), onSuccess: invalidateAll });
+  const approveBilling = useMutation({ mutationFn: (id: string) => billingApi.setApproval(token, id, "approved"), onSuccess: invalidateAll });
 
-  const opsKpis = useMemo(() => {
-    const pendingPages = assets.filter((a) => a.approvalStatus === "pending").length;
-    const pendingBilling = billingProfiles.filter((b) => b.approvalStatus === "pending").length;
-    return {
-      activePages: assets.filter((a) => a.approvalStatus === "approved").length,
-      pendingApprovals: pendingPages + pendingBilling,
-      campaigns: campaignsQuery.data?.length ?? 0,
-      inPipeline: links.filter((l) => l.status !== "INVOICED" && l.status !== "INVALID").length,
-    };
-  }, [assets, billingProfiles, campaignsQuery.data, links]);
-
-  // Invoice amounts are money paid OUT to creators, not money the agency
-  // earns — "expenditure", not "revenue" (label-only fix; the underlying
-  // per-month sum is unchanged).
+  // ── KPIs ──────────────────────────────────────────────────────────────
   const expenditureTrend = useMemo(() => {
     const months = lastNMonths(6);
     const byKey = new Map(months.map((m) => [m.key, 0]));
@@ -142,69 +123,135 @@ export function AdminDashboard() {
     }
     return months.map((m) => ({ label: m.label, value: byKey.get(m.key) ?? 0 }));
   }, [invoices]);
+  const thisMonth = expenditureTrend[expenditureTrend.length - 1]?.value ?? 0;
+  const lastMonth = expenditureTrend[expenditureTrend.length - 2]?.value ?? 0;
+  const monthDelta = lastMonth > 0 ? Math.round(((thisMonth - lastMonth) / lastMonth) * 100) : null;
 
+  const payouts = useMemo(() => {
+    const pending = invoices.filter((i) => i.status === "RAISED" || i.status === "APPROVED");
+    const overdue = pending.filter((i) => i.overdueDays > 0);
+    return { amount: pending.reduce((s, i) => s + Number(i.amount), 0), count: pending.length, overdue: overdue.length };
+  }, [invoices]);
+
+  const liveCampaigns = useMemo(() => {
+    const now = Date.now();
+    const live = campaigns.filter((c) => !c.parentCampaignId && (!c.deadline || new Date(c.deadline).getTime() >= now - DAY));
+    const endingSoon = live.filter((c) => c.deadline && new Date(c.deadline).getTime() - now < 7 * DAY).length;
+    return { count: live.length, endingSoon };
+  }, [campaigns]);
+
+  const awaitingReview = useMemo(() => {
+    const rows = links.filter((l) => l.status === "PENDING_SCREENSHOT_REVIEW" || l.status === "INSIGHTS_PENDING");
+    const oldest = rows.reduce((max, l) => Math.max(max, daysSince(l.createdAt)), 0);
+    return { count: rows.length, oldest };
+  }, [links]);
+
+  // ── Needs your decision ───────────────────────────────────────────────
+  const decisions = useMemo<Decision[]>(() => {
+    const out: Decision[] = [];
+    for (const l of links.filter((l) => l.status === "PENDING_SCREENSHOT_REVIEW")) {
+      out.push({
+        id: `shot-${l.id}`,
+        title: `Screenshot proof · @${l.asset?.handle ?? "—"}`,
+        sub: `${l.campaign?.title ?? "—"} · ${l.format} · submitted ${daysSince(l.createdAt)}d ago`,
+        href: `/approvals?item=${l.id}`,
+        waitingDays: daysSince(l.createdAt),
+        secondary: { label: "View", href: `/approvals?item=${l.id}` },
+        primary: { label: "Approve", onClick: () => approveScreenshot.mutate(l.id), pending: approveScreenshot.isPending },
+      });
+    }
+    for (const l of links.filter((l) => l.status === "INSIGHTS_PENDING")) {
+      out.push({
+        id: `ins-${l.id}`,
+        title: `Insights · @${l.asset?.handle ?? "—"}`,
+        sub: `${l.campaign?.title ?? "—"} · ${l.format} · ${daysSince(l.createdAt)}d ago`,
+        href: `/approvals?item=${l.id}`,
+        waitingDays: daysSince(l.createdAt),
+        primary: { label: "Approve", onClick: () => approveInsights.mutate(l.id), pending: approveInsights.isPending },
+      });
+    }
+    for (const p of plans.filter((p) => p.status === "PENDING_APPROVAL")) {
+      out.push({
+        id: `plan-${p.id}`,
+        title: `Plan approval · ${p.name}`,
+        sub: `${p.createdBy?.name ?? "Planner"} · ${p.items?.length ?? 0} pages · ${money(p.overview?.total ?? 0)} quoted`,
+        href: `/plans?id=${p.id}`,
+        waitingDays: daysSince(p.updatedAt),
+        secondary: { label: "Review", href: `/plans?id=${p.id}` },
+      });
+    }
+    for (const c of campaigns.filter((c) => (c.pendingAssignmentCount ?? 0) > 0)) {
+      out.push({
+        id: `pend-${c.id}`,
+        title: `${c.pendingAssignmentCount} new creator${c.pendingAssignmentCount === 1 ? "" : "s"} from imported sheet`,
+        sub: `${c.title} · not in database yet`,
+        href: `/campaigns/view?id=${c.id}`,
+        initials: "+",
+        secondary: { label: "Create all", href: `/campaigns/view?id=${c.id}` },
+      });
+    }
+    for (const a of assets.filter((a) => a.approvalStatus === "pending")) {
+      out.push({
+        id: `asset-${a.id}`,
+        title: `New page · @${a.handle}`,
+        sub: `${a.owner?.name ?? "—"} · ${a.category ?? "uncategorised"}`,
+        href: `/inventory`,
+        waitingDays: daysSince(a.createdAt),
+        primary: { label: "Approve", onClick: () => approveAsset.mutate(a.id), pending: approveAsset.isPending },
+      });
+    }
+    for (const b of billingProfiles.filter((b) => b.approvalStatus === "pending")) {
+      out.push({
+        id: `bill-${b.id}`,
+        title: `Billing profile · ${b.name}`,
+        sub: `${b.user?.name ?? b.user?.phoneNumber ?? "—"} · PAN ${b.pan}`,
+        href: `/approvals`,
+        primary: { label: "Approve", onClick: () => approveBilling.mutate(b.id), pending: approveBilling.isPending },
+      });
+    }
+    for (const l of links.filter((l) => l.status === "INVALID")) {
+      out.push({
+        id: `bad-${l.id}`,
+        title: `Link not working · @${l.asset?.handle ?? "—"}`,
+        sub: `${l.campaign?.title ?? "—"} · ${money(l.cost)} tied to it`,
+        href: `/campaigns/view?id=${l.campaignId}`,
+        secondary: { label: "Review", href: `/campaigns/view?id=${l.campaignId}` },
+      });
+    }
+    return out.sort((a, b) => (b.waitingDays ?? 0) - (a.waitingDays ?? 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [links, plans, campaigns, assets, billingProfiles, approveScreenshot.isPending, approveInsights.isPending, approveAsset.isPending, approveBilling.isPending]);
+
+  // ── Budgets ───────────────────────────────────────────────────────────
+  const budgets = useMemo(() => {
+    return campaigns
+      .filter((c) => !c.parentCampaignId && c.costCap && Number(c.costCap) > 0)
+      .map((c) => ({ c, pct: Math.round(((c.spent ?? 0) / Number(c.costCap)) * 100) }))
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, 4);
+  }, [campaigns]);
+
+  // ── Deeper analytics (kept below the fold) ────────────────────────────
   const linkFunnel = useMemo(
-    () =>
-      LINK_PIPELINE_ORDER.map((status) => ({
-        key: status,
-        label: STATUS_CONFIG[status].label,
-        value: links.filter((l) => l.status === status).length,
-        color: TONE_COLOR[STATUS_CONFIG[status].tone ?? "slate"],
-      })),
+    () => LINK_PIPELINE_ORDER.map((status) => ({ key: status, label: STATUS_CONFIG[status].label, value: links.filter((l) => l.status === status).length, color: TONE_COLOR[STATUS_CONFIG[status].tone ?? "slate"] })),
     [links]
   );
-
   const invoiceComposition = useMemo(
-    () =>
-      INVOICE_STATUS_ORDER.map((status) => ({
-        key: status,
-        label: STATUS_CONFIG[status].label,
-        value: invoices.filter((i) => i.status === status).length,
-        color: TONE_COLOR[STATUS_CONFIG[status].tone ?? "slate"],
-      })),
+    () => INVOICE_STATUS_ORDER.map((status) => ({ key: status, label: STATUS_CONFIG[status].label, value: invoices.filter((i) => i.status === status).length, color: TONE_COLOR[STATUS_CONFIG[status].tone ?? "slate"] })),
     [invoices]
   );
-
-  const topPages = useMemo(
-    () =>
-      [...assets]
-        .sort((a, b) => b.followers - a.followers)
-        .slice(0, 6)
-        .map((a) => ({ key: a.id, label: `@${a.handle}`, value: a.followers })),
-    [assets]
-  );
-
-  // ── "Needs your review" queue — defaults to both actionable statuses; a funnel-bar click narrows it to one.
-  const [queueStatus, setQueueStatus] = useState<string>(ACTIONABLE_STATUSES);
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const queueQuery = useQuery({
-    queryKey: ["links", "admin-queue", queueStatus],
-    queryFn: () => linksApi.list(token, { status: queueStatus, pageSize: 50 }),
-  });
-  const queueRows = queueQuery.data?.items ?? [];
-  const queueDetail = queueRows.find((l) => l.id === detailId) ?? queueRows[0];
-  // Mobile's sheet only opens on an explicit tap — no fallback-to-first-row like the desktop panel above.
-  const mobileQueueDetail = detailId ? queueRows.find((l) => l.id === detailId) : undefined;
-  const isDefaultQueue = queueStatus === ACTIONABLE_STATUSES;
-
-  function selectFunnelStatus(status: string) {
-    setQueueStatus(status);
-    setDetailId(null);
-    scrollToId("link-queue");
-  }
-
-  const approveAssetMutation = useMutation({
-    mutationFn: ({ id, approvalStatus }: { id: string; approvalStatus: "approved" | "rejected" }) => assetsApi.setApproval(token, id, approvalStatus),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }),
-  });
-  const approveBillingMutation = useMutation({
-    mutationFn: ({ id, approvalStatus }: { id: string; approvalStatus: "approved" | "rejected" }) => billingApi.setApproval(token, id, approvalStatus),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["billingProfiles"] }),
-  });
-
-  const pendingPages = assets.filter((a) => a.approvalStatus === "pending");
-  const pendingBillingProfiles = billingProfiles.filter((b) => b.approvalStatus === "pending");
-
+  const pageMetrics = useMemo(() => {
+    const byAsset = new Map<string, { linksCount: number; totalInvoiced: number }>();
+    for (const l of links) {
+      const entry = byAsset.get(l.assetId) ?? { linksCount: 0, totalInvoiced: 0 };
+      entry.linksCount += 1;
+      if (l.status === "INVOICED") entry.totalInvoiced += Number(l.cost);
+      byAsset.set(l.assetId, entry);
+    }
+    return [...assets]
+      .sort((a, b) => b.followers - a.followers)
+      .map((a) => ({ id: a.id, handle: a.handle, followers: a.followers, linksCount: byAsset.get(a.id)?.linksCount ?? 0, totalInvoiced: byAsset.get(a.id)?.totalInvoiced ?? 0 }));
+  }, [assets, links]);
   const recentJobRuns = (jobRunsQuery.data ?? []).slice(0, 5);
   const usersByRole = useMemo(() => {
     const items = usersQuery.data ?? [];
@@ -213,311 +260,181 @@ export function AdminDashboard() {
     return { total: items.length, roles };
   }, [usersQuery.data]);
 
+  const firstName = (user?.name ?? "there").split(" ")[0];
+  const monthLabel = new Date().toLocaleDateString(undefined, { month: "short" });
+  const maxBar = Math.max(1, ...expenditureTrend.map((m) => m.value));
+  const loading = linksQuery.isLoading || invoicesQuery.isLoading || campaignsQuery.isLoading;
+
   return (
     <AppShell
       active="dashboard"
       user={{ initials: initialsOf(user?.name), name: user?.name ?? "—", role: roleLabel(user?.role), tone: user?.role === "FINANCE" ? "blue" : "emerald" }}
-      searchPlaceholder="Search links, invoices, pages…"
+      searchPlaceholder="Search campaigns, pages, invoices…"
     >
-      <div className="flex flex-col gap-8">
-        <DashboardHero
-          eyebrow="Admin"
-          title={<span className="text-accent">Overview</span>}
-          subtitle="Finance, pipeline health, and pages — across every creator."
-          stat={{ value: String(opsKpis.campaigns), label: "Campaigns live" }}
+      <div className="flex flex-col gap-5">
+        <PageHeader
+          title={
+            <>
+              {greeting()}, <span className="serif text-[1.15em]">{firstName}.</span>
+            </>
+          }
+          subtitle={
+            decisions.length > 0
+              ? `${decisions.length} thing${decisions.length === 1 ? "" : "s"} need${decisions.length === 1 ? "s" : ""} a decision from you. ${payouts.overdue > 0 ? `${payouts.overdue} payout${payouts.overdue === 1 ? " is" : "s are"} overdue.` : "Budget and spend are on track."}`
+              : "Nothing is waiting on you. Budget and spend are on track."
+          }
+          actions={
+            isAdmin ? (
+              <>
+                <Button variant="secondary" onClick={() => router.push("/campaigns?import=1")}>
+                  <DownloadIcon className="h-4 w-4" />
+                  Import sheet
+                </Button>
+                <Button onClick={() => router.push("/campaigns?new=1")}>
+                  <PlusIcon className="h-4 w-4" />
+                  New campaign
+                </Button>
+              </>
+            ) : undefined
+          }
         />
 
-        {/* Finance KPIs — horizontal-scroll strip on mobile, a 4-up grid at md+. */}
-        <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
-          <KpiCard className="w-[160px] shrink-0 md:w-auto" icon={InvoiceIcon} label="Total raised" value={money(financeKpis.totalRaised)} foot={`${invoices.length} invoices`} onClick={() => router.push("/invoices")} />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
           <KpiCard
-            className="w-[160px] shrink-0 md:w-auto"
+            icon={InvoiceIcon}
+            label={`Expenditure · ${monthLabel}`}
+            value={money(thisMonth)}
+            foot={monthDelta === null ? `${invoices.length} invoices total` : `${monthDelta >= 0 ? "+" : ""}${monthDelta}% vs last month`}
+            sparkline={expenditureTrend.map((m) => m.value)}
+            onClick={() => router.push("/invoices")}
+          />
+          <KpiCard
             icon={ClockIcon}
-            label="Pending payment"
-            value={money(financeKpis.pendingAmount)}
-            foot={`${financeKpis.pendingCount} awaiting settlement`}
+            label="Pending payouts"
+            value={money(payouts.amount)}
+            foot={`${payouts.count} invoices · ${payouts.overdue} overdue`}
+            tone={payouts.overdue > 0 ? "rose" : undefined}
             onClick={() => router.push("/invoices?status=RAISED")}
           />
+          <KpiCard icon={CampaignIcon} label="Live campaigns" value={String(liveCampaigns.count)} foot={liveCampaigns.endingSoon > 0 ? `${liveCampaigns.endingSoon} ending this week` : "None ending this week"} onClick={() => router.push("/campaigns")} />
           <KpiCard
-            className="w-[160px] shrink-0 md:w-auto"
             icon={AlertIcon}
-            label="Overdue"
-            value={money(financeKpis.overdueAmount)}
-            foot={`${financeKpis.overdueCount} past due date`}
-            tone={financeKpis.overdueCount > 0 ? "rose" : undefined}
-            // Overdue really spans RAISED + APPROVED, but the invoices
-            // page's status dropdown is single-select (no comma-list
-            // support there, unlike links) — RAISED is the common case;
-            // the destination table still marks overdue rows in rose either way.
-            onClick={() => router.push("/invoices?status=RAISED")}
-          />
-          <KpiCard
-            className="w-[160px] shrink-0 md:w-auto"
-            icon={CheckCircleIcon}
-            label="Collected"
-            value={money(financeKpis.collectedAmount)}
-            foot={`${financeKpis.collectedCount} paid invoices`}
-            onClick={() => router.push("/invoices?status=PAID")}
+            label="Posts awaiting review"
+            value={String(awaitingReview.count)}
+            foot={awaitingReview.count > 0 ? `Oldest waiting ${awaitingReview.oldest} day${awaitingReview.oldest === 1 ? "" : "s"}` : "All caught up"}
+            tone={awaitingReview.oldest >= 3 ? "violet" : undefined}
+            onClick={() => router.push("/approvals")}
           />
         </div>
 
-        {/* Ops KPIs — same horizontal-scroll/grid switch. */}
-        <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
-          <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={AssetIcon} label="Active pages" value={String(opsKpis.activePages)} foot={`${assets.length} registered total`} onClick={() => router.push("/inventory")} />
-          <KpiCard
-            className="w-[150px] shrink-0 md:w-auto"
-            icon={AlertIcon}
-            label="Pending approvals"
-            value={String(opsKpis.pendingApprovals)}
-            foot="Pages + billing profiles"
-            tone={opsKpis.pendingApprovals > 0 ? "violet" : undefined}
-            onClick={() => scrollToId("pending-approvals")}
-          />
-          <KpiCard className="w-[150px] shrink-0 md:w-auto" icon={CampaignIcon} label="Campaigns" value={String(opsKpis.campaigns)} onClick={() => router.push("/campaigns")} />
-          <KpiCard
-            className="w-[150px] shrink-0 md:w-auto"
-            icon={ClockIcon}
-            label="Links in pipeline"
-            value={String(opsKpis.inPipeline)}
-            foot="Not yet invoiced"
-            onClick={() => selectFunnelStatus(IN_PIPELINE_STATUSES)}
-          />
-        </div>
-
-        {/* Expenditure trend */}
-        <Panel>
-          {invoicesQuery.isLoading ? (
-            <TableSkeleton rows={1} />
-          ) : (
-            <TrendAreaChart data={expenditureTrend} label="Expenditure trend" subtitle="Last 6 months" formatValue={money} />
-          )}
-        </Panel>
-
-        {/* Link funnel + top pages */}
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          <Panel title="Link pipeline" subtitle="Where every submitted link sits right now — click a stage to inspect it.">
-            {linksQuery.isLoading ? (
-              <TableSkeleton />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
+          {/* Needs your decision */}
+          <Card className="flex flex-col" data-testid="decision-queue">
+            <CardHeader
+              title="Needs your decision"
+              meta={decisions.length > 0 ? <Tag tone="wait">{decisions.length}</Tag> : <Tag tone="ok">Clear</Tag>}
+              action={
+                <Link href="/approvals" className="flex items-center gap-1 text-[0.8125rem] font-medium text-blue hover:text-text">
+                  Open approvals <ArrowRightIcon className="h-3.5 w-3.5" />
+                </Link>
+              }
+            />
+            {loading ? (
+              <TableSkeleton rows={4} />
+            ) : decisions.length === 0 ? (
+              <EmptyState label="Nothing waiting on you — all caught up." />
             ) : (
-              <RankedBarList
-                items={linkFunnel.map((f) => ({ ...f, active: queueStatus === f.key }))}
-                onSelect={(key) => selectFunnelStatus(key)}
+              <ul className="flex flex-col">
+                {decisions.slice(0, 6).map((d, i) => (
+                  <li key={d.id} className="flex items-center gap-3.5 border-b border-border px-[18px] py-3 last:border-b-0 motion-safe:animate-reveal-up" style={{ animationDelay: `${0.3 + i * 0.06}s` }}>
+                    {d.initials ? (
+                      <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-surface-2 text-[0.8rem] font-semibold text-text-2 ring-1 ring-inset ring-border">{d.initials}</span>
+                    ) : (
+                      <Thumb src={d.thumb} />
+                    )}
+                    <Link href={d.href} className="flex min-w-0 flex-1 flex-col gap-[2px]">
+                      <span className="truncate text-[0.8375rem] font-semibold">{d.title}</span>
+                      <span className="truncate text-[0.78rem] text-text-muted">{d.sub}</span>
+                    </Link>
+                    {d.waitingDays !== undefined && d.waitingDays >= 3 && <Tag tone="bad" className="hidden sm:inline-flex">Waiting {d.waitingDays}d</Tag>}
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {d.secondary && (
+                        <Button variant="secondary" size="sm" asChild>
+                          <Link href={d.secondary.href}>
+                            {d.secondary.label === "View" && <EyeIcon className="h-3.5 w-3.5" />}
+                            {d.secondary.label}
+                          </Link>
+                        </Button>
+                      )}
+                      {d.primary && (
+                        <Button size="sm" onClick={d.primary.onClick} disabled={d.primary.pending}>
+                          {d.primary.label}
+                        </Button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {decisions.length > 6 && (
+              <Link href="/approvals" className="border-t border-border px-[18px] py-2.5 text-center text-[0.78rem] font-medium text-text-muted hover:text-text">
+                {decisions.length - 6} more in approvals
+              </Link>
+            )}
+          </Card>
+
+          <div className="flex flex-col gap-4">
+            <Card>
+              <CardHeader
+                title="Campaign budgets"
+                action={
+                  <Link href="/campaigns" className="text-[0.8125rem] font-medium text-blue hover:text-text">
+                    All campaigns
+                  </Link>
+                }
               />
-            )}
-          </Panel>
+              <div className="flex flex-col gap-3.5 px-[18px] pb-4 pt-2">
+                {campaignsQuery.isLoading ? (
+                  <TableSkeleton rows={3} />
+                ) : budgets.length === 0 ? (
+                  <EmptyState label="No campaign has a budget cap yet." />
+                ) : (
+                  budgets.map(({ c, pct }) => <BudgetRow key={c.id} campaign={c} pct={pct} />)
+                )}
+              </div>
+            </Card>
 
-          <Panel title="Top pages" subtitle="Ranked by follower count.">
-            {assetsQuery.isLoading ? (
-              <TableSkeleton />
-            ) : topPages.length === 0 ? (
-              <EmptyState label="No pages registered yet." />
-            ) : (
-              <RankedBarList items={topPages} formatValue={(v) => count(v)} onSelect={() => router.push("/inventory")} />
-            )}
-          </Panel>
+            <Card>
+              <CardHeader title="Expenditure · last 6 months" meta={monthDelta !== null ? <Tag tone={monthDelta >= 0 ? "ok" : "bad"}>{monthDelta >= 0 ? "+" : ""}{monthDelta}%</Tag> : undefined} />
+              <div className="flex h-[132px] items-end gap-2.5 px-[18px] pb-4 pt-3" data-testid="expenditure-bars">
+                {expenditureTrend.map((m, i) => (
+                  <div key={m.label} className="flex h-full flex-1 flex-col items-center justify-end gap-1.5" title={`${m.label}: ${money(m.value)}`}>
+                    <div
+                      className={`w-full origin-bottom rounded-[5px] motion-safe:animate-grow-y ${i === expenditureTrend.length - 1 ? "bg-ink" : "bg-border"}`}
+                      style={{ height: `${Math.max(4, Math.round((m.value / maxBar) * 100))}%`, animationDelay: `${0.5 + i * 0.08}s` }}
+                    />
+                    <span className="text-[0.68rem] text-text-muted">{m.label}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
         </div>
 
-        {/* Invoice composition */}
+        {/* ── Deeper analytics ── */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Panel title="Link pipeline" subtitle="Where every submitted link sits right now.">
+            {linksQuery.isLoading ? <TableSkeleton /> : <RankedBarList items={linkFunnel} onSelect={(key) => router.push(`/approvals?status=${key}`)} />}
+          </Panel>
+          <ComparePagesPanel pages={pageMetrics} loading={assetsQuery.isLoading} onSelectPage={() => router.push("/inventory")} />
+        </div>
+
         <Panel title="Invoice status" subtitle="Every invoice ever raised, by current status — click one to open it filtered.">
-          {invoicesQuery.isLoading ? (
-            <TableSkeleton rows={1} />
-          ) : invoices.length === 0 ? (
-            <EmptyState label="No invoices raised yet." />
-          ) : (
-            <StackedBar segments={invoiceComposition} onSelect={(status) => router.push(`/invoices?status=${status}`)} />
-          )}
+          {invoicesQuery.isLoading ? <TableSkeleton rows={1} /> : invoices.length === 0 ? <EmptyState label="No invoices raised yet." /> : <StackedBar segments={invoiceComposition} onSelect={(status) => router.push(`/invoices?status=${status}`)} />}
         </Panel>
 
-        {/* Needs your review */}
-        <section id="link-queue" className="scroll-mt-6">
-          <div className="mb-4 flex items-end justify-between">
-            <div>
-              <h2 className="text-[1.0625rem] font-bold">{isDefaultQueue ? "Needs your review" : `Links · ${STATUS_LABEL[queueStatus] ?? queueStatus}`}</h2>
-              <p className="mt-0.5 text-[0.8125rem] text-text-faint">
-                {isDefaultQueue ? "Screenshot approvals and insight approvals waiting on you." : "Filtered from the link pipeline chart above."}
-              </p>
-            </div>
-            {!isDefaultQueue && (
-              <Button variant="ghost" size="sm" onClick={() => selectFunnelStatus(ACTIONABLE_STATUSES)}>
-                ← Back to needs review
-              </Button>
-            )}
-          </div>
-
-          <div className="flex min-h-0 flex-col gap-4 md:flex-row md:gap-5">
-            <div className="hidden flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card md:block">
-              <div className="grid grid-cols-[minmax(0,2.4fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.3fr)_24px] gap-3 border-b border-border px-5 py-3.5">
-                <Th>Post</Th>
-                <Th>Page</Th>
-                <Th>Cost</Th>
-                <Th>Status</Th>
-                <div />
-              </div>
-              {queueQuery.isLoading ? (
-                <TableSkeleton />
-              ) : queueRows.length === 0 ? (
-                <EmptyState label={isDefaultQueue ? "Nothing waiting on you — all caught up." : "No links in this stage."} />
-              ) : (
-                <div>
-                  {queueRows.map((link) => (
-                    <div
-                      key={link.id}
-                      onClick={() => setDetailId(link.id)}
-                      className={
-                        "grid cursor-pointer grid-cols-[minmax(0,2.4fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.3fr)_24px] items-center gap-3 border-b border-l-[3px] border-border border-l-transparent px-5 py-3.5 transition-colors hover:bg-surface-2 " +
-                        ((link.id === detailId || (!detailId && link.id === queueRows[0]?.id)) ? "border-l-accent bg-accent-soft hover:bg-accent-soft" : "")
-                      }
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">{link.campaign?.title ?? "—"}</div>
-                        <div className="mt-0.5 truncate text-xs text-text-faint">{link.url}</div>
-                      </div>
-                      <div className="text-[0.8438rem] text-text-muted">@{link.asset?.handle ?? "—"}</div>
-                      <div className="text-sm font-bold tabular-nums">{money(link.cost)}</div>
-                      <div>
-                        <StatusPill status={link.status} />
-                      </div>
-                      <ChevronRightIcon className="h-3.5 w-3.5 text-text-faint" />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Mobile: cards instead of a table row. */}
-            <div className="flex flex-col gap-3 md:hidden">
-              {queueQuery.isLoading ? (
-                <TableSkeleton />
-              ) : queueRows.length === 0 ? (
-                <EmptyState label={isDefaultQueue ? "Nothing waiting on you — all caught up." : "No links in this stage."} />
-              ) : (
-                queueRows.map((link) => (
-                  <div
-                    key={link.id}
-                    onClick={() => setDetailId(link.id)}
-                    className="flex items-center gap-3 rounded-[14px] border border-border bg-surface p-3.5 shadow-card"
-                  >
-                    <div className="h-9 w-9 shrink-0 rounded-[9px] bg-gradient-to-br from-accent-soft to-accent-2-soft" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-semibold">{link.campaign?.title ?? "—"}</div>
-                      <div className="mt-0.5 truncate text-xs text-text-faint">@{link.asset?.handle ?? "—"} · {money(link.cost)}</div>
-                    </div>
-                    <StatusPill status={link.status} />
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Desktop: persistent side panel. */}
-            <Panel className="hidden w-[320px] shrink-0 md:block" bodyClassName="flex h-full flex-col gap-5">
-              {queueDetail && (
-                <LinkDetailPanel
-                  link={queueDetail}
-                  token={token}
-                  isAdmin={isAdmin}
-                  canUploadScreenshot={false}
-                  onChanged={() => {
-                    queryClient.invalidateQueries({ queryKey: ["links"] });
-                    queryClient.invalidateQueries({ queryKey: ["linkTimeline", queueDetail.id] });
-                  }}
-                />
-              )}
-            </Panel>
-          </div>
-
-          {/* Mobile: detail opens as a bottom sheet. */}
-          {mobileQueueDetail && (
-            <Sheet onClose={() => setDetailId(null)} overlayClassName="md:hidden" panelClassName="md:hidden">
-              <div className="overflow-y-auto p-6 pt-1">
-                <LinkDetailPanel
-                  link={mobileQueueDetail}
-                  token={token}
-                  isAdmin={isAdmin}
-                  canUploadScreenshot={false}
-                  onChanged={() => {
-                    queryClient.invalidateQueries({ queryKey: ["links"] });
-                    queryClient.invalidateQueries({ queryKey: ["linkTimeline", mobileQueueDetail.id] });
-                  }}
-                />
-              </div>
-            </Sheet>
-          )}
-        </section>
-
-        {/* Pending approvals */}
-        <section id="pending-approvals" className="scroll-mt-6 grid grid-cols-1 gap-5 md:grid-cols-2">
-          <Panel
-            title="Pages awaiting approval"
-            action={
-              <PanelAction onClick={() => router.push("/inventory")}>
-                View all <ArrowRightIcon className="h-3 w-3" />
-              </PanelAction>
-            }
-          >
-            {assetsQuery.isLoading ? (
-              <TableSkeleton rows={3} />
-            ) : pendingPages.length === 0 ? (
-              <EmptyState label="No pages waiting on approval." />
-            ) : (
-              <div className="flex flex-col gap-2.5">
-                {pendingPages.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5">
-                    <div className="min-w-0">
-                      <p className="truncate text-[0.8438rem] font-semibold">@{a.handle}</p>
-                      <p className="text-xs text-text-faint">{count(a.followers)} followers</p>
-                    </div>
-                    <div className="flex shrink-0 gap-1.5">
-                      <Button size="sm" onClick={() => approveAssetMutation.mutate({ id: a.id, approvalStatus: "approved" })} disabled={approveAssetMutation.isPending}>
-                        Approve
-                      </Button>
-                      <Button variant="danger" size="sm" onClick={() => approveAssetMutation.mutate({ id: a.id, approvalStatus: "rejected" })} disabled={approveAssetMutation.isPending}>
-                        Reject
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-
-          <Panel
-            title="Billing profiles awaiting approval"
-            action={
-              <PanelAction onClick={() => router.push("/profile?tab=billing")}>
-                View all <ArrowRightIcon className="h-3 w-3" />
-              </PanelAction>
-            }
-          >
-            {billingQuery.isLoading ? (
-              <TableSkeleton rows={3} />
-            ) : pendingBillingProfiles.length === 0 ? (
-              <EmptyState label="No billing profiles waiting on approval." />
-            ) : (
-              <div className="flex flex-col gap-2.5">
-                {pendingBillingProfiles.map((bp) => (
-                  <div key={bp.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5">
-                    <div className="min-w-0">
-                      <p className="truncate text-[0.8438rem] font-semibold">{bp.name}</p>
-                      <p className="truncate text-xs text-text-faint">{bp.user?.name ?? bp.user?.phoneNumber ?? "—"} · PAN {bp.pan}</p>
-                    </div>
-                    <div className="flex shrink-0 gap-1.5">
-                      <Button size="sm" onClick={() => approveBillingMutation.mutate({ id: bp.id, approvalStatus: "approved" })} disabled={approveBillingMutation.isPending}>
-                        Approve
-                      </Button>
-                      <Button variant="danger" size="sm" onClick={() => approveBillingMutation.mutate({ id: bp.id, approvalStatus: "rejected" })} disabled={approveBillingMutation.isPending}>
-                        Reject
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-        </section>
-
-        {/* System health — ADMIN only, Finance can't reach /admin/* */}
         {isAdmin && (
-          <section className="grid grid-cols-1 gap-5 md:grid-cols-2">
+          <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Panel
               title="Recent job runs"
               action={
@@ -531,12 +448,12 @@ export function AdminDashboard() {
               ) : recentJobRuns.length === 0 ? (
                 <EmptyState label="No cron runs recorded yet." />
               ) : (
-                <div className="flex flex-col gap-2.5">
+                <div className="flex flex-col gap-2">
                   {recentJobRuns.map((run) => (
                     <div key={run.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5">
                       <div className="min-w-0">
-                        <p className="truncate text-[0.8438rem] font-semibold">{run.jobName}</p>
-                        <p className="text-xs text-text-faint">{new Date(run.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
+                        <p className="truncate text-[0.8375rem] font-semibold">{run.jobName}</p>
+                        <p className="text-xs text-text-muted">{new Date(run.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
                       </div>
                       <StatusPill status={run.status === "success" ? "PAID" : run.status === "failed" ? "REJECTED" : "SCHEDULED"} detail={run.status} />
                     </div>
@@ -558,19 +475,15 @@ export function AdminDashboard() {
               ) : (
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-2.5">
-                    <TeamIcon className="h-4 w-4 text-text-faint" />
-                    <span className="text-[0.9375rem] font-extrabold tabular-nums">{usersByRole.total}</span>
-                    <span className="text-[0.8125rem] text-text-faint">users total</span>
+                    <TeamIcon className="h-4 w-4 text-text-muted" />
+                    <span className="text-[0.9375rem] font-semibold tabular-nums">{usersByRole.total}</span>
+                    <span className="text-[0.8125rem] text-text-muted">users total</span>
                   </div>
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-2 gap-2">
                     {(["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE"] as const).map((role) => (
-                      <button
-                        key={role}
-                        onClick={() => router.push("/users")}
-                        className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-left hover:bg-surface-2"
-                      >
-                        <span className="text-xs text-text-faint">{roleLabel(role)}</span>
-                        <span className="text-[0.8125rem] font-bold tabular-nums">{usersByRole.roles[role] ?? 0}</span>
+                      <button key={role} onClick={() => router.push("/users")} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-left hover:bg-surface-2">
+                        <span className="text-xs text-text-muted">{roleLabel(role)}</span>
+                        <span className="text-[0.8125rem] font-semibold tabular-nums">{usersByRole.roles[role] ?? 0}</span>
                       </button>
                     ))}
                   </div>
@@ -581,5 +494,24 @@ export function AdminDashboard() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+function BudgetRow({ campaign, pct }: { campaign: Campaign; pct: number }) {
+  const cap = Number(campaign.costCap);
+  const tone = pct >= 100 ? "rose" : pct >= 85 ? "warn" : "accent";
+  return (
+    <Link href={`/campaigns/view?id=${campaign.id}`} className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <span className="truncate text-[0.8375rem] font-semibold">{campaign.title}</span>
+        <span className="ml-auto whitespace-nowrap text-[0.78rem] tabular-nums text-text-muted">
+          {money(campaign.spent ?? 0)} of {money(cap)}
+        </span>
+      </div>
+      <ProgressBar pct={pct} tone={tone} />
+      <span className="text-[0.75rem] text-text-muted">
+        {campaign.phaseCount && campaign.phaseCount > 1 ? `${campaign.phaseCount} phases` : "Phase 1"} · {campaign.deadline ? `ends ${shortDate(campaign.deadline)}` : "no deadline"}
+      </span>
+    </Link>
   );
 }

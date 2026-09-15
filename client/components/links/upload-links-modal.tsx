@@ -7,14 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { Field, Select } from "@/components/ui/form-field";
 import { ErrorNotice } from "@/components/ui/table-parts";
-import { links as linksApi, ApiError } from "@/lib/api-client";
+import { links as linksApi, ApiError, LINK_FORMATS } from "@/lib/api-client";
 
 // Standard formats every page should be able to post — mirrors the Assets
 // rate-card editor's list. A page's rate card only needs *some* of these
 // priced (unpriced ones just fail with "No rate card set…" per link when
 // submitted), but every page should still see the full set here rather
 // than only whichever formats happen to already have a price.
-const STANDARD_FORMATS = ["reel", "story", "carousel", "collaboration", "video"];
+const STANDARD_FORMATS = [...LINK_FORMATS];
 
 /**
  * Bulk link upload — paste any number of post URLs (one per line) and
@@ -47,10 +47,9 @@ export function UploadLinksModal({
   const asset = assets.find((a) => a.id === assetId);
   const urls = urlsText.split("\n").map((u) => u.trim()).filter(Boolean);
 
-  // Every page offers the standard format set, plus any custom formats its
-  // rate card already carries (e.g. "VOXPOP") — not just whichever formats
-  // happen to have a price set already.
-  const availableFormats = [...new Set([...STANDARD_FORMATS, ...(asset?.rateCards.map((rc) => rc.format) ?? [])])];
+  // reel/story only (14 Sep) — a legacy rate card with another format is
+  // not offered for new submissions.
+  const availableFormats = [...STANDARD_FORMATS];
 
   // Keep the selected format valid when the chosen page changes, preferring
   // a format this page has actually priced.
@@ -82,7 +81,7 @@ export function UploadLinksModal({
         className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
       >
         <div>
-          <h2 className="text-lg font-bold">Upload links</h2>
+          <h2 className="text-lg font-semibold">Upload links</h2>
           <p className="mt-1 text-[0.8125rem] text-text-faint">
             {pinnedCampaign ? `For ${pinnedCampaign.title}. ` : ""}Paste one or more post URLs — one per line.
           </p>
@@ -90,7 +89,7 @@ export function UploadLinksModal({
 
         {pinnedCampaign ? (
           <Field label="Campaign">
-            <div className="flex h-11 items-center rounded-md border border-border-strong bg-surface-2 px-3.5 text-[0.9375rem] text-text-muted">
+            <div className="flex h-11 items-center rounded-md border border-border-strong bg-surface-2 px-3.5 text-[0.875rem] text-text-muted">
               {pinnedCampaign.title}
             </div>
           </Field>
@@ -137,7 +136,7 @@ export function UploadLinksModal({
             value={urlsText}
             onChange={(e) => setUrlsText(e.target.value)}
             placeholder={"https://instagram.com/reel/…\nhttps://instagram.com/reel/…"}
-            className="resize-none rounded-md border border-border-strong bg-surface-2 px-3.5 py-2.5 font-mono text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="resize-none rounded-md border border-border-strong bg-surface-2 px-3.5 py-2.5 font-mono text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
           />
         </Field>
 

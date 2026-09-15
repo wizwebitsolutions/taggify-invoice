@@ -1,36 +1,28 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
-import { DashboardHero } from "@/components/dashboard/dashboard-hero";
+import { PageHeader } from "@/components/ui/page-header";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { StatusPill, type PillStatus } from "@/components/ui/status-pill";
-import { Panel } from "@/components/ui/panel";
-import { LinkIcon, CameraIcon, CheckCircleIcon, InvoiceIcon, AlertIcon, PlusIcon, ChevronRightIcon, HeartIcon, MessageIcon } from "@/components/icons";
-import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
+import { StatusSteps, statusHint } from "@/components/ui/status-steps";
+import { Card, CardHeader, Thumb } from "@/components/ui/data-table";
+import { FloatingBar, BarButton } from "@/components/ui/floating-bar";
+import { PlusIcon, ChevronRightIcon, HeartIcon, MessageIcon, CloseIcon } from "@/components/icons";
+import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { useAuth } from "@/lib/auth-context";
-import {
-  links as linksApi,
-  campaigns as campaignsApi,
-  assets as assetsApi,
-  invoices as invoicesApi,
-  ApiError,
-  INVOICEABLE_LINK_STATUSES,
-} from "@/lib/api-client";
+import { links as linksApi, campaigns as campaignsApi, assets as assetsApi, invoices as invoicesApi, ApiError, INVOICEABLE_LINK_STATUSES, type Link as LinkRow } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-// Matches kpis.approved's definition below (everything past screenshot
-// review) — kept as one constant so the "Links approved" KPI tile and the
-// dropdown option that mirrors it can't drift apart.
 const APPROVED_GROUP_FILTER = "SCREENSHOT_APPROVED,INSIGHTS_PENDING,INSIGHTS_APPROVED,INVOICED";
-
 const INVOICEABLE_STATUSES = new Set<string>(INVOICEABLE_LINK_STATUSES);
 
 const STATUS_FILTERS: { label: string; value: string | undefined }[] = [
@@ -41,19 +33,21 @@ const STATUS_FILTERS: { label: string; value: string | undefined }[] = [
   { label: "Insights pending", value: "INSIGHTS_PENDING" },
   { label: "Insights approved", value: "INSIGHTS_APPROVED" },
   { label: "Invoiced", value: "INVOICED" },
-  // Comma-separated — the server treats a status filter with a comma as an
-  // "IN" match (see listLinks). Mirrors the "Links approved" KPI tile's
-  // definition below: everything past screenshot review.
   { label: "Approved (all stages)", value: APPROVED_GROUP_FILTER },
-  // So a creator can actually find the broken links an admin has flagged,
-  // not just have them silently drop out of every other count (newTask.md,
-  // 8 Sep — "posted link not working").
   { label: "Broken", value: "INVALID" },
 ];
 
-/** A creator/team member's own link-tracking workspace — "My Works". */
+const selectClass = "h-9 rounded-md border border-border bg-surface px-3 text-[0.8125rem] text-text-2 shadow-card focus:border-ink focus:outline-none focus:ring-[3px] focus:ring-ink-10";
+
+/**
+ * Creator home (premium mockup 12): "N posts ready to bill", one giant
+ * primary action, two money tiles, then every post as a row with the
+ * five-segment status line and a tag that says what to do next. Selecting
+ * ready posts raises the dark floating bar to invoice them in one go.
+ */
 export function CreatorDashboard() {
   const { user, accessToken } = useAuth();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [assetFilter, setAssetFilter] = useState<string | undefined>(undefined);
@@ -62,25 +56,14 @@ export function CreatorDashboard() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
-
   const token = accessToken!;
 
-  // Unfiltered fetch powers the KPI tiles; the filtered fetch powers the table.
-  const allLinksQuery = useQuery({
-    queryKey: ["links", "all"],
-    queryFn: () => linksApi.list(token, { pageSize: 100 }),
-  });
+  const allLinksQuery = useQuery({ queryKey: ["links", "all"], queryFn: () => linksApi.list(token, { pageSize: 100 }) });
   const filteredLinksQuery = useQuery({
     queryKey: ["links", statusFilter ?? "all", assetFilter ?? "all", fromFilter, toFilter],
-    queryFn: () =>
-      linksApi.list(token, {
-        status: statusFilter,
-        assetId: assetFilter,
-        from: fromFilter || undefined,
-        to: toFilter || undefined,
-        pageSize: 100,
-      }),
+    queryFn: () => linksApi.list(token, { status: statusFilter, assetId: assetFilter, from: fromFilter || undefined, to: toFilter || undefined, pageSize: 100 }),
   });
+  const invoicesQuery = useQuery({ queryKey: ["invoices", "creator-home"], queryFn: () => invoicesApi.list(token, { pageSize: 100 }) });
   const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
 
@@ -89,17 +72,30 @@ export function CreatorDashboard() {
     return {
       added: allLinksQuery.data?.total ?? 0,
       pendingScreenshots: items.filter((l) => l.status === "PENDING_SCREENSHOT_REVIEW").length,
-      // INVALID excluded too — an admin-confirmed dead/broken link never
-      // did valid work, same reasoning as SCREENSHOT_REJECTED (newTask.md,
-      // 8 Sep) — it just arrives at "doesn't count" from a different path.
       approved: items.filter((l) => !["SUBMITTED", "PENDING_SCREENSHOT_REVIEW", "SCREENSHOT_REJECTED", "INVALID"].includes(l.status)).length,
       invoiced: items.filter((l) => l.status === "INVOICED").length,
       uninvoiced: items.filter((l) => INVOICEABLE_STATUSES.has(l.status)).length,
+      readyAmount: items.filter((l) => INVOICEABLE_STATUSES.has(l.status)).reduce((s, l) => s + Number(l.cost), 0),
     };
   }, [allLinksQuery.data]);
 
+  const moneyKpis = useMemo(() => {
+    const invoices = invoicesQuery.data?.items ?? [];
+    const open = invoices.filter((i) => i.status === "RAISED" || i.status === "APPROVED");
+    const overdue = open.filter((i) => i.overdueDays > 0);
+    const now = new Date();
+    const paidThisMonth = invoices.filter((i) => i.status === "PAID" && new Date(i.paidAt ?? i.createdAt).getMonth() === now.getMonth() && new Date(i.paidAt ?? i.createdAt).getFullYear() === now.getFullYear());
+    return {
+      owed: open.reduce((s, i) => s + Number(i.amount), 0),
+      openCount: open.length,
+      overdueCount: overdue.length,
+      paidMonth: paidThisMonth.reduce((s, i) => s + Number(i.amount), 0),
+      paidCount: paidThisMonth.length,
+    };
+  }, [invoicesQuery.data]);
+
   const bulkInvoiceMutation = useMutation({
-    mutationFn: () => invoicesApi.bulkCreate(token, [...selectedIds]),
+    mutationFn: (ids: string[]) => invoicesApi.bulkCreate(token, ids),
     onSuccess: () => {
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ["links"] });
@@ -108,10 +104,7 @@ export function CreatorDashboard() {
   });
 
   const rows = filteredLinksQuery.data?.items ?? [];
-  // Desktop's persistent side panel defaults to the first row; the mobile
-  // sheet only ever opens on an explicit tap, so it has no such fallback.
-  const detailLink = rows.find((l) => l.id === detailId) ?? rows[0];
-  const mobileDetailLink = detailId ? rows.find((l) => l.id === detailId) : undefined;
+  const detailLink = rows.find((l) => l.id === detailId) ?? null;
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -123,6 +116,22 @@ export function CreatorDashboard() {
 
   const canBulkInvoice = user?.role === "CREATOR" || user?.role === "ADMIN";
   const canSubmitLink = user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
+  const firstName = (user?.name ?? "there").split(" ")[0];
+  const selectedTotal = rows.filter((l) => selectedIds.has(l.id)).reduce((s, l) => s + Number(l.cost), 0);
+  const isFiltered = statusFilter !== undefined || assetFilter !== undefined || fromFilter || toFilter;
+
+  const detailPanel = detailLink && (
+    <LinkDetailPanel
+      link={detailLink}
+      token={token}
+      isAdmin={user?.role === "ADMIN"}
+      canUploadScreenshot={canSubmitLink}
+      onChanged={() => {
+        queryClient.invalidateQueries({ queryKey: ["links"] });
+        queryClient.invalidateQueries({ queryKey: ["linkTimeline", detailLink.id] });
+      }}
+    />
+  );
 
   return (
     <AppShell
@@ -131,333 +140,128 @@ export function CreatorDashboard() {
       searchPlaceholder="Search links, campaigns, pages…"
       topbarActions={
         canSubmitLink ? (
-          <Button size="default" onClick={() => setShowSubmitForm(true)}>
-            <PlusIcon className="h-[15px] w-[15px] text-accent-ink" />
-            Upload links
-          </Button>
-        ) : undefined
-      }
-      fab={
-        canSubmitLink ? (
-          <Button size="lg" className="h-14 rounded-full px-5 shadow-glow" onClick={() => setShowSubmitForm(true)}>
-            <PlusIcon className="h-4 w-4 text-accent-ink" />
+          <Button onClick={() => setShowSubmitForm(true)}>
+            <PlusIcon className="h-4 w-4" />
             Upload links
           </Button>
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-7">
-        <DashboardHero
-          eyebrow="Overview"
+      <div className="flex flex-col gap-5">
+        <PageHeader
           title={
             <>
-              My <span className="text-accent">Works</span>
+              Hi {firstName}, <span className="serif text-[1.15em]">{kpis.uninvoiced > 0 ? `${kpis.uninvoiced} post${kpis.uninvoiced === 1 ? "" : "s"} ready to bill.` : "all caught up."}</span>
             </>
           }
-          subtitle="Every submitted link, tracked from post to payout."
-          stat={{ value: String(kpis.added), label: "Links tracked" }}
+          subtitle={kpis.uninvoiced > 0 ? `${money(kpis.readyAmount)} of approved work is waiting to be invoiced.` : "Every submitted link, tracked from post to payout."}
         />
 
-        {/* Horizontal-scroll strip on mobile, a 5-up grid at md+ — one render, the container switches layout. */}
-        <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:grid md:grid-cols-5 md:gap-4 md:overflow-visible md:px-0 md:pb-0">
-          <KpiCard
-            className="w-[152px] shrink-0 md:w-auto"
-            icon={LinkIcon}
-            label="Links added"
-            value={String(kpis.added)}
-            onClick={() => setStatusFilter(undefined)}
-            active={statusFilter === undefined}
-          />
-          <KpiCard
-            className="w-[152px] shrink-0 md:w-auto"
-            icon={CameraIcon}
-            label="Pending screenshots"
-            value={String(kpis.pendingScreenshots)}
-            onClick={() => setStatusFilter("PENDING_SCREENSHOT_REVIEW")}
-            active={statusFilter === "PENDING_SCREENSHOT_REVIEW"}
-          />
-          <KpiCard
-            className="w-[152px] shrink-0 md:w-auto"
-            icon={CheckCircleIcon}
-            label="Links approved"
-            value={String(kpis.approved)}
-            onClick={() => setStatusFilter(APPROVED_GROUP_FILTER)}
-            active={statusFilter === APPROVED_GROUP_FILTER}
-          />
-          <KpiCard
-            className="w-[152px] shrink-0 md:w-auto"
-            icon={InvoiceIcon}
-            label="Links invoiced"
-            value={String(kpis.invoiced)}
-            onClick={() => setStatusFilter("INVOICED")}
-            active={statusFilter === "INVOICED"}
-          />
-          <KpiCard
-            className="w-[152px] shrink-0 md:w-auto"
-            icon={AlertIcon}
-            label="Uninvoiced links"
-            value={String(kpis.uninvoiced)}
-            tone={kpis.uninvoiced > 0 ? "violet" : undefined}
-            onClick={() => setStatusFilter("INSIGHTS_APPROVED")}
-            active={statusFilter === "INSIGHTS_APPROVED"}
-          />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          <select
-            value={statusFilter ?? ""}
-            onChange={(e) => setStatusFilter(e.target.value || undefined)}
-            className="h-[38px] rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            {STATUS_FILTERS.map((f) => (
-              <option key={f.label} value={f.value ?? ""}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={assetFilter ?? ""}
-            onChange={(e) => setAssetFilter(e.target.value || undefined)}
-            className="h-[38px] rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <option value="">All pages</option>
-            {(assetsQuery.data ?? []).map((a) => (
-              <option key={a.id} value={a.id}>
-                @{a.handle}
-              </option>
-            ))}
-          </select>
-
-          <div className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 h-[38px] text-[0.8125rem] text-text-faint">
-            <input
-              type="date"
-              value={fromFilter}
-              onChange={(e) => setFromFilter(e.target.value)}
-              aria-label="From date"
-              className="bg-transparent text-text-muted focus:outline-none"
-            />
-            <span>–</span>
-            <input
-              type="date"
-              value={toFilter}
-              onChange={(e) => setToFilter(e.target.value)}
-              aria-label="To date"
-              className="bg-transparent text-text-muted focus:outline-none"
-            />
-          </div>
-
-          <div className="flex-1" />
-          {canBulkInvoice && selectedIds.size > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="rounded-full"
-              onClick={() => bulkInvoiceMutation.mutate()}
-              disabled={bulkInvoiceMutation.isPending}
-            >
-              {bulkInvoiceMutation.isPending ? "Raising invoice…" : `Bulk invoice · ${selectedIds.size} selected`}
-            </Button>
-          )}
-        </div>
-
-        {bulkInvoiceMutation.isError && (
-          <ErrorNotice message={bulkInvoiceMutation.error instanceof ApiError ? bulkInvoiceMutation.error.message : "Couldn't raise the invoice."} />
+        {canSubmitLink && (
+          <Button size="lg" className="w-full justify-center text-[1rem] md:hidden" onClick={() => setShowSubmitForm(true)}>
+            <PlusIcon className="h-[18px] w-[18px]" />
+            Submit a post link
+          </Button>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row md:gap-5">
-          <div className="hidden flex-1 overflow-hidden rounded-lg border border-border bg-surface shadow-card md:block">
-            <div className="grid grid-cols-[28px_minmax(0,2.4fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)_24px] gap-3 border-b border-border px-5 py-3.5">
-              <div />
-              <Th>Post</Th>
-              <Th>Page</Th>
-              <Th>Format</Th>
-              <Th>Cost</Th>
-              <Th>Engagement</Th>
-              <Th>Status</Th>
-              <div />
-            </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5 md:gap-4">
+          <KpiCard label="You're owed" value={money(moneyKpis.owed)} foot={moneyKpis.overdueCount > 0 ? `${moneyKpis.openCount} invoices · ${moneyKpis.overdueCount} overdue` : `${moneyKpis.openCount} open invoice${moneyKpis.openCount === 1 ? "" : "s"}`} tone={moneyKpis.overdueCount > 0 ? "rose" : undefined} onClick={() => router.push("/invoices")} />
+          <KpiCard label="Paid this month" value={money(moneyKpis.paidMonth)} foot={`${moneyKpis.paidCount} invoice${moneyKpis.paidCount === 1 ? "" : "s"}`} onClick={() => router.push("/invoices?status=PAID")} />
+          <KpiCard label="Links added" value={String(kpis.added)} onClick={() => setStatusFilter(undefined)} active={statusFilter === undefined} className="hidden md:flex" />
+          <KpiCard label="Pending screenshots" value={String(kpis.pendingScreenshots)} onClick={() => setStatusFilter("PENDING_SCREENSHOT_REVIEW")} active={statusFilter === "PENDING_SCREENSHOT_REVIEW"} className="hidden md:flex" />
+          <KpiCard label="Uninvoiced links" value={String(kpis.uninvoiced)} tone={kpis.uninvoiced > 0 ? "violet" : undefined} onClick={() => setStatusFilter("INSIGHTS_APPROVED")} active={statusFilter === "INSIGHTS_APPROVED"} className="hidden md:flex" />
+        </div>
 
-            {filteredLinksQuery.isLoading ? (
-              <TableSkeleton />
-            ) : rows.length === 0 ? (
-              <EmptyState label="No links match this filter yet." />
-            ) : (
-              <div>
-                {rows.map((link) => {
-                  const snapshot = link.postSnapshots?.[0];
-                  const eligible = INVOICEABLE_STATUSES.has(link.status);
-                  return (
-                    <div
-                      key={link.id}
-                      onClick={() => setDetailId(link.id)}
-                      className={cn(
-                        // Selected row gets a clear green highlight (accent bg + left
-                        // bar), not just a faint gray shade — the old bg-surface-2-only
-                        // highlight was easy to miss when scanning the table.
-                        "grid cursor-pointer grid-cols-[28px_minmax(0,2.4fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)_24px] items-center gap-3 border-b border-l-[3px] border-border border-l-transparent px-5 py-3.5 transition-colors hover:bg-surface-2",
-                        (link.id === detailId || (!detailId && link.id === rows[0]?.id)) && "border-l-accent bg-accent-soft hover:bg-accent-soft"
-                      )}
-                    >
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (eligible && canBulkInvoice) toggleSelect(link.id);
-                        }}
-                        className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded-[5px] border-[1.5px] border-border-strong",
-                          !eligible && "opacity-30"
-                        )}
-                      >
-                        {selectedIds.has(link.id) && (
-                          <div className="flex h-full w-full items-center justify-center rounded-[4px] bg-accent text-accent-ink">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="h-[11px] w-[11px]">
-                              <path d="M20 6L9 17l-5-5" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="h-10 w-10 shrink-0 rounded-[9px] bg-gradient-to-br from-accent-soft to-accent-2-soft" />
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold">{link.campaign?.title ?? "—"}</div>
-                          <div className="mt-0.5 truncate text-xs text-text-faint">{link.url}</div>
-                        </div>
-                      </div>
-                      <div className="text-[0.8438rem] text-text-muted">@{link.asset?.handle ?? "—"}</div>
-                      <div className="text-[0.8438rem] capitalize text-text-muted">{link.format}</div>
-                      <div className="text-sm font-bold tabular-nums">{money(link.cost)}</div>
-                      <div className="flex min-w-0 items-center gap-2.5 text-xs text-text-faint">
-                        {snapshot ? (
-                          <>
-                            <span className="flex items-center gap-1">
-                              <HeartIcon className="h-[13px] w-[13px]" /> {count(snapshot.likeCount)}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <MessageIcon className="h-[13px] w-[13px]" /> {count(snapshot.commentsCount)}
-                            </span>
-                          </>
-                        ) : (
-                          <span>No metrics yet</span>
-                        )}
-                      </div>
-                      <div>
-                        <StatusPill status={link.status as PillStatus} />
-                      </div>
-                      <ChevronRightIcon className="h-3.5 w-3.5 text-text-faint" />
-                    </div>
-                  );
-                })}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
+          <Card className="flex flex-col" data-testid="creator-posts">
+            <CardHeader
+              title="Your posts"
+              meta={<span className="text-[0.78rem] text-text-muted">{isFiltered ? `${rows.length} match` : `${kpis.added} tracked`}</span>}
+              action={
+                <div className="flex flex-wrap items-center gap-2">
+                  <select value={statusFilter ?? ""} onChange={(e) => setStatusFilter(e.target.value || undefined)} aria-label="Filter by status" className={selectClass}>
+                    {STATUS_FILTERS.map((f) => (
+                      <option key={f.label} value={f.value ?? ""}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={assetFilter ?? ""} onChange={(e) => setAssetFilter(e.target.value || undefined)} aria-label="Filter by page" className={cn(selectClass, "hidden sm:block")}>
+                    <option value="">All pages</option>
+                    {(assetsQuery.data ?? []).map((a) => (
+                      <option key={a.id} value={a.id}>
+                        @{a.handle}
+                      </option>
+                    ))}
+                  </select>
+                  <div className={cn(selectClass, "hidden items-center gap-1.5 text-text-faint md:flex")}>
+                    <input type="date" value={fromFilter} onChange={(e) => setFromFilter(e.target.value)} aria-label="From date" className="bg-transparent text-text-2 focus:outline-none" />
+                    <span>–</span>
+                    <input type="date" value={toFilter} onChange={(e) => setToFilter(e.target.value)} aria-label="To date" className="bg-transparent text-text-2 focus:outline-none" />
+                  </div>
+                </div>
+              }
+            />
+            {bulkInvoiceMutation.isError && (
+              <div className="px-[18px] pt-3">
+                <ErrorNotice message={bulkInvoiceMutation.error instanceof ApiError ? bulkInvoiceMutation.error.message : "Couldn't raise the invoice."} />
               </div>
             )}
-          </div>
-
-          {/* Mobile: cards instead of a table row — same data and the same
-              tap-to-open-detail interaction, with the same select toggle for
-              bulk invoicing. */}
-          <div className="flex flex-col gap-3 md:hidden">
             {filteredLinksQuery.isLoading ? (
               <TableSkeleton />
             ) : rows.length === 0 ? (
               <EmptyState label="No links match this filter yet." />
             ) : (
-              rows.map((link) => {
-                const snapshot = link.postSnapshots?.[0];
-                const eligible = link.status === "INSIGHTS_APPROVED";
-                return (
-                  <div
+              <ul className="flex flex-col">
+                {rows.map((link, i) => (
+                  <PostRow
                     key={link.id}
-                    onClick={() => setDetailId(link.id)}
-                    className="flex flex-col gap-2.5 rounded-[14px] border border-border bg-surface p-3.5 shadow-card"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (eligible && canBulkInvoice) toggleSelect(link.id);
-                        }}
-                        className={cn(
-                          "flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border-[1.5px] border-border-strong",
-                          !eligible && "opacity-30"
-                        )}
-                      >
-                        {selectedIds.has(link.id) && (
-                          <div className="flex h-full w-full items-center justify-center rounded-[4px] bg-accent text-accent-ink">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="h-[10px] w-[10px]">
-                              <path d="M20 6L9 17l-5-5" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                      <div className="h-10 w-10 shrink-0 rounded-[10px] bg-gradient-to-br from-accent-soft to-accent-2-soft" />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold">{link.campaign?.title ?? "—"}</div>
-                        <div className="mt-0.5 truncate text-xs text-text-faint">{link.url}</div>
-                      </div>
-                      <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[0.8125rem] capitalize text-text-muted">
-                        @{link.asset?.handle ?? "—"} · {link.format}
-                      </span>
-                      <span className="text-sm font-bold tabular-nums">{money(link.cost)}</span>
-                    </div>
-                    <div className="flex items-center justify-between border-t border-border pt-2.5">
-                      <div className="flex min-w-0 items-center gap-2.5 text-xs text-text-faint">
-                        {snapshot ? (
-                          <>
-                            <span className="flex items-center gap-1">
-                              <HeartIcon className="h-[13px] w-[13px]" /> {count(snapshot.likeCount)}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <MessageIcon className="h-[13px] w-[13px]" /> {count(snapshot.commentsCount)}
-                            </span>
-                          </>
-                        ) : (
-                          <span>No metrics yet</span>
-                        )}
-                      </div>
-                      <StatusPill status={link.status as PillStatus} />
-                    </div>
-                  </div>
-                );
-              })
+                    link={link}
+                    index={i}
+                    selected={selectedIds.has(link.id)}
+                    active={detailId === link.id}
+                    canSelect={canBulkInvoice && INVOICEABLE_STATUSES.has(link.status)}
+                    onToggle={() => toggleSelect(link.id)}
+                    onOpen={() => setDetailId(link.id)}
+                    onRaise={canBulkInvoice ? () => bulkInvoiceMutation.mutate([link.id]) : undefined}
+                    raising={bulkInvoiceMutation.isPending}
+                  />
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <div className="hidden lg:block">
+            {detailLink ? (
+              <Card className="flex flex-col">
+                <CardHeader
+                  title={`@${detailLink.asset?.handle ?? "—"} · ${detailLink.format}`}
+                  action={
+                    <button type="button" onClick={() => setDetailId(null)} aria-label="Close post details" className="text-text-faint hover:text-text">
+                      <CloseIcon className="h-4 w-4" />
+                    </button>
+                  }
+                />
+                <div className="p-[18px]">{detailPanel}</div>
+              </Card>
+            ) : (
+              <Card className="p-8 text-center text-[0.8125rem] text-text-muted">Select a post to see its proof, timeline and cost history.</Card>
             )}
           </div>
-
-          {/* Desktop: persistent side panel. */}
-          <Panel className="hidden w-[320px] shrink-0 md:block" bodyClassName="flex h-full flex-col gap-5">
-            {detailLink && (
-              <LinkDetailPanel
-                link={detailLink}
-                token={token}
-                isAdmin={user?.role === "ADMIN"}
-                canUploadScreenshot={canSubmitLink}
-                onChanged={() => {
-                  queryClient.invalidateQueries({ queryKey: ["links"] });
-                  queryClient.invalidateQueries({ queryKey: ["linkTimeline", detailLink.id] });
-                }}
-              />
-            )}
-          </Panel>
         </div>
       </div>
 
-      {/* Mobile: detail opens as a bottom sheet — no room for a persistent panel. */}
-      {mobileDetailLink && (
-        <Sheet onClose={() => setDetailId(null)} overlayClassName="md:hidden" panelClassName="md:hidden">
-          <div className="overflow-y-auto p-6 pt-1">
-            <LinkDetailPanel
-              link={mobileDetailLink}
-              token={token}
-              isAdmin={user?.role === "ADMIN"}
-              canUploadScreenshot={canSubmitLink}
-              onChanged={() => {
-                queryClient.invalidateQueries({ queryKey: ["links"] });
-                queryClient.invalidateQueries({ queryKey: ["linkTimeline", mobileDetailLink.id] });
-              }}
-            />
-          </div>
+      {canBulkInvoice && selectedIds.size > 0 && (
+        <FloatingBar label={`${selectedIds.size} post${selectedIds.size === 1 ? "" : "s"} selected`} meta={money(selectedTotal)} onClear={() => setSelectedIds(new Set())} testId="bulk-invoice-bar">
+          <BarButton primary onClick={() => bulkInvoiceMutation.mutate([...selectedIds])} disabled={bulkInvoiceMutation.isPending}>
+            {bulkInvoiceMutation.isPending ? "Raising invoice…" : "Bulk invoice"}
+          </BarButton>
+        </FloatingBar>
+      )}
+
+      {detailLink && (
+        <Sheet onClose={() => setDetailId(null)} overlayClassName="lg:hidden" panelClassName="lg:hidden">
+          <div className="overflow-y-auto p-6 pt-1">{detailPanel}</div>
         </Sheet>
       )}
 
@@ -474,5 +278,93 @@ export function CreatorDashboard() {
         />
       )}
     </AppShell>
+  );
+}
+
+function PostRow({ link, index, selected, active, canSelect, onToggle, onOpen, onRaise, raising }: { link: LinkRow; index: number; selected: boolean; active: boolean; canSelect: boolean; onToggle: () => void; onOpen: () => void; onRaise?: () => void; raising: boolean }) {
+  const hint = statusHint(link.status);
+  const snapshot = link.postSnapshots?.[0];
+  // "Ready" mirrors the server's invoiceable set (minus the two states where the creator still owes proof).
+  const needsCreator = link.status === "SUBMITTED" || link.status === "SCREENSHOT_REJECTED";
+  const ready = !needsCreator && INVOICEABLE_STATUSES.has(link.status);
+  return (
+    <li
+      className={cn("flex cursor-pointer items-center gap-3 border-b border-border px-[18px] py-3 transition-colors last:border-b-0 hover:bg-[#fbfbfc] motion-safe:animate-reveal-up dark:hover:bg-surface-2", active && "bg-surface-2")}
+      style={{ animationDelay: `${0.2 + index * 0.04}s` }}
+      onClick={onOpen}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      data-testid="post-row"
+    >
+      {canSelect ? (
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${link.campaign?.title ?? "post"} for invoicing`}
+          className="h-4 w-4 shrink-0 rounded accent-[var(--ink)]"
+        />
+      ) : (
+        <span className="hidden h-4 w-4 shrink-0 md:block" />
+      )}
+      <Thumb src={null} />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[0.8375rem] font-semibold">@{link.asset?.handle ?? "—"} · {link.format}</span>
+          <span className="hidden truncate text-[0.78rem] text-text-muted sm:inline">{link.campaign?.title ?? "—"}</span>
+        </div>
+        <StatusSteps status={link.status} animate={false} />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.75rem]">
+          <span className={cn("font-medium", hint.tone === "bad" && "text-rose", hint.tone === "ok" && "text-accent", hint.tone === "wait" && "text-accent-2", hint.tone === "neutral" && "text-text-muted")}>{hint.text}</span>
+          {snapshot && (
+            <span className="hidden items-center gap-2 text-text-muted md:flex">
+              <span className="flex items-center gap-1">
+                <HeartIcon className="h-3 w-3" /> {count(snapshot.likeCount)}
+              </span>
+              <span className="flex items-center gap-1">
+                <MessageIcon className="h-3 w-3" /> {count(snapshot.commentsCount)}
+              </span>
+            </span>
+          )}
+          <span className="hidden text-text-muted md:inline">{money(link.cost)}</span>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="hidden lg:inline-flex">
+          <StatusPill status={link.status as PillStatus} />
+        </span>
+        {ready && onRaise ? (
+          <Button
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRaise();
+            }}
+            disabled={raising}
+          >
+            Raise invoice
+          </Button>
+        ) : needsCreator ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+          >
+            {link.status === "SCREENSHOT_REJECTED" ? "Re-upload proof" : "Upload proof"}
+          </Button>
+        ) : (
+          <ChevronRightIcon className="h-4 w-4 text-text-faint" />
+        )}
+      </div>
+    </li>
   );
 }

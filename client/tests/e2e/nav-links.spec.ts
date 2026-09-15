@@ -28,14 +28,17 @@ test.describe("desktop sidebar navigation", () => {
   // sidebar.tsx now hides Team from everyone but CREATOR (and Users/Job
   // runs from everyone but ADMIN, see the dedicated per-role visibility
   // tests below), a link only shows up in the sidebar at all for a role
-  // that can actually see it. Inventory (folded Assets + Plans, newTask.md
-  // 8 Sep) is visible to every role, same as it always was for Assets.
+  // that can actually see it. Inventory (folded Assets, newTask.md 8 Sep)
+  // is visible to every role, same as it always was for Assets; Plans
+  // (split back out into its own tab, newTask.md 9 Sep) is Admin/Plan
+  // Maker-only.
   const SIDEBAR_LINKS: { label: string; href: string; role: MockRole }[] = [
-    { label: "Dashboard", href: "/dashboard", role: "ADMIN" },
+    { label: "Home", href: "/dashboard", role: "ADMIN" },
     { label: "Campaigns", href: "/campaigns", role: "ADMIN" },
     { label: "Inventory", href: "/inventory", role: "ADMIN" },
+    { label: "Plans", href: "/plans", role: "ADMIN" },
     { label: "Invoices", href: "/invoices", role: "ADMIN" },
-    { label: "Users", href: "/users", role: "ADMIN" },
+    { label: "People", href: "/users", role: "ADMIN" },
     { label: "Team", href: "/team", role: "CREATOR" },
     { label: "Job runs", href: "/job-runs", role: "ADMIN" },
   ];
@@ -62,24 +65,28 @@ test.describe("desktop sidebar navigation", () => {
     // sidebar.tsx by giving NavItem an optional `roles` allowlist
     // (canSeeNavItem). Inventory itself is ALWAYS now (newTask.md, 8 Sep —
     // Plans within it, not the nav entry, is what stays admin-gated).
-    const ADMIN_ONLY = ["Users", "Job runs"];
+    const ADMIN_ONLY = ["People", "Job runs"];
     const CREATOR_ONLY = ["Team"];
     // Everyone gets Dashboard + Inventory; Campaigns/Invoices are their own
-    // bucket now (newTask.md, 8 Sep — Plan Maker's dashboard is deliberately
-    // just "Dashboard + Inventory + Plan-create", so those two are the one
-    // pair PLAN_MAKER doesn't see even though every other role does).
-    const ALWAYS = ["Dashboard", "Inventory"];
+    // bucket (every role sees them since 12 Sep — Plan Maker included,
+    // scoped server-side to their own plans' campaigns).
+    const ALWAYS = ["Home", "Inventory"];
     const CAMPAIGNS_AND_INVOICES = ["Campaigns", "Invoices"];
+    // Plans (newTask.md, 9 Sep — its own nav tab now) — Admin + Plan Maker.
+    const PLANS = ["Plans"];
 
     const CASES: { role: MockRole; visible: string[]; hidden: string[] }[] = [
-      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...ADMIN_ONLY], hidden: CREATOR_ONLY },
-      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY], hidden: ADMIN_ONLY },
-      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
-      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY] },
+      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...ADMIN_ONLY, ...PLANS], hidden: CREATOR_ONLY },
+      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY], hidden: [...ADMIN_ONLY, ...PLANS] },
+      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY, ...PLANS] },
+      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY, ...PLANS] },
+      // 12 Sep — Plan Maker now sees Campaigns + Invoices too (their own
+      // plans' campaigns only, scoped server-side) so they can generate
+      // per-creator invoices from a campaign page.
       {
         role: "PLAN_MAKER",
-        visible: ALWAYS,
-        hidden: [...ADMIN_ONLY, ...CREATOR_ONLY, ...CAMPAIGNS_AND_INVOICES],
+        visible: [...ALWAYS, ...PLANS, ...CAMPAIGNS_AND_INVOICES],
+        hidden: [...ADMIN_ONLY, ...CREATOR_ONLY],
       },
     ];
 
@@ -140,7 +147,7 @@ test.describe("desktop topbar", () => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
     await page.getByRole("button", { name: "Notifications" }).click();
     const panel = page.getByTestId("notifications-panel");
@@ -219,10 +226,12 @@ test.describe("mobile bottom nav + More sheet", () => {
   }
 
   // Inventory isn't here — it's a primary bottom tab now, not an overflow
-  // item (see the TABS list above).
+  // item (see the TABS list above). Plans (newTask.md, 9 Sep) is a new
+  // overflow row, Admin/Plan-Maker-only.
   const MORE_SHEET_ROWS: { label: string; href: string; role: MockRole }[] = [
+    { label: "Plans", href: "/plans", role: "ADMIN" },
     { label: "Team", href: "/team", role: "CREATOR" },
-    { label: "Users", href: "/users", role: "ADMIN" },
+    { label: "People", href: "/users", role: "ADMIN" },
     { label: "Job runs", href: "/job-runs", role: "ADMIN" },
   ];
 
@@ -250,7 +259,7 @@ test.describe("mobile bottom nav + More sheet", () => {
     await page.getByRole("button", { name: "More" }).click();
 
     await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
-    for (const label of ["Users", "Job runs"]) {
+    for (const label of ["People", "Job runs", "Plans"]) {
       await expect(page.getByRole("link", { name: label, exact: true }), `CREATOR should not see "${label}"`).toHaveCount(0);
     }
   });

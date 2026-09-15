@@ -35,10 +35,12 @@ function resolveInitialTheme(): Theme {
   } catch {
     // storage blocked — fall through
   }
-  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: light)").matches) {
-    return "light";
+  // Light is the product's default identity now (premium redesign, Sep
+  // 2026) — only an explicit stored choice or an OS dark preference flips it.
+  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+    return "dark";
   }
-  return "dark";
+  return "light";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -46,7 +48,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // before hydration — read it back from the DOM rather than guessing
   // again, so this first render can't disagree with what's on screen.
   const [theme, setThemeState] = useState<Theme>(() =>
-    typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark"
+    typeof document !== "undefined" && document.documentElement.dataset.theme === "dark" ? "dark" : "light"
   );
 
   useEffect(() => {
@@ -83,10 +85,10 @@ export const THEME_BLOCKING_SCRIPT = `
     var stored = localStorage.getItem(${JSON.stringify(STORAGE_KEY)});
     var theme = stored === "light" || stored === "dark"
       ? stored
-      : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     document.documentElement.dataset.theme = theme;
   } catch (e) {
-    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.theme = "light";
   }
 })();
 `;

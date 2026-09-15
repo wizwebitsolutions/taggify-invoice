@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Sheet } from "@/components/ui/sheet";
 import { AVATAR_TONE, canSeeNavKey, type SidebarUser } from "@/components/layout/sidebar";
-import { BellIcon, TeamIcon, ClockIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
+import { BellIcon, TeamIcon, ClockIcon, AssetIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { notifications as notificationsApi } from "@/lib/api-client";
@@ -60,7 +60,7 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
           >
             <ChevronRightIcon className="h-4 w-4 rotate-180" />
           </button>
-          <p className="flex-1 text-[15px] font-bold">Notifications</p>
+          <p className="flex-1 text-[15px] font-semibold">Notifications</p>
           {unreadCount > 0 && (
             <button
               onClick={() => markAllMutation.mutate()}
@@ -85,7 +85,7 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
                 )}
               >
                 <div className="flex items-center gap-2">
-                  {!n.readAt && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-2" />}
+                  {!n.readAt && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />}
                   <span className="text-[0.8125rem] font-semibold capitalize">{n.type.replace(/_/g, " ")}</span>
                 </div>
                 <span className="text-[0.75rem] text-text-faint">
@@ -107,11 +107,11 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
         onClick={onClose}
         className="flex items-center gap-3.5 px-5 pb-4 pt-1 active:bg-surface-2"
       >
-        <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[15px] font-bold", AVATAR_TONE[user.tone ?? "emerald"])}>
+        <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[15px] font-semibold", AVATAR_TONE[user.tone ?? "emerald"])}>
           {user.initials}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[14.5px] font-bold">{user.name}</p>
+          <p className="truncate text-[14.5px] font-semibold">{user.name}</p>
           <p className="text-xs text-text-faint">{user.role} · view profile</p>
         </div>
         <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-text-faint" />
@@ -126,7 +126,7 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
         <BellNotifIcon count={unreadCount} />
         <span className="flex-1 text-[14px] font-semibold">Notifications</span>
         {unreadCount > 0 && (
-          <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-accent-2 px-1 text-[11px] font-extrabold text-bg">
+          <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-ink px-1 text-[11px] font-semibold text-ink-fg">
             {unreadCount}
           </span>
         )}
@@ -138,11 +138,16 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
           sidebar.tsx's NAV_GROUPS allowlist via canSeeNavKey rather than
           re-declaring which roles see what a second time, which is exactly
           how these two nav surfaces drifted out of sync before. */}
+      {/* Plans (newTask.md, 9 Sep — split out of Inventory into its own
+          nav tab), Admin/Plan-Maker-only same as the desktop sidebar. */}
+      {canSeeNavKey("plans", authUser) && (
+        <MenuRow href="/plans" onClose={onClose} icon={<AssetIcon className="h-4 w-4" />} label="Plans" />
+      )}
       {canSeeNavKey("team", authUser) && (
         <MenuRow href="/team" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Team" />
       )}
       {canSeeNavKey("users", authUser) && (
-        <MenuRow href="/users" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="Users" />
+        <MenuRow href="/users" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="People" />
       )}
       {canSeeNavKey("job-runs", authUser) && (
         <MenuRow href="/job-runs" onClose={onClose} icon={<ClockIcon className="h-4 w-4" />} label="Job runs" />
@@ -183,7 +188,7 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
         <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] bg-rose-soft text-rose">
           <LogoutIcon className="h-4 w-4" />
         </span>
-        <span className="text-[14px] font-bold text-rose">Log out</span>
+        <span className="text-[14px] font-semibold text-rose">Log out</span>
       </button>
 
       <div className="h-4 shrink-0" />
@@ -195,7 +200,7 @@ function BellNotifIcon({ count }: { count: number }) {
   return (
     <span className="relative flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] bg-surface-2 text-text-muted">
       <BellIcon className="h-4 w-4" />
-      {count > 0 && <span className="absolute right-[7px] top-[7px] h-[7px] w-[7px] rounded-full border-2 border-surface-2 bg-accent-2" />}
+      {count > 0 && <span className="absolute right-[7px] top-[7px] h-[7px] w-[7px] rounded-full border-2 border-surface-2 bg-rose" />}
     </span>
   );
 }
@@ -218,7 +223,7 @@ function MenuRow({
       {icon}
       <span className="flex-1 text-[14px] font-semibold">{label}</span>
       {trailing && (
-        <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-accent-2 px-1 text-[11px] font-extrabold text-bg">
+        <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-ink px-1 text-[11px] font-semibold text-ink-fg">
           {trailing}
         </span>
       )}

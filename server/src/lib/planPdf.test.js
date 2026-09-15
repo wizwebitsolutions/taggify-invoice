@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPlanPdf } from "./planPdf.js";
+import { buildPlanPdf, buildPlanGroupPdf } from "./planPdf.js";
 
 /**
  * Smoke tests, not content assertions — same convention this codebase
@@ -68,5 +68,65 @@ describe("buildPlanPdf — doesn't crash on the shapes forClientPdf() produces",
     }));
     const pdf = await buildPlanPdf({ ...basePlan, items });
     expect(pdf.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Internal PDF mode (user request, 10 Sep — "internal plan in which actual
+ * things will be there") — takes the shape plans/service.js's getPlan (not
+ * forClientPdf) produces: raw item.cost, top-level totalCost/
+ * budgetVariance, and an internal.computed* block. Smoke tests only, same
+ * convention as above.
+ */
+describe("buildPlanPdf({ internal: true }) — the real-numbers document", () => {
+  const annotatedPlan = {
+    name: "Q1 Meme Page Push",
+    variantLabel: "Plan A",
+    clientName: "Acme",
+    clientContact: "acme@example.com",
+    clientCompany: "Acme Inc",
+    clientGstNumber: "GST123",
+    clientAddress: "1 Acme Way",
+    notes: "Rush job",
+    createdAt: new Date("2026-01-01"),
+    isGstPlan: true,
+    totalCost: 5000,
+    budgetVariance: -2000,
+    overview: { totalFollowers: 100000, totalPosts: 1, expectedImpressions: 5000, subtotal: 8000, gstAmount: 1440, total: 9440 },
+    internal: { computedFollowers: 100000, computedPosts: 1, computedImpressions: 5000, computedSubtotal: 5000, computedGstAmount: 900, computedTotal: 5900 },
+    items: [{ format: "reel", postsPerProfile: 1, cost: 5000, clientCost: 8000, asset: { handle: "demo.page", category: "Meme page", followers: 100000 } }],
+  };
+
+  it("renders a non-empty PDF buffer using the real computed numbers, not the client overview", async () => {
+    const pdf = await buildPlanPdf(annotatedPlan, { internal: true });
+    expect(pdf).toBeInstanceOf(Buffer);
+    expect(pdf.length).toBeGreaterThan(0);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("renders without crashing when there's no budget set (budgetVariance null)", async () => {
+    const pdf = await buildPlanPdf({ ...annotatedPlan, budgetVariance: null }, { internal: true });
+    expect(pdf.length).toBeGreaterThan(0);
+  });
+});
+
+describe("buildPlanGroupPdf — combined Plan A + Plan B download", () => {
+  const planA = {
+    name: "Q1 Push",
+    variantLabel: "Plan A",
+    clientName: "Acme",
+    clientContact: null,
+    createdAt: new Date("2026-01-01"),
+    isGstPlan: false,
+    overview: { totalFollowers: 50000, totalPosts: 1, expectedImpressions: 5000, subtotal: 5000, gstAmount: 0, total: 5000 },
+    items: [{ format: "reel", postsPerProfile: 1, displayCost: 5000, asset: { handle: "a.page", category: "Meme page", followers: 50000 } }],
+  };
+  const planB = { ...planA, variantLabel: "Plan B", overview: { ...planA.overview, subtotal: 7000, total: 7000 } };
+
+  it("renders both plans into one PDF, separated by a page break, without crashing", async () => {
+    const pdf = await buildPlanGroupPdf([planA, planB]);
+    expect(pdf).toBeInstanceOf(Buffer);
+    expect(pdf.length).toBeGreaterThan(0);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
   });
 });

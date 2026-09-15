@@ -6,7 +6,9 @@ vi.stubGlobal("fetch", mockFetch);
 
 vi.mock("jsonwebtoken", () => ({ default: { sign: vi.fn(() => "signed-jwt") } }));
 
-const { getAccessToken, ensureSheetTabsExist, writeSheetTab } = await import("./googleSheetsClient.js");
+const { getAccessToken, ensureSheetTabsExist, writeSheetTab, getSheetTabIds, batchUpdateSpreadsheet, createSpreadsheet, deleteSheetTab } = await import(
+  "./googleSheetsClient.js"
+);
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -94,5 +96,118 @@ describe("writeSheetTab — clears then writes, so shrinking data doesn't leave 
     mockFetch.mockResolvedValueOnce(jsonResponse({})).mockResolvedValueOnce(jsonResponse({ error: "boom" }, false, 500));
 
     await expect(writeSheetTab({ accessToken: "tok", spreadsheetId: "sheet-1", title: "Invoices", rows: [] })).rejects.toThrow(/writing tab/);
+  });
+});
+
+/**
+ * getSheetTabIds — the deep-link building block (user request, 10 Sep —
+ * "plan will be of google sheet ... generate google sheet and will provide
+ * link"), matching the exact `.../edit?gid=X#gid=X` shape a Google Sheets
+ * tab link takes.
+ */
+describe("getSheetTabIds — resolves a tab title to its sheetId (gid)", () => {
+  it("returns the sheetId for each requested title that exists", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ sheets: [{ properties: { title: "Overview", sheetId: 111 } }, { properties: { title: "Pages", sheetId: 222 } }] })
+    );
+
+    const gids = await getSheetTabIds({ accessToken: "tok", spreadsheetId: "sheet-1", titles: ["Overview", "Pages"] });
+
+    expect(gids).toEqual({ Overview: 111, Pages: 222 });
+  });
+
+  it("omits a title that isn't in the spreadsheet, rather than throwing", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ sheets: [{ properties: { title: "Overview", sheetId: 111 } }] }));
+
+    const gids = await getSheetTabIds({ accessToken: "tok", spreadsheetId: "sheet-1", titles: ["Overview", "Missing"] });
+
+    expect(gids).toEqual({ Overview: 111 });
+  });
+});
+
+/**
+ * batchUpdateSpreadsheet — the styling primitive (user request, 10 Sep —
+ * "google sheet format should be like this, same styling") planSheet.js's
+ * format-request builder sends through.
+ */
+describe("batchUpdateSpreadsheet — arbitrary formatting requests", () => {
+  it("posts the requests to the spreadsheet's :batchUpdate endpoint", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));
+    const requests = [{ mergeCells: { range: { sheetId: 1 }, mergeType: "MERGE_ALL" } }];
+
+    await batchUpdateSpreadsheet({ accessToken: "tok", spreadsheetId: "sheet-1", requests });
+
+    expect(mockFetch.mock.calls[0][0]).toContain(":batchUpdate");
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ requests });
+  });
+
+  it("is a no-op (no fetch call) when there are no requests", async () => {
+    await batchUpdateSpreadsheet({ accessToken: "tok", spreadsheetId: "sheet-1", requests: [] });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("throws a readable error when the API rejects the request", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ error: "boom" }, false, 500));
+
+    await expect(
+      batchUpdateSpreadsheet({ accessToken: "tok", spreadsheetId: "sheet-1", requests: [{ mergeCells: {} }] })
+    ).rejects.toThrow(/applying formatting/);
+  });
+});
+
+/**
+ * createSpreadsheet/deleteSheetTab — per-plan spreadsheet creation (user
+ * request, 10 Sep — "1 spreadsheet generation per plan, not just write
+ * access"). Only viable with a real user's OAuth token (see
+ * googleOAuthClient.js) — a service account gets a 403 on this exact call
+ * (verified directly against the live API), which is why every earlier
+ * plan sheet lived as tabs in one shared spreadsheet instead.
+ */
+describe("createSpreadsheet — one real spreadsheet per plan", () => {
+  it("POSTs to the spreadsheets endpoint and returns the new file's id and default tab's sheetId", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ spreadsheetId: "new-sheet-1", sheets: [{ properties: { sheetId: 0, title: "Sheet1" } }] }));
+
+    const result = await createSpreadsheet({ accessToken: "tok", title: "Q1 Push — Plan A — Client (Taggify)" });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://sheets.googleapis.com/v4/spreadsheets",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ properties: { title: "Q1 Push — Plan A — Client (Taggify)" } });
+    expect(result).toEqual({ spreadsheetId: "new-sheet-1", defaultSheetId: 0 });
+  });
+
+  it("throws a readable error when Google refuses to create it (e.g. a quota-less service account's 403)", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ error: "PERMISSION_DENIED" }, false, 403));
+
+    await expect(createSpreadsheet({ accessToken: "tok", title: "x" })).rejects.toThrow(/creating spreadsheet/);
+  });
+});
+
+describe("deleteSheetTab — drops a freshly created spreadsheet's blank default tab", () => {
+  it("sends a deleteSheet batchUpdate request for the given sheetId", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));
+
+    await deleteSheetTab({ accessToken: "tok", spreadsheetId: "sheet-1", sheetId: 0 });
+
+    expect(mockFetch.mock.calls[0][0]).toContain(":batchUpdate");
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ requests: [{ deleteSheet: { sheetId: 0 } }] });
+  });
+
+  it("is a no-op when sheetId is null (nothing to delete)", async () => {
+    await deleteSheetTab({ accessToken: "tok", spreadsheetId: "sheet-1", sheetId: null });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("swallows Google's 'can't delete the last visible sheet' error instead of throwing", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 400, text: async () => "You can't delete the last visible sheet in a document." });
+
+    await expect(deleteSheetTab({ accessToken: "tok", spreadsheetId: "sheet-1", sheetId: 0 })).resolves.toBeUndefined();
+  });
+
+  it("throws a readable error for any other failure", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ error: "boom" }, false, 500));
+
+    await expect(deleteSheetTab({ accessToken: "tok", spreadsheetId: "sheet-1", sheetId: 0 })).rejects.toThrow(/deleting tab/);
   });
 });
