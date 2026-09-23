@@ -33,6 +33,7 @@ describe("buildPlanPdf — doesn't crash on the shapes forClientPdf() produces",
     const pdf = await buildPlanPdf({
       ...basePlan,
       isGstPlan: true,
+      gstPercent: 18,
       overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 },
     });
     expect(pdf.length).toBeGreaterThan(0);
@@ -90,6 +91,7 @@ describe("buildPlanPdf({ internal: true }) — the real-numbers document", () =>
     notes: "Rush job",
     createdAt: new Date("2026-01-01"),
     isGstPlan: true,
+    gstPercent: 18,
     totalCost: 5000,
     budgetVariance: -2000,
     overview: { totalFollowers: 100000, totalPosts: 1, expectedImpressions: 5000, subtotal: 8000, gstAmount: 1440, total: 9440 },

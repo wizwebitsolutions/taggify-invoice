@@ -36,3 +36,32 @@ describe("Plan basics (user request, 14 Sep) — brief note mandatory, reel/stor
     }
   });
 });
+
+describe("gstPercent (user request, 17 Sep — replaces the old fixed-18%-or-nothing isGstPlan toggle)", () => {
+  const base = { name: "Q1", clientName: "Acme", notes: "Launch week push" };
+
+  it("accepts a percentage between 0 and 100, or null/omitted for no GST", () => {
+    expect(createPlanSchema.safeParse({ ...base, gstPercent: 18 }).success).toBe(true);
+    expect(createPlanSchema.safeParse({ ...base, gstPercent: 0 }).success).toBe(true);
+    expect(createPlanSchema.safeParse({ ...base, gstPercent: null }).success).toBe(true);
+    expect(createPlanSchema.safeParse(base).success).toBe(true);
+  });
+
+  it("rejects a percentage outside 0–100", () => {
+    expect(createPlanSchema.safeParse({ ...base, gstPercent: -5 }).success).toBe(false);
+    expect(createPlanSchema.safeParse({ ...base, gstPercent: 101 }).success).toBe(false);
+  });
+
+  // The wizard's field is whole-number only; a fractional rate saved through
+  // the API would be mangled ("12.5" -> "125" -> capped to 100) on first edit.
+  it("rejects a fractional percentage", () => {
+    expect(createPlanSchema.safeParse({ ...base, gstPercent: 12.5 }).success).toBe(false);
+    expect(updatePlanSchema.safeParse({ gstPercent: 12.5 }).success).toBe(false);
+  });
+
+  it("updatePlanSchema accepts the same range, also optional", () => {
+    expect(updatePlanSchema.safeParse({ gstPercent: 12 }).success).toBe(true);
+    expect(updatePlanSchema.safeParse({ gstPercent: null }).success).toBe(true);
+    expect(updatePlanSchema.safeParse({ gstPercent: 150 }).success).toBe(false);
+  });
+});

@@ -222,7 +222,10 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     expect(followersBody).toEqual({ handles: ["big.page", "mystery.page", "blank.owner"] });
     await expect(rows.nth(0)).toContainText("13.5L");
     await expect(rows.nth(0)).toContainText("82K avg views");
-    await expect(rows.nth(1)).toContainText("Not found on Instagram");
+    // 22 Sep — a page Instagram doesn't know is flagged "link broken / not found" and never imported.
+    await expect(rows.nth(1).getByTitle("Not found on Instagram")).toBeVisible();
+    await expect(rows.nth(1).getByTestId("import-row-status")).toContainText("Link broken / not found");
+    await expect(page.getByTestId("import-not-found")).toContainText("1 link is broken or the page wasn't found on Instagram");
 
     // Category for all, then a single-row override. Going back to "Keep
     // sheet values" restores the sheet's own categories.
@@ -233,15 +236,17 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     await expect(rows.nth(0)).toContainText("Sheet: News page");
     await page.getByLabel("Category for all rows").selectOption("Fitness");
     await expect(rows.nth(0).getByLabel("Category for @big.page")).toHaveValue("Fitness");
-    await rows.nth(1).getByLabel("Category for @mystery.page").selectOption("Food");
+    await rows.nth(2).getByLabel("Category for @blank.owner").selectOption("Food");
+    // The not-found row has no pickers — there's nothing to import.
+    await expect(rows.nth(1).getByLabel("Category for @mystery.page")).toHaveCount(0);
 
-    await page.getByLabel("Default account for rows without one").selectOption("creator-1");
+    await page.getByLabel("Account for all pages").selectOption("creator-1");
+    await expect(page.getByTestId("import-confirm")).toHaveText("Import 2 pages");
     await page.getByTestId("import-confirm").click();
     await expect(page.getByTestId("import-result")).toBeVisible();
     expect(importBody!.rows).toEqual([
-      { handle: "big.page", ownerId: "creator-1", category: "Fitness", followers: 1350000, rateCards: [{ format: "reel", amount: 12000 }] },
-      { handle: "mystery.page", ownerId: "creator-1", category: "Food", followers: null, rateCards: [] },
-      { handle: "blank.owner", ownerId: "creator-1", category: "Fitness", followers: 2100, rateCards: [] },
+      { handle: "big.page", ownerId: "creator-1", category: "Fitness", pageName: null, followers: 1350000, rateCards: [{ format: "reel", amount: 12000 }] },
+      { handle: "blank.owner", ownerId: "creator-1", category: "Food", pageName: null, followers: 2100, rateCards: [] },
     ]);
   });
 
@@ -260,6 +265,18 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets/import/preview`, (route) => route.fulfill({ json: previewResponse() }));
+    // Every placeable page is confirmed on Instagram (the counts match the sheet here).
+    await page.route(`${API_URL}/assets/import/followers`, (route) =>
+      route.fulfill({
+        json: {
+          profiles: {
+            "big.page": { followers: 1200000, avgViews: null, avgLikes: null, avgComments: null, fullName: null },
+            "mystery.page": { followers: 900, avgViews: null, avgLikes: null, avgComments: null, fullName: null },
+            "blank.owner": { followers: 500, avgViews: null, avgLikes: null, avgComments: null, fullName: null },
+          },
+        },
+      })
+    );
     let importBody: { rows: Array<Record<string, unknown>> } | null = null;
     await page.route(`${API_URL}/assets/import`, (route) => {
       importBody = route.request().postDataJSON();
@@ -298,16 +315,19 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     await expect(rows.nth(3)).toContainText("Already in Inventory");
     await expect(rows.nth(4)).toContainText("bad handle!");
     await expect(rows.nth(4)).toContainText("Invalid handle");
+    // 22 Sep — pages already in Inventory are listed up front with who they're under.
+    await expect(page.getByTestId("import-already-exists")).toContainText("1 page is already in Inventory and won't be imported");
+    await expect(page.getByTestId("import-already-exists")).toContainText("@taken.page — under Rahul Creator");
 
     // Two rows have no account yet → only 1 importable, and the count says so.
     await expect(page.getByTestId("import-unplaced")).toHaveText("2 rows still need an account");
     await expect(page.getByTestId("import-confirm")).toHaveText("Import 1 page");
 
-    // Per-row override for the unknown one, default account for the rest.
-    await rows.nth(1).getByLabel("Account for @mystery.page").selectOption("creator-2");
-    await expect(page.getByTestId("import-confirm")).toHaveText("Import 2 pages");
-    await page.getByLabel("Default account for rows without one").selectOption("creator-1");
+    // One account for every page (22 Sep), then a single-row override.
+    await page.getByLabel("Account for all pages").selectOption("creator-1");
     await expect(page.getByTestId("import-unplaced")).toHaveCount(0);
+    await expect(page.getByTestId("import-confirm")).toHaveText("Import 3 pages");
+    await rows.nth(1).getByLabel("Account for @mystery.page").selectOption("creator-2");
     await expect(page.getByTestId("import-confirm")).toHaveText("Import 3 pages");
 
     await page.getByTestId("import-confirm").click();
@@ -317,9 +337,9 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     await expect(page.getByTestId("import-result")).toContainText("@late.page — Already registered under Rahul Creator.");
 
     expect(importBody!.rows).toEqual([
-      { handle: "big.page", ownerId: "creator-1", category: "News page", followers: 1200000, rateCards: [{ format: "reel", amount: 12000 }] },
-      { handle: "mystery.page", ownerId: "creator-2", category: null, followers: null, rateCards: [] },
-      { handle: "blank.owner", ownerId: "creator-1", category: null, followers: 500, rateCards: [] },
+      { handle: "big.page", ownerId: "creator-1", category: "News page", pageName: null, followers: 1200000, rateCards: [{ format: "reel", amount: 12000 }] },
+      { handle: "mystery.page", ownerId: "creator-2", category: null, pageName: null, followers: 900, rateCards: [] },
+      { handle: "blank.owner", ownerId: "creator-1", category: null, pageName: null, followers: 500, rateCards: [] },
     ]);
     // Inventory refetched after the import.
     await expect.poll(() => assetsListCalls).toBeGreaterThan(1);

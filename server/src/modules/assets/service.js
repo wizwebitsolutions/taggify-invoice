@@ -4,15 +4,20 @@ import { refreshAssetMetrics, applyProfileMetrics } from "../scraping/service.js
 import { ApifyInstagramProvider } from "../../lib/apifyClient.js";
 import { normalizeHandle, isValidHandle, parseImportSheet, ImportParseError } from "./importParser.js";
 import { fetchSheetCsv } from "../campaigns/service.js";
+import { uploadProfilePic, isCloudinaryConfigured } from "../../lib/cloudinaryClient.js";
+import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 
 /**
- * Creators see only their own assets; Admin/Finance/Plan Maker see
- * everything — Plan Maker needs the full catalogue to build a Plan from
- * (newTask.md, 8 Sep: their dashboard is "Dashboard + Inventory +
- * Plan-create"), and doesn't own pages the way a Creator does.
+ * Creators see only their own assets; Plan Maker sees everything — it
+ * needs the full catalogue to build a Plan from (newTask.md, 8 Sep: their
+ * dashboard is "Dashboard + Inventory + Plan-create"), and doesn't own
+ * pages the way a Creator does. Anyone else's visibility is inventory.view
+ * (23 Sep, Step 3) — read fresh from the DB, not the JWT, so restricting or
+ * granting it takes effect immediately.
  */
 export async function listAssets(user) {
-  const where = ["ADMIN", "FINANCE", "PLAN_MAKER"].includes(user.role) ? {} : { ownerId: user.id };
+  const effective = await loadEffectivePermissions(user.id);
+  const where = effective["inventory.view"] || user.role === "PLAN_MAKER" ? {} : { ownerId: user.id };
   const assets = await prisma.asset.findMany({
     where,
     // owner name/phone — Inventory's "filter by page owner" (newTask.md, 9
@@ -70,7 +75,10 @@ export async function getAvgEngagement(assetId, asset = null) {
   };
 }
 
-export async function createAsset(user, { platform, handle, category, ownerId, rateCards }) {
+// `followers` is only ever passed by the plan-sheet "Add to inventory" path
+// (plans/service.js addPendingPage) — a starting count from the sheet until
+// the background scrape below replaces it.
+export async function createAsset(user, { platform, handle, category, ownerId, rateCards, followers }) {
   // Only an admin may register a page on someone else's behalf (the "create
   // a user with their first page(s)" flow on the Users page); a CREATOR
   // creating their own page never sends ownerId, so this never fires for them.
@@ -119,6 +127,7 @@ export async function createAsset(user, { platform, handle, category, ownerId, r
         platform,
         handle,
         category,
+        ...(followers != null ? { followers } : {}),
         approvalStatus: user.role === "ADMIN" ? "approved" : "pending",
         ...(rates.length > 0 ? { rateCards: { create: rates } } : {}),
       },
@@ -171,7 +180,7 @@ export async function setApprovalStatus(assetId, approvalStatus) {
   // had indexed the profile.
   if (approvalStatus === "approved") {
     refreshAssetMetrics(assetId)
-      .then(() => warmProfilePicCache(assetId))
+      .then(() => storeProfilePic(assetId))
       .catch((err) => console.error(`setApprovalStatus: Apify scrape failed for asset ${assetId}`, err));
   }
 
@@ -190,7 +199,7 @@ export async function refreshProfile(assetId) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId } });
   if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
   const updated = await refreshAssetMetrics(assetId);
-  await warmProfilePicCache(assetId);
+  await storeProfilePic(assetId);
   return updated;
 }
 
@@ -205,7 +214,7 @@ export async function refreshProfile(assetId) {
 // on every single page load. Cleared (by TTL) well before the upstream
 // signed URL itself would expire.
 const profilePicCache = new Map(); // assetId -> { buffer, contentType, cachedAt }
-// 24h, matching assetProfileRescrapeJob's own cadence — warmProfilePicCache
+// 24h, matching assetProfileRescrapeJob's own cadence — storeProfilePic
 // below re-populates this right after every scrape (initial, on-approval,
 // manual refresh, and the 24h cron itself), so in practice a real viewer's
 // <img> is almost always served straight from cache rather than racing
@@ -250,49 +259,76 @@ export async function fetchProfilePic(assetId) {
 }
 
 async function fetchProfilePicUncached(assetId) {
-  const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { profilePicUrl: true } });
-  if (!asset?.profilePicUrl) throw new ApiError(404, "NO_PROFILE_PIC", "This page has no profile picture yet");
+  const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { profilePicUrl: true, profilePicStoredUrl: true } });
+  if (!asset?.profilePicUrl && !asset?.profilePicStoredUrl) throw new ApiError(404, "NO_PROFILE_PIC", "This page has no profile picture yet");
 
-  const ATTEMPTS = 3;
-  let lastError;
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+  // Our own stored copy first (22 Sep) — it doesn't expire or flake the way
+  // Instagram's CDN does. Instagram is only the fallback for a page whose
+  // picture hasn't been stored yet (or a Cloudinary blip).
+  if (asset.profilePicStoredUrl) {
     try {
-      const upstream = await fetch(asset.profilePicUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-      if (!upstream.ok) {
-        lastError = new Error(`Instagram returned ${upstream.status}`);
-      } else {
-        const result = { buffer: Buffer.from(await upstream.arrayBuffer()), contentType: upstream.headers.get("content-type") ?? "image/jpeg" };
-        profilePicCache.set(assetId, { ...result, cachedAt: Date.now() });
-        return result;
-      }
+      const result = await downloadImage(asset.profilePicStoredUrl, 1, "Cloudinary");
+      profilePicCache.set(assetId, { ...result, cachedAt: Date.now() });
+      return result;
+    } catch (err) {
+      if (!asset.profilePicUrl) throw new ApiError(502, "PROFILE_PIC_FETCH_FAILED", `Couldn't load this page's stored profile picture: ${err.message}`);
+    }
+  }
+
+  try {
+    const result = await downloadImage(asset.profilePicUrl, 3, "Instagram");
+    profilePicCache.set(assetId, { ...result, cachedAt: Date.now() });
+    return result;
+  } catch (err) {
+    throw new ApiError(502, "PROFILE_PIC_FETCH_FAILED", `Couldn't fetch this page's profile picture from Instagram after 3 attempts: ${err.message}`);
+  }
+}
+
+/** GETs an image with a short backoff between attempts (see fetchProfilePic's note on Instagram's flaky CDN). */
+async function downloadImage(url, attempts, sourceLabel) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const upstream = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      if (upstream.ok) return { buffer: Buffer.from(await upstream.arrayBuffer()), contentType: upstream.headers.get("content-type") ?? "image/jpeg" };
+      lastError = new Error(`${sourceLabel} returned ${upstream.status}`);
     } catch (err) {
       lastError = err;
     }
-    if (attempt < ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, attempt * 300));
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * 300));
   }
-
-  throw new ApiError(
-    502,
-    "PROFILE_PIC_FETCH_FAILED",
-    `Couldn't fetch this page's profile picture from Instagram after ${ATTEMPTS} attempts: ${lastError.message}`
-  );
+  throw lastError;
 }
 
 /**
- * Pre-populates fetchProfilePic's cache right after a scrape gets a fresh
- * profilePicUrl, so a real viewer's <img> is served from cache instead of
- * racing Instagram live on their page load. Called from every place that
- * calls refreshAssetMetrics (createAsset, setApprovalStatus, refreshProfile,
- * and the 24h assetProfileRescrapeJob cron) — never throws, since a failed
- * warm-up just means the on-demand path (still retried there) handles it
- * whenever someone actually views the card.
+ * Stores a page's profile picture in Cloudinary (user request, 22 Sep —
+ * "pages profile pic should be stored in database") right after a scrape
+ * refreshed its Instagram URL, and saves the stored link on the page.
+ * Called from every place that calls refreshAssetMetrics / applyProfileMetrics
+ * (createAsset's scrape chain, setApprovalStatus, refreshProfile, import,
+ * and the 24h assetProfileRescrapeJob cron), so the stored copy follows
+ * the page's current picture. Also primes fetchProfilePic's in-memory cache.
+ * Never throws — a failure just leaves the previous stored copy (or the
+ * Instagram fallback) in place until the next scrape.
  */
-export async function warmProfilePicCache(assetId) {
+export async function storeProfilePic(assetId) {
+  // No Cloudinary account on this environment: nothing to store into, so
+  // don't download the picture or log a failure on every single scrape.
+  if (!isCloudinaryConfigured()) return;
   try {
-    await fetchProfilePic(assetId);
+    const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { profilePicUrl: true } });
+    if (!asset?.profilePicUrl) return;
+    const image = await downloadImage(asset.profilePicUrl, 3, "Instagram");
+    profilePicCache.set(assetId, { ...image, cachedAt: Date.now() });
+    const storedUrl = await uploadProfilePic(assetId, image.buffer);
+    await prisma.asset.update({ where: { id: assetId }, data: { profilePicStoredUrl: storedUrl } });
   } catch (err) {
-    console.error(`warmProfilePicCache: couldn't pre-fetch asset ${assetId}'s profile picture`, err);
+    console.error(`storeProfilePic: couldn't store asset ${assetId}'s profile picture`, err);
   }
+}
+
+async function storeProfilePicsSequentially(assetIds) {
+  for (const id of assetIds) await storeProfilePic(id);
 }
 
 /** Upserts each (assetId, format) rate — admin-only, versioned by effectiveFrom. */
@@ -390,7 +426,7 @@ export async function previewImport(parsed) {
 
   const seen = new Set();
   const rows = parsed.rows.map((row) => {
-    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, category: row.category, followers: row.followers, rateCards: row.rateCards, ownerRef: row.ownerRef, owner: null, ownerId: null, status: "ready", reason: null };
+    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, followers: row.followers, rateCards: row.rateCards, ownerRef: row.ownerRef, owner: null, ownerId: null, status: "ready", reason: null };
     if (row.problem) return { ...base, status: "invalid", reason: row.problem };
     const key = row.handle.toLowerCase();
     if (seen.has(key)) return { ...base, status: "duplicate", reason: "Same handle appears earlier in this sheet." };
@@ -440,8 +476,9 @@ export async function importAssets(user, rows) {
   const created = [];
   const skipped = [];
   const seen = new Set();
-  const toScrape = [];
+  const candidates = [];
 
+  // Pass 1 — everything checkable without Instagram.
   for (const input of rows) {
     const handle = normalizeHandle(input.handle);
     if (!handle || !isValidHandle(handle)) {
@@ -467,6 +504,57 @@ export async function importAssets(user, rows) {
       skipped.push({ handle, reason: clash.ownerId === owner.id ? `Already in Inventory under ${ownerLabel(owner)}.` : `Already registered under ${ownerLabel(clash.owner)}.` });
       continue;
     }
+    candidates.push({ input, handle, owner });
+  }
+
+  // Pass 2 — every page must be confirmed on Instagram before it's stored
+  // (user request, 22 Sep — "if page not found ... it won't be stored in
+  // database"). The preview's live check is reused; anything it never
+  // answered (expired, timed out, or the preview was skipped) is looked up
+  // now in one batch. The client's word that a row is fine isn't trusted.
+  // Snapshotted once, so an entry that expires while the lookup below runs
+  // isn't then refused as "couldn't verify".
+  const checked = new Map(candidates.map((c) => [c.handle, peekPreviewScrape(c.handle)]));
+  const unchecked = candidates.filter((c) => checked.get(c.handle) === undefined).map((c) => c.handle);
+  // A big stale batch would hold this request open for minutes; past the cap
+  // the admin re-runs the check in the popup (one preview-sized chunk at a time).
+  if (unchecked.length > 0 && unchecked.length <= MAX_IMPORT_VERIFY_HANDLES) {
+    try {
+      const results = await ApifyInstagramProvider.getAccountMetricsBatch(unchecked);
+      for (const handle of unchecked) {
+        if (!(handle in results)) continue;
+        checked.set(handle, results[handle]);
+        previewScrapeCache.set(handle.toLowerCase(), { metrics: results[handle], at: Date.now() });
+      }
+    } catch (err) {
+      // Instagram unreachable: those rows stay unverified and are refused below.
+      console.error("importAssets: couldn't verify pages on Instagram", err);
+    }
+  }
+
+  const toStorePic = [];
+  for (const { input, handle, owner } of candidates) {
+    const metrics = checked.get(handle);
+    if (metrics === null) {
+      skipped.push({ handle, reason: "Link broken or page not found on Instagram." });
+      continue;
+    }
+    if (metrics === undefined) {
+      skipped.push({ handle, reason: "Couldn't verify this page on Instagram right now — try again." });
+      continue;
+    }
+    // Checked again right before the insert: the Instagram lookup above can
+    // take minutes, and the unique index is per owner, so another admin (or
+    // the creator) registering the same page meanwhile would otherwise put
+    // it under two accounts.
+    const lateClash = await prisma.asset.findFirst({
+      where: { platform: "instagram", handle: { equals: handle, mode: "insensitive" } },
+      select: { ownerId: true, owner: { select: { name: true, phoneNumber: true } } },
+    });
+    if (lateClash) {
+      skipped.push({ handle, reason: lateClash.ownerId === owner.id ? `Already in Inventory under ${ownerLabel(owner)}.` : `Already registered under ${ownerLabel(lateClash.owner)}.` });
+      continue;
+    }
     const rateCards = dedupeRateCards(input.rateCards);
     let asset;
     try {
@@ -476,7 +564,9 @@ export async function importAssets(user, rows) {
           platform: "instagram",
           handle,
           category: input.category || null,
-          followers: Math.min(input.followers ?? 0, 2_147_483_647),
+          // The sheet's Page Name until Instagram gives its own (applyProfileMetrics below keeps it when Instagram has none).
+          fullName: input.pageName?.trim() || null,
+          followers: Math.min(metrics.followers ?? input.followers ?? 0, 2_147_483_647),
           // Admin-only route (routes.js) → approved on creation, same as createAsset.
           approvalStatus: "approved",
           ...(rateCards.length > 0 ? { rateCards: { create: rateCards.map((rc) => ({ format: rc.format, amount: rc.amount })) } } : {}),
@@ -493,28 +583,19 @@ export async function importAssets(user, rows) {
       }
       throw err;
     }
+    previewScrapeCache.delete(handle.toLowerCase());
     created.push({ ...asset, owner: { id: owner.id, name: owner.name, phoneNumber: owner.phoneNumber } });
-
-    // The preview already scraped this handle a moment ago — store that
-    // instead of queueing a second identical Apify run.
-    const scraped = takePreviewScrape(handle);
-    if (scraped) {
-      try {
-        await applyProfileMetrics(asset.id, scraped);
-        warmProfilePicCache(asset.id);
-        continue;
-      } catch (err) {
-        console.error(`importAssets: couldn't store preview scrape for ${handle}`, err);
-      }
+    try {
+      await applyProfileMetrics(asset.id, metrics);
+      toStorePic.push(asset.id);
+    } catch (err) {
+      console.error(`importAssets: couldn't store fetched profile for ${handle}`, err);
     }
-    toScrape.push(asset.id);
   }
 
-  // Same background scrape createAsset() does for a single page, but one
-  // at a time — 200 imported pages firing 200 concurrent Apify actor runs
-  // would just get throttled/failed at Apify's end. Not awaited.
-  await markScrapeQueued(toScrape);
-  void scrapeSequentially(toScrape);
+  // Profile pictures → Cloudinary, one at a time in the background (each is
+  // an Instagram download + an upload; not worth holding the response for).
+  void storeProfilePicsSequentially(toStorePic);
 
   return { created, skipped };
 }
@@ -545,7 +626,7 @@ async function scrapeSequentially(assetIds) {
       const row = await prisma.asset.findUnique({ where: { id }, select: { scrapeQueuedAt: true } });
       if (!row?.scrapeQueuedAt) continue;
       await refreshAssetMetrics(id);
-      await warmProfilePicCache(id);
+      await storeProfilePic(id);
     } catch (err) {
       console.error(`scrapeSequentially: Apify scrape failed for asset ${id}`, err);
       // refreshAssetMetrics clears the marker itself on a scrape failure;
@@ -583,13 +664,17 @@ export async function previewImportFromSheetUrl(url) {
 const previewScrapeCache = new Map(); // handle -> { metrics, at }
 const PREVIEW_SCRAPE_TTL_MS = 30 * 60 * 1000;
 export const MAX_PREVIEW_SCRAPE_HANDLES = 100;
+// How many never-checked pages importAssets will look up itself before
+// refusing them as "couldn't verify" (same size as one preview check).
+export const MAX_IMPORT_VERIFY_HANDLES = 100;
 
 /**
- * Live follower counts / avg views for the handles on a preview — one
- * Apify run for the whole batch. Handles that came back private/missing
- * are null (the row still imports; the post-create scrape retries them).
- * A total failure (Apify down, no token) is a 502 the modal shows as
- * "couldn't fetch now" — never a reason to block the import itself.
+ * The preview's Instagram check — live follower counts / avg views for its
+ * handles, one Apify run for the whole batch. A handle that came back
+ * private/missing is null, which the popup shows as "link broken / not
+ * found" and importAssets refuses (22 Sep). A total failure (Apify down, no
+ * token) is a 502 the popup shows as "couldn't verify"; those rows can't be
+ * imported until a retry confirms them.
  */
 export async function fetchImportFollowers(handles) {
   const clean = [...new Set(handles.map((h) => normalizeHandle(h)).filter((h) => h && isValidHandle(h)))];
@@ -601,7 +686,7 @@ export async function fetchImportFollowers(handles) {
   try {
     results = await ApifyInstagramProvider.getAccountMetricsBatch(clean);
   } catch (err) {
-    throw new ApiError(502, "FOLLOWERS_FETCH_FAILED", `Couldn't fetch follower counts from Instagram right now (${String(err?.message ?? err).slice(0, 120)}). They'll be fetched after import instead.`);
+    throw new ApiError(502, "FOLLOWERS_FETCH_FAILED", `Couldn't fetch follower counts from Instagram right now (${String(err?.message ?? err).slice(0, 120)}). Retry the check — pages can't be imported until Instagram confirms them.`);
   }
   // A handle absent from `results` (its chunk timed out) is left out of the
   // response — "unknown", not "not found" — so the modal keeps the sheet's
@@ -610,18 +695,19 @@ export async function fetchImportFollowers(handles) {
   for (const handle of clean) {
     if (!(handle in results)) continue;
     const metrics = results[handle];
-    if (metrics) previewScrapeCache.set(handle.toLowerCase(), { metrics, at: Date.now() });
+    // A "not found" answer is cached too (metrics: null) — importAssets
+    // trusts it and refuses the row instead of paying for a second lookup.
+    previewScrapeCache.set(handle.toLowerCase(), { metrics, at: Date.now() });
     profiles[handle] = metrics ? { followers: metrics.followers, avgViews: metrics.avgViews, avgLikes: metrics.avgLikes, avgComments: metrics.avgComments, fullName: metrics.fullName } : null;
   }
   return { profiles };
 }
 
-function takePreviewScrape(handle) {
-  const key = handle.toLowerCase();
-  const hit = previewScrapeCache.get(key);
-  if (!hit) return null;
-  previewScrapeCache.delete(key);
-  return Date.now() - hit.at < PREVIEW_SCRAPE_TTL_MS ? hit.metrics : null;
+/** `undefined` = never checked (or expired); `null` = Instagram said not found; else the metrics. */
+function peekPreviewScrape(handle) {
+  const hit = previewScrapeCache.get(handle.toLowerCase());
+  if (!hit || Date.now() - hit.at >= PREVIEW_SCRAPE_TTL_MS) return undefined;
+  return hit.metrics;
 }
 
 /** parseImportSheet with its parse errors surfaced as 400s (the parser itself stays HTTP-agnostic for its unit tests). */

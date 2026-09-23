@@ -64,6 +64,51 @@ costs, and the conventions for extending it. The short policy version lives in
     failing the batch on) an unmatched campaign/page or an already-submitted URL.
   - `src/modules/admin/service.test.js` — resetting a user's password returns
     a fresh one (never the old hash) and revokes every active refresh token.
+    Also (23 Sep permission audit): role changes go through `updateUserRole`
+    — self-change 403s, promoting to ADMIN / touching an ADMIN row / resetting
+    any FINANCE-or-PLAN_MAKER password / editing an ADMIN's overlay all need a
+    *full* (unrestricted) ADMIN actor, the overlay is nulled and sessions
+    revoked on a role change, every one of these writes a
+    `PermissionAuditLog` row with `action`, and `passwordHash` is never
+    echoed. Grants on CREATOR/TEAM_MEMBER are a 400 `ROLE_NOT_GRANTABLE`
+    (`auth/service.test.js` pins the same for signup, plus that a non-full
+    admin can't create an ADMIN account; `lib/permissions.test.js` covers
+    `isFullAdmin` / `assertGrantableRole`).
+  - `src/lib/permissions.test.js` also covers the 23 Sep key split: the six
+    section-wide keys (`users.manage`, …) became 17 per-action keys
+    (`<section>.view/edit/approve/pay`); `edit`/`approve`/`pay` each imply
+    that section's `view`; `expandLegacyOverlay` maps any six-key value still
+    stored on an old row onto the new keys so nothing needed a data
+    migration; `ROLE_DEFAULTS` per role (ADMIN all, FINANCE
+    view/edit/approve/pay on finance plus read campaigns/inventory/links,
+    PLAN_MAKER inventory.view only); `computeNewAccountOverlay` /
+    `clampPatchToActor` updated for the wider key set.
+  - Step 3 (23 Sep, "permission-scoped reads") — every list/detail endpoint
+    that used to decide "sees everything vs. own rows only" with a bare
+    `["ADMIN","FINANCE",...].includes(role)` check now reads the caller's
+    effective permissions fresh from the DB via the new
+    `lib/effectivePermissions.js` (`server/src/lib/effectivePermissions.test.js`
+    isn't a separate file — it's exercised through each call site below), so
+    restricting or granting a `*.view` key actually changes what comes back,
+    not just whether a write route accepts a request:
+    - `src/modules/invoices/viewScoping.test.js` — `listInvoices` /
+      `getInvoiceDetail` scope by `finance.view`, not role; a Plan Maker's
+      own-plans scope is unaffected by the overlay.
+    - `src/modules/links/service.test.js` — `listLinks` scopes by `links.view`.
+    - `src/modules/campaigns/service.test.js` — `listAssignments` (the
+      attached sheet's per-creator rows) scopes by `campaigns.view`.
+    - `src/modules/assets/service.test.js` — `listAssets` scopes by
+      `inventory.view`; Plan Maker's full-catalogue access stays role-based.
+    - `src/modules/billing/routes.test.js` — `GET /billing` (bank/PAN
+      details) scopes by `finance.view` instead of a bare ADMIN/FINANCE
+      check.
+    - `src/modules/jobs/invoiceAgingSweep.test.js` — the overdue-invoice
+      notification sweep notifies everyone with effective `finance.view`,
+      not everyone with role ADMIN/FINANCE.
+  - `src/lib/mailer.test.js` — OTP emails go out via Resend from
+    `Taggify <noreply@taggify.in>` by default (tasks.md 23 Sep #2),
+    `EMAIL_FROM` overrides, a Resend error is a 502, and no key means
+    console-print in dev / 503 in production.
   - `src/modules/plans/service.test.js` — "Inventory" (newTask.md #13): item
     cost falls back to the page's rate card unless overridden, budget
     variance is positive/negative/null correctly, and a page picked under
@@ -91,6 +136,16 @@ costs, and the conventions for extending it. The short policy version lives in
     GitHub isn't configured, and pushes to a branch that is never `main`.
 - **`client/tests/e2e/`** — Playwright. What's covered so far:
   - `fixtures.ts` — shared test helpers, see below.
+  - `sub-admin-creation.spec.ts` — the People page's access editor
+    (`components/users/access-editor.tsx`, 23 Sep): checking a section
+    expands its per-action checkboxes beneath it with a live "View · Edit …"
+    summary chip, unchecking the section collapses it and clears every
+    action; leaving Admin's editor fully checked sends no `permissions`
+    field at all; the editor is hidden entirely for Creator/Team member and
+    pre-checked at role baseline for Finance/Planner; a restricted
+    sub-admin's role dropdown locks ADMIN rows and disables the Admin option
+    for everyone else, and offers neither "Edit access" on an ADMIN row nor
+    on a Creator row (non-grantable), only "Reset password" on the Creator.
   - `login.spec.ts` — the login form renders, a failed login shows the server's error
     message, an already-signed-in visitor is redirected off `/login`.
   - `plan-client-invoice.spec.ts` — Plans → "Generate invoice" popup: prefilled

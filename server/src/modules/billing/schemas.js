@@ -12,6 +12,19 @@ export const createBillingProfileSchema = z.object({
   ifscCode: z.string().min(4).max(15),
 });
 
+// Edit (user request, 22 Sep — admin "can edit billing details for any
+// profile"): every field optional; a blank optional field clears it.
+export const updateBillingProfileSchema = z
+  .object({
+    pan: panSchema.optional(),
+    name: z.string().trim().min(1).max(150).optional(),
+    gstin: z.string().max(20).nullable().optional(),
+    msme: z.string().max(30).nullable().optional(),
+    bankAccountNumber: z.string().min(4).max(30).optional(),
+    ifscCode: z.string().min(4).max(15).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to update" });
+
 export const approvalSchema = z.object({
   approvalStatus: z.enum(["pending", "approved", "rejected"]),
 });

@@ -1,3 +1,4 @@
+import { gstSplitFor } from "./gstin.js";
 import { buildTaxDocumentPdf, cap, dateStr } from "./taxDocumentPdf.js";
 
 /**
@@ -44,6 +45,10 @@ export function invoiceToDocument(invoice) {
     title: isGst ? "Tax Invoice" : "Invoice",
     isGst,
     gstRate: 18,
+    // Creator in our state → CGST + SGST, elsewhere → IGST, from their
+    // billing profile's GSTIN state code (22 Sep — same rule as the client
+    // invoice, lib/gstin.js). Only the GST heads change; amounts don't.
+    taxSplit: gstSplitFor(bp?.gstin),
     partyLabel: "Billed by (Creator)",
     partyLines: [
       { text: bp?.name || invoice.creator?.name || "Creator", bold: true },

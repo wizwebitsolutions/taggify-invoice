@@ -3,8 +3,10 @@ import { ApiError } from "../../middleware/errorHandler.js";
 import { notify } from "../notifications/service.js";
 import { getApprovedForUser } from "../billing/service.js";
 import { canPlanMakerAccessCampaign, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
+import { phaseRowIds } from "../../lib/campaignPhases.js";
 import { buildInvoiceAttachmentKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
 import { nanoid } from "nanoid";
+import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 
 // A submitted link is invoiceable as-is (user request, 12 Sep — "remove
 // concept of mandatory screenshot before invoice generation"). The
@@ -153,13 +155,23 @@ async function notifyQuietly(userId, type, payload) {
 }
 
 export async function listInvoices(user, filters) {
+  // Fresh from the DB (23 Sep, Step 3) — restricting or granting
+  // finance.view now actually changes what this returns, not just whether
+  // a write route accepts a request.
+  const effective = await loadEffectivePermissions(user.id);
+  const seesAll = effective["finance.view"];
   const where = {};
   // Plan Maker sees the invoices of their own plans' campaigns *plus* any
   // billed to them personally, should they also own pages; every other
-  // non-Admin/Finance role sees only invoices billed to them.
+  // role without finance.view sees only invoices billed to them.
   if (user.role === "PLAN_MAKER") where.OR = [{ campaign: planMakerCampaignWhere(user.id) }, { creatorId: user.id }];
-  else if (!["ADMIN", "FINANCE"].includes(user.role)) where.creatorId = user.id;
-  if (filters.campaignId) where.campaignId = filters.campaignId;
+  else if (!seesAll) where.creatorId = user.id;
+  // A phase's invoices include those raised on its extra posts (22 Sep) —
+  // an invoice for just a page's 2nd reel carries that row's campaignId,
+  // which has no phase tab of its own to be found under.
+  if (filters.campaignId) {
+    where.campaignId = seesAll || user.role === "PLAN_MAKER" ? { in: await phaseRowIds(filters.campaignId) } : filters.campaignId;
+  }
   if (filters.status) where.status = filters.status;
   if (filters.paymentStatus) where.paymentStatus = filters.paymentStatus;
   if (filters.search) where.invoiceNumber = { contains: filters.search, mode: "insensitive" };
@@ -261,9 +273,9 @@ export async function removeAttachment(invoiceId, user) {
 /**
  * Payments are manual — Finance confirms outside the system, then records
  * it here. No gateway/webhook involved. Only an APPROVED invoice can be
- * paid (12 Sep): a creator-raised one needs Admin's approveInvoice first,
- * a campaign-generated one is already APPROVED — so Admin's sign-off is a
- * real gate on the money, not advisory. Rejected invoices are closed.
+ * paid (12 Sep): every invoice is creator-raised (13 Sep) and needs
+ * approveInvoice first, so the sign-off is a real gate on the money, not
+ * advisory. Rejected invoices are closed.
  */
 export async function markPaid(invoiceId, financeUser) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
@@ -275,7 +287,7 @@ export async function markPaid(invoiceId, financeUser) {
     throw new ApiError(
       409,
       "NOT_APPROVED",
-      invoice.status === "RAISED" ? "This invoice needs an admin's approval before it can be marked paid" : `A ${invoice.status.toLowerCase()} invoice can't be marked paid`
+      invoice.status === "RAISED" ? "This invoice needs to be approved before it can be marked paid" : `A ${invoice.status.toLowerCase()} invoice can't be marked paid`
     );
   }
 
@@ -289,14 +301,13 @@ export async function markPaid(invoiceId, financeUser) {
 }
 
 /**
- * Admin signs off a creator-raised invoice (RAISED → APPROVED) — the step
- * that was missing before 12 Sep: APPROVED existed in the enum but nothing
- * ever set it, so Finance was marking RAISED invoices paid with no explicit
- * admin check in between. Finance's mark-paid is unchanged and still accepts a
- * RAISED invoice too, so this is a gate Finance *can* wait on, not one
- * that suddenly blocks payment of everything already in flight.
+ * Sign-off on a creator-raised invoice (RAISED → APPROVED) — the step that
+ * was missing before 12 Sep: APPROVED existed in the enum but nothing ever
+ * set it. markPaid now requires it, so this is the gate on the money. Who
+ * may call it is the route's business (ADMIN / finance.manage, and FINANCE
+ * itself since 23 Sep); `approver` is only recorded on the notification.
  */
-export async function approveInvoice(invoiceId, admin) {
+export async function approveInvoice(invoiceId, approver) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
   if (invoice.status !== "RAISED") {
@@ -304,7 +315,7 @@ export async function approveInvoice(invoiceId, admin) {
   }
 
   const updated = await prisma.invoice.update({ where: { id: invoiceId }, data: { status: "APPROVED" } });
-  await notifyQuietly(invoice.creatorId, "invoice_approved", { invoiceId, approvedById: admin.id });
+  await notifyQuietly(invoice.creatorId, "invoice_approved", { invoiceId, approvedById: approver.id });
   return updated;
 }
 
@@ -394,8 +405,10 @@ export async function getInvoiceDetail(invoiceId, user) {
     },
   });
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+  // Fresh from the DB (23 Sep, Step 3) — same finance.view check as the list.
+  const effective = await loadEffectivePermissions(user.id);
   const visible =
-    ["ADMIN", "FINANCE"].includes(user.role) ||
+    effective["finance.view"] ||
     invoice.creatorId === user.id ||
     (user.role === "PLAN_MAKER" && invoice.campaignId && (await canPlanMakerAccessCampaign(user.id, invoice.campaignId)));
   if (!visible) {

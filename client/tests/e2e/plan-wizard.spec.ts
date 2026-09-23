@@ -3,15 +3,18 @@ import { test, expect, type Page } from "@playwright/test";
 import { signIn, mockApi, API_URL } from "./fixtures";
 
 /**
- * The plan wizard, reshaped per the user request of 14 Sep:
- *  - Step 1 "Client & brief": no GST toggle, no budget; the brief is mandatory.
+ * The plan wizard, reshaped per the user request of 14 Sep, GST moved 23 Sep:
+ *  - Step 1 "Client & brief": no GST, no budget; the brief is mandatory.
  *  - Step 2 "Budget & pages": budget first, then pages within it (hard cap),
  *    page names link to Instagram, posts per page → phases hint.
  *  - Step 3 "Pricing": impressions + read-only internal cost per page; the
  *    *overall* client total and expected impressions are the editable numbers
- *    (overrideCost/overrideImpressions — "not single page", 14 Sep). No margin %.
- *  - Step 4 "Preview & sheet": preview (one flat page list, not per category)
- *    + generate sheets only — no client details, no execution sheet, no Plan B.
+ *    (overrideCost/overrideImpressions — "not single page", 14 Sep), plus GST %
+ *    (user request, 23 Sep — "gst input will be filled on pricing section",
+ *    moved off Step 1) with a live GST amount / total-incl.-GST preview. No margin %.
+ *  - Step 4 "Preview & sheet": preview (one flat page list, not per category),
+ *    generate sheets, and "Add another plan" (Plan B, C… — 23 Sep) — no
+ *    client details, no execution sheet.
  * Server side (hard cap, mandatory brief, reel/story, phases on approval) is
  * covered by vitest in server/src/modules/plans.
  */
@@ -29,6 +32,7 @@ function mockPlan(overrides: Record<string, unknown> = {}) {
     clientInvoiceAt: null,
     notes: "Launch week push",
     budget: null,
+    gstPercent: null,
     isGstPlan: false,
     status: "DRAFT",
     approvedBy: null,
@@ -89,10 +93,10 @@ async function mockPlanRoutes(page: Page, { assets = [] as unknown[] } = {}) {
 }
 
 async function fillStep1(page: Page) {
-  await page.goto("/plans");
+  await page.goto("/plans?maker=all");
   await page.getByRole("button", { name: "New plan" }).click();
   await page.getByRole("textbox", { name: "Plan name" }).fill("Q1 Push");
-  await page.getByRole("textbox", { name: "Client name" }).fill("Acme");
+  await page.getByRole("combobox", { name: "Client name" }).fill("Acme");
   await page.getByRole("textbox", { name: "Brief" }).fill("Launch week push");
   await page.getByRole("button", { name: "Next: Budget & pages" }).click();
 }
@@ -100,7 +104,7 @@ async function fillStep1(page: Page) {
 test.describe("Plan wizard — Step 1 (Client & brief)", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
-  test("no GST toggle, no budget, no client details; the brief is mandatory and is what gets posted", async ({ page }) => {
+  test("no budget, no client details, no GST field; the brief is what makes Next enabled", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await mockPlanRoutes(page);
@@ -111,23 +115,24 @@ test.describe("Plan wizard — Step 1 (Client & brief)", () => {
       return route.fulfill({ status: 201, json: mockPlan(created) });
     });
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     await page.getByRole("button", { name: "New plan" }).click();
     await expect(page.getByRole("heading", { name: "New plan" })).toBeVisible();
-    await expect(page.getByText("Add 18% GST on top of the client cost")).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "Budget" })).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "Company name" })).toHaveCount(0);
+    // GST moved to Step 3 (23 Sep) — not on this step at all.
+    await expect(page.getByRole("textbox", { name: "GST percent" })).toHaveCount(0);
 
     const next = page.getByRole("button", { name: "Next: Budget & pages" });
     await page.getByRole("textbox", { name: "Plan name" }).fill("Q1 Push");
-    await page.getByRole("textbox", { name: "Client name" }).fill("Acme");
+    await page.getByRole("combobox", { name: "Client name" }).fill("Acme");
     await expect(next).toBeDisabled(); // brief still empty
     await page.getByRole("textbox", { name: "Brief" }).fill("  Launch week push ");
     await expect(next).toBeEnabled();
     await next.click();
 
     await expect.poll(() => created).toMatchObject({ name: "Q1 Push", clientName: "Acme", notes: "Launch week push" });
-    expect(created).not.toHaveProperty("isGstPlan");
+    expect(created).not.toHaveProperty("gstPercent");
     expect(created).not.toHaveProperty("budget");
     await expect(page.getByTestId("budget-card")).toBeVisible();
   });
@@ -135,6 +140,17 @@ test.describe("Plan wizard — Step 1 (Client & brief)", () => {
 
 test.describe("Plan wizard — Step 2 (Budget & pages) hard cap", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("the budget field is labelled 'Internal budget' (23 Sep — it was always our own cost cap, never the client's)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPlanRoutes(page);
+
+    await fillStep1(page);
+
+    await expect(page.getByText("Internal budget", { exact: true })).toBeVisible();
+    await expect(page.getByText("Client budget")).toHaveCount(0);
+  });
 
   test("pages can't be picked until a budget is set, then only up to it; the budget-left bar and Next follow", async ({ page }) => {
     await signIn(page, "ADMIN");
@@ -280,11 +296,68 @@ test.describe("Plan wizard — Step 3 (Pricing) and Step 4 (Preview & sheet)", (
     await expect(page.getByRole("textbox", { name: /company name/i })).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: /GST number/i })).toHaveCount(0);
     await expect(page.getByText("Execution sheet")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add Plan B" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add another plan" })).toBeVisible(); // Plan B, C… (23 Sep)
     await expect(page.getByText("Client sheet").locator("..").getByRole("button", { name: "Generate" })).toBeVisible();
   });
 
-  test("a saved override is loaded back into the fields and blank sends null (clears it)", async ({ page }) => {
+  test("Budget shows in the Internal section, above Our cost — not under Client side (23 Sep)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 8000, 3000)] });
+
+    await fillStep1(page);
+    await page.getByRole("textbox", { name: "Budget" }).fill("10000");
+    await page.getByLabel("Select @big.page").check();
+    await page.getByRole("button", { name: "Next: Pricing" }).click();
+
+    const text = (await page.getByTestId("price-totals").innerText()).replace(/\s+/g, " ");
+    const clientSideIdx = text.indexOf("Client side");
+    const internalIdx = text.indexOf("Internal");
+    const budgetIdx = text.indexOf("Budget");
+    const ourCostIdx = text.indexOf("Our cost");
+
+    expect(clientSideIdx).toBeGreaterThanOrEqual(0);
+    expect(internalIdx).toBeGreaterThan(clientSideIdx);
+    expect(budgetIdx).toBeGreaterThan(internalIdx); // after the "Internal" heading, not under "Client side"
+    expect(budgetIdx).toBeLessThan(ourCostIdx); // and right above "Our cost"
+    expect(text).toContain("₹10,000"); // the budget value itself
+  });
+
+  test("GST %: lives on Step 3, previews the GST amount and total live, and is saved with the pricing", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 8000, 3000, 250000)] });
+    let saved: Record<string, unknown> | undefined;
+    await page.route(`${API_URL}/plans/plan-1`, (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      saved = route.request().postDataJSON();
+      return route.fulfill({ json: mockPlan({ ...saved, items: [{ assetId: "a1", format: "reel", cost: "8000", clientCost: null, postsPerProfile: 1, asset: { handle: "big.page", followers: 900000, category: "Meme page" } }] }) });
+    });
+
+    await fillStep1(page);
+    await page.getByRole("textbox", { name: "Budget" }).fill("10000");
+    await page.getByLabel("Select @big.page").check();
+    await page.getByRole("button", { name: "Next: Pricing" }).click();
+
+    const totals = page.getByTestId("price-totals");
+    const gst = page.getByLabel("GST percent");
+    await expect(gst).toBeVisible();
+    // No GST line until a percent is entered.
+    await expect(totals).not.toContainText("Total incl. GST");
+
+    await gst.fill("18");
+    // Quoted (computed) is ₹8,000 → 18% = ₹1,440, total ₹9,440.
+    await expect(totals).toContainText("GST (18%)");
+    await expect(totals).toContainText("₹1,440");
+    await expect(totals).toContainText("Total incl. GST");
+    await expect(totals).toContainText("₹9,440");
+
+    await page.getByRole("button", { name: "Next: Preview" }).click();
+    await expect.poll(() => saved).toBeTruthy();
+    expect(saved?.gstPercent).toBe(18);
+  });
+
+    test("a saved override is loaded back into the fields and blank sends null (clears it)", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 8000, 3000, 250000)] });
@@ -298,24 +371,68 @@ test.describe("Plan wizard — Step 3 (Pricing) and Step 4 (Preview & sheet)", (
       budget: 10000,
       overrideCost: "9500.00",
       overrideImpressions: 300000,
+      gstPercent: 12,
       // A legacy per-page markup (clientCost) is ignored and wiped on save.
       items: [{ assetId: "a1", format: "reel", cost: "8000", clientCost: "8800", postsPerProfile: 1, asset: { handle: "big.page", followers: 900000, category: "Meme page" } }],
     });
     await page.route(`${API_URL}/plans`, (route) => (route.request().method() === "GET" ? route.fulfill({ json: [withOverride] }) : route.fallback()));
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     await page.getByRole("button", { name: "Edit Q1 Push" }).click();
     await page.getByRole("button", { name: "Next: Budget & pages" }).click();
     await page.getByRole("button", { name: "Next: Pricing" }).click();
     await expect(page.getByLabel("Total cost to client")).toHaveValue("9,500");
     await expect(page.getByLabel("Expected impressions")).toHaveValue("300000");
+    await expect(page.getByLabel("GST percent")).toHaveValue("12");
     await expect(page.getByTestId("price-totals")).toContainText("computed ₹8,000"); // the line's cost, not its legacy clientCost
     await page.getByLabel("Total cost to client").fill("");
+    await page.getByLabel("GST percent").fill("");
     await page.getByRole("button", { name: "Next: Preview" }).click();
     await expect.poll(() => saved).toBeTruthy();
     expect(saved?.overrideCost).toBeNull();
     expect(saved?.overrideImpressions).toBe(300000);
+    expect(saved?.gstPercent).toBeNull();
     expect((saved?.items as Record<string, unknown>[])[0]).not.toHaveProperty("clientCost");
+  });
+
+  test("Add another plan (23 Sep): creates Plan B, reopens at Budget & pages with an empty budget/pages, and saves onto the new plan", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 8000, 3000)] });
+    const planB = mockPlan({ id: "plan-2", variantLabel: "Plan B", pitchGroupId: "plan-1", gstPercent: 18, budget: null, items: [] });
+    let variantCalled = false;
+    await page.route(`${API_URL}/plans/plan-1/variant`, (route) => {
+      variantCalled = true;
+      return route.fulfill({ status: 201, json: planB });
+    });
+    let savedB: Record<string, unknown> | undefined;
+    await page.route(`${API_URL}/plans/plan-2`, (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      savedB = route.request().postDataJSON();
+      return route.fulfill({ json: { ...planB, ...savedB, items: [] } });
+    });
+
+    await fillStep1(page);
+    await page.getByRole("textbox", { name: "Budget" }).fill("10000");
+    await page.getByLabel("Select @big.page").check();
+    await page.getByRole("button", { name: "Next: Pricing" }).click();
+    await page.getByRole("button", { name: "Next: Preview" }).click();
+
+    await page.getByRole("button", { name: "Add another plan" }).click();
+    await expect.poll(() => variantCalled).toBe(true);
+
+    // Straight to Step 2 of Plan B — client details carried over, budget/pages fresh.
+    await expect(page.getByRole("heading", { name: "Q1 Push · Plan B" })).toBeVisible();
+    await expect(page.getByTestId("budget-card")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Budget" })).toHaveValue("");
+    await expect(page.getByLabel("Select @big.page")).not.toBeChecked();
+
+    await page.getByRole("textbox", { name: "Budget" }).fill("20000");
+    await page.getByLabel("Select @big.page").check();
+    await page.getByRole("button", { name: "Next: Pricing" }).click();
+    await expect.poll(() => savedB).toBeTruthy();
+    expect(savedB?.budget).toBe(20000);
+    expect(savedB?.gstPercent).toBe(18); // carried over from Plan A
   });
 
   test("Generate shows the sheet link; a server error shows inline", async ({ page }) => {

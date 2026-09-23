@@ -5,6 +5,7 @@ import { validateBody } from "../../middleware/validate.js";
 import { createAssetSchema, updateRateCardSchema, importAssetsSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import * as assetsService from "./service.js";
+import { buildImportPagesTemplate } from "../../lib/importPagesTemplate.js";
 
 const router = Router();
 
@@ -53,7 +54,7 @@ router.get("/", async (req, res, next) => {
 // CREATOR is a bare role here — adding their own page is unaffected by
 // the overlay either way; ADMIN (or any other role granted inventory.manage)
 // goes through the permission check.
-router.post("/", requireAccess("inventory.manage", "CREATOR"), validateBody(createAssetSchema), async (req, res, next) => {
+router.post("/", requireAccess("inventory.edit", "CREATOR"), validateBody(createAssetSchema), async (req, res, next) => {
   try {
     res.status(201).json(await assetsService.createAsset(req.user, req.body));
   } catch (err) {
@@ -61,7 +62,7 @@ router.post("/", requireAccess("inventory.manage", "CREATOR"), validateBody(crea
   }
 });
 
-router.put("/:id/approval", requireAccess("inventory.manage"), validateBody(setApprovalSchema), async (req, res, next) => {
+router.put("/:id/approval", requireAccess("inventory.approve"), validateBody(setApprovalSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.setApprovalStatus(req.params.id, req.body.approvalStatus));
   } catch (err) {
@@ -71,7 +72,7 @@ router.put("/:id/approval", requireAccess("inventory.manage"), validateBody(setA
 
 // Bulk refresh for a selection (user request, 14 Sep) — queues background
 // scrapes and returns at once; rows poll while scrapeQueuedAt is set.
-router.post("/refresh-profiles", requireAccess("inventory.manage"), validateBody(refreshProfilesSchema), async (req, res, next) => {
+router.post("/refresh-profiles", requireAccess("inventory.edit"), validateBody(refreshProfilesSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.queueProfileRefresh(req.body.assetIds));
   } catch (err) {
@@ -79,7 +80,7 @@ router.post("/refresh-profiles", requireAccess("inventory.manage"), validateBody
   }
 });
 
-router.post("/:id/refresh-profile", requireAccess("inventory.manage"), async (req, res, next) => {
+router.post("/:id/refresh-profile", requireAccess("inventory.edit"), async (req, res, next) => {
   try {
     res.json(await assetsService.refreshProfile(req.params.id));
   } catch (err) {
@@ -89,7 +90,7 @@ router.post("/:id/refresh-profile", requireAccess("inventory.manage"), async (re
 
 router.put(
   "/:id/rate-card",
-  requireAccess("inventory.manage"),
+  requireAccess("inventory.edit"),
   validateBody(updateRateCardSchema),
   async (req, res, next) => {
     try {
@@ -106,9 +107,23 @@ router.put(
 // modal's account picker and the import preview's fallback picker). Gated
 // on inventory.manage rather than users.manage, since a sub-admin allowed
 // to manage Inventory needs it even without access to the Users page.
-router.get("/owners", requireAccess("inventory.manage"), async (req, res, next) => {
+router.get("/owners", requireAccess("inventory.edit"), async (req, res, next) => {
   try {
     res.json(await assetsService.listPageOwners());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// "Download template" in the Import pages popup (22 Sep) — the exact
+// columns the importer reads, with two example rows.
+router.get("/import/template.xlsx", requireAccess("inventory.edit"), async (req, res, next) => {
+  try {
+    const buffer = await buildImportPagesTemplate();
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="import-pages-template.xlsx"');
+    res.setHeader("Content-Length", buffer.length);
+    res.send(buffer);
   } catch (err) {
     next(err);
   }
@@ -119,7 +134,7 @@ router.get("/owners", requireAccess("inventory.manage"), async (req, res, next) 
 // X-File-Name), get parsed and resolved against real accounts/pages, and
 // the resulting per-row preview goes back. Nothing is written here.
 const rawFileBody = express.raw({ type: () => true, limit: MAX_IMPORT_FILE_BYTES });
-router.post("/import/preview", requireAccess("inventory.manage"), (req, res, next) => {
+router.post("/import/preview", requireAccess("inventory.edit"), (req, res, next) => {
   rawFileBody(req, res, (err) => {
     if (!err) return next();
     if (err.type === "entity.too.large") return next(new ApiError(413, "FILE_TOO_LARGE", "That file is over 5 MB — export just the pages sheet and try again."));
@@ -145,7 +160,7 @@ router.post("/import/preview", requireAccess("inventory.manage"), (req, res, nex
 
 // Step 1, Google Sheet flavour (user request, 14 Sep): a pasted share link
 // instead of a file — fetched server-side as CSV, then the same preview.
-router.post("/import/preview-url", requireAccess("inventory.manage"), validateBody(importSheetUrlSchema), async (req, res, next) => {
+router.post("/import/preview-url", requireAccess("inventory.edit"), validateBody(importSheetUrlSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.previewImportFromSheetUrl(req.body.url));
   } catch (err) {
@@ -156,7 +171,7 @@ router.post("/import/preview-url", requireAccess("inventory.manage"), validateBo
 // Step 1½: live follower counts / avg views for the previewed handles, one
 // Apify run for the batch (user request, 14 Sep). Slow-ish (a minute or
 // so) and optional — the modal shows the rows first and fills these in.
-router.post("/import/followers", requireAccess("inventory.manage"), validateBody(importFollowersSchema), async (req, res, next) => {
+router.post("/import/followers", requireAccess("inventory.edit"), validateBody(importFollowersSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.fetchImportFollowers(req.body.handles));
   } catch (err) {
@@ -166,7 +181,7 @@ router.post("/import/followers", requireAccess("inventory.manage"), validateBody
 
 // Step 2: create the rows the admin confirmed (each with the account it
 // should sit under). Re-validated server-side — see importAssets.
-router.post("/import", requireAccess("inventory.manage"), validateBody(importAssetsSchema), async (req, res, next) => {
+router.post("/import", requireAccess("inventory.edit"), validateBody(importAssetsSchema), async (req, res, next) => {
   try {
     res.status(201).json(await assetsService.importAssets(req.user, req.body.rows));
   } catch (err) {

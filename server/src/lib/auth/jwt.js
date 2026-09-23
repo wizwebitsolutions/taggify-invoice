@@ -13,7 +13,9 @@ export function signAccessToken(user) {
 }
 
 export function verifyAccessToken(token) {
-  return jwt.verify(token, ACCESS_SECRET);
+  const payload = jwt.verify(token, ACCESS_SECRET);
+  if (payload.typ) throw new Error("not an access token");
+  return payload;
 }
 
 // Refresh tokens are opaque-ish JWTs too, but we also persist a hash of them
@@ -26,6 +28,22 @@ export function signRefreshToken(user) {
 
 export function verifyRefreshToken(token) {
   return jwt.verify(token, REFRESH_SECRET);
+}
+
+// Short-lived proof that the password step passed (email 2FA, 21 Sep) —
+// handed to the client between login and the OTP step. `purpose` is
+// "login-otp" or "email-setup", checked on verify so one can't be replayed
+// as the other. Shares ACCESS_SECRET, so verifyAccessToken above explicitly
+// rejects anything carrying `typ` — a challenge token must never pass
+// requireAuth as a session.
+export function signChallengeToken(user, purpose) {
+  return jwt.sign({ sub: user.id, typ: "challenge", purpose }, ACCESS_SECRET, { expiresIn: "15m" });
+}
+
+export function verifyChallengeToken(token, purpose) {
+  const payload = jwt.verify(token, ACCESS_SECRET);
+  if (payload.typ !== "challenge" || payload.purpose !== purpose) throw new Error("wrong token type");
+  return payload;
 }
 
 export function hashToken(token) {

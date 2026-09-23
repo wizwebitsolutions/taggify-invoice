@@ -10,6 +10,7 @@ const mockPrisma = {
   invoiceItem: { deleteMany: vi.fn() },
   linkStatusEvent: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
   campaign: { findFirst: vi.fn() },
+  user: { findUnique: vi.fn() },
   $transaction: vi.fn(async (cb) => cb(mockPrisma)),
 };
 
@@ -48,6 +49,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.$transaction.mockImplementation(async (cb) => cb(mockPrisma));
   mockPrisma.invoice.create.mockImplementation(async ({ data }) => ({ ...data, id: "invoice-1", items: [] }));
+  // finance.view scoping (23 Sep, Step 3) is read fresh from the DB —
+  // derive a plausible role from this file's id fixtures (admin-*/fin-*/
+  // creator-*) so existing calls work without every test stubbing this.
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    role: where.id?.startsWith("admin") ? "ADMIN" : where.id?.startsWith("fin") ? "FINANCE" : where.id?.startsWith("pm") ? "PLAN_MAKER" : "CREATOR",
+    permissions: null,
+  }));
 });
 
 describe("bulkCreateInvoice — eligibility (screenshot and insights are both optional proof, user request 12 Sep)", () => {
@@ -257,7 +265,7 @@ describe("markPaid — only an APPROVED invoice can be paid (12 Sep: admin sign-
   it("refuses a RAISED invoice with a message pointing at approval", async () => {
     mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "RAISED", creatorId: "creator-1" });
 
-    await expect(markPaid("inv-1", finance)).rejects.toMatchObject({ code: "NOT_APPROVED", message: expect.stringContaining("approval") });
+    await expect(markPaid("inv-1", finance)).rejects.toMatchObject({ code: "NOT_APPROVED", message: expect.stringContaining("approved") });
     expect(mockPrisma.invoice.update).not.toHaveBeenCalled();
   });
 

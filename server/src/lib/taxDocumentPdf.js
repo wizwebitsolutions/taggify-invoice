@@ -14,7 +14,7 @@ import { amountInWords } from "./amountInWords.js";
  *
  * Model shape:
  *  {
- *    title, isGst, gstRate,
+ *    title, isGst, gstRate, taxSplit?: "IGST" | "CGST_SGST",
  *    partyLabel, partyLines: [{ text, bold? }],
  *    detailRows: [[label, value]],
  *    rows: [{ description, quantity, rate, amount }],
@@ -77,12 +77,31 @@ function line(doc, text, x, y, width, { align = "left" } = {}) {
   doc.text(fit(doc, text, width), x, y, { width, align, lineBreak: false });
 }
 
+/**
+ * The GST heads a document prints, from `model.taxSplit`: "CGST_SGST"
+ * (supplier and recipient in the same state) halves the rate and the
+ * amount; anything else is one IGST line, as every document was before the
+ * split existed. SGST takes what's left after CGST's rounding, so the two
+ * always add back to gstAmount to the paisa.
+ */
+export function taxHeads(model) {
+  const rate = model.gstRate ?? 18;
+  const amount = Number(model.gstAmount);
+  if (model.taxSplit !== "CGST_SGST") return [{ label: "IGST", rate, amount }];
+  const cgst = Math.round((amount / 2) * 100) / 100;
+  return [
+    { label: "CGST", rate: rate / 2, amount: cgst },
+    { label: "SGST", rate: rate / 2, amount: Math.round((amount - cgst) * 100) / 100 },
+  ];
+}
+
 function renderTaxDocument(doc, model) {
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const W = right - left;
   const isGst = Boolean(model.isGst);
   const gstRate = isGst ? model.gstRate ?? 18 : 0;
+  const hsnSac = model.hsnSac || COMPANY.sac;
   let y = doc.page.margins.top;
 
   // ── Title band ─────────────────────────────────────────────────
@@ -143,13 +162,14 @@ function renderTaxDocument(doc, model) {
 
   // ── Items table ─────────────────────────────────────────────────
   const cols = [
-    { label: "Sl\nNo.", w: 0.055, align: "center" },
-    { label: "Description of Services", w: 0.395, align: "left" },
+    { label: "Sl\nNo.", w: 0.05, align: "center" },
+    { label: "Description of Goods/Services", w: 0.32, align: "left" },
+    { label: "HSN/SAC", w: 0.1, align: "center" },
     { label: "GST\nRate", w: 0.07, align: "center" },
-    { label: "Quantity", w: 0.09, align: "center" },
+    { label: "Quantity", w: 0.08, align: "center" },
     { label: "Rate", w: 0.12, align: "right" },
-    { label: "per", w: 0.06, align: "center" },
-    { label: "Amount", w: 0.21, align: "right" },
+    { label: "per", w: 0.07, align: "center" },
+    { label: "Amount", w: 0.19, align: "right" },
   ].map((c) => ({ ...c, w: c.w * W }));
   const xs = [];
   let x = left;
@@ -166,14 +186,23 @@ function renderTaxDocument(doc, model) {
     });
     y += headH;
   };
-  const drawRow = (cells, { bold = false, h = 15, fill = null } = {}) => {
+  // The description (col 1) is the one cell allowed to wrap — a typed
+  // "Description of goods/service" is a sentence, not a label — so an item
+  // row grows to fit it instead of trimming it to an ellipsis.
+  const DESC = 1;
+  const descHeight = (text) => {
+    doc.font("Helvetica").fontSize(8.5);
+    return doc.heightOfString(String(text ?? ""), { width: cols[DESC].w - 6 });
+  };
+  const drawRow = (cells, { bold = false, h = 15, fill = null, wrapDesc = false } = {}) => {
     if (fill) doc.rect(left, y, W, h).fill(fill);
     cols.forEach((c, i) => {
       doc.moveTo(xs[i], y).lineTo(xs[i], y + h).lineWidth(0.6).strokeColor(RULE).stroke();
       const v = cells[i];
       if (v == null || v === "") return;
       doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(8.5).fillColor(INK);
-      line(doc, v, xs[i] + 3, y + 4, c.w - 6, { align: c.align });
+      if (wrapDesc && i === DESC) doc.text(String(v), xs[i] + 3, y + 4, { width: c.w - 6, align: c.align });
+      else line(doc, v, xs[i] + 3, y + 4, c.w - 6, { align: c.align });
     });
     doc.moveTo(right, y).lineTo(right, y + h).stroke();
     y += h;
@@ -186,17 +215,22 @@ function renderTaxDocument(doc, model) {
       y = doc.page.margins.top;
       drawTableHead();
     }
-    drawRow([i + 1, row.description, `${gstRate} %`, row.quantity ?? 1, num2(row.rate), "Nos", num2(row.amount)]);
+    drawRow([i + 1, row.description, hsnSac, `${gstRate} %`, row.quantity ?? 1, num2(row.rate), "Nos", num2(row.amount)], {
+      h: Math.max(15, descHeight(row.description) + 8),
+      wrapDesc: true,
+    });
   });
   drawRow([]);
-  if (isGst) drawRow(["", "", "", "", "", "IGST", num2(model.gstAmount)], { bold: true });
-  drawRow(["", "", "", "", "", "Total", num2(model.total)], { bold: true, h: 17 });
+  const heads = isGst ? taxHeads(model) : [];
+  for (const head of heads) drawRow(["", "", "", "", "", "", head.label, num2(head.amount)], { bold: true });
+  drawRow(["", "", "", "", "", "", "Total", num2(model.total)], { bold: true, h: 17 });
   doc.moveTo(left, y).lineTo(right, y).lineWidth(0.8).strokeColor(RULE).stroke();
   y += 14;
 
   // ── HSN/SAC summary (GST documents) ─────────────────────────────
   if (isGst) {
-    const sw = [0.3, 0.25, 0.15, 0.15, 0.15].map((f) => f * W);
+    // A rate + amount column pair per tax head: one pair for IGST, two for CGST + SGST.
+    const sw = (heads.length > 1 ? [0.16, 0.2, 0.11, 0.15, 0.11, 0.15, 0.12] : [0.3, 0.25, 0.15, 0.15, 0.15]).map((f) => f * W);
     const sx = [];
     let xx = left;
     for (const w of sw) {
@@ -216,9 +250,9 @@ function renderTaxDocument(doc, model) {
     doc.rect(left, y, W, 14).fillAndStroke(BAND_BG, RULE);
     doc.font("Helvetica-Bold").fontSize(8).fillColor(INK).text("HSN/SAC Summary", left, y + 3.5, { width: W, align: "center" });
     y += 14;
-    srow(["HSN/SAC", "Taxable Value", "IGST Rate", "IGST Amount", "Total Tax"], { bold: true, fill: BAND_BG });
-    srow([COMPANY.sac, num2(model.subtotal), `${gstRate}%`, num2(model.gstAmount), num2(model.gstAmount)]);
-    srow(["Total", num2(model.subtotal), "", num2(model.gstAmount), num2(model.gstAmount)], { bold: true });
+    srow(["HSN/SAC", "Taxable Value", ...heads.flatMap((h) => [`${h.label} Rate`, `${h.label} Amount`]), "Total Tax"], { bold: true, fill: BAND_BG });
+    srow([hsnSac, num2(model.subtotal), ...heads.flatMap((h) => [`${h.rate}%`, num2(h.amount)]), num2(model.gstAmount)]);
+    srow(["Total", num2(model.subtotal), ...heads.flatMap((h) => ["", num2(h.amount)]), num2(model.gstAmount)], { bold: true });
   }
   doc.rect(left, y, W, 15).lineWidth(0.6).strokeColor(RULE).stroke();
   doc.font("Helvetica-BoldOblique").fontSize(8.5).fillColor(INK);

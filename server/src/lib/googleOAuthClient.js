@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 
 import { prisma } from "./prisma.js";
+import { ApiError } from "../middleware/errorHandler.js";
 
 /**
  * OAuth-as-the-admin flow for per-plan Google Sheets (user request, 10 Sep
@@ -57,8 +58,13 @@ export function buildAuthorizeUrl() {
   return `${AUTH_URL}?${params.toString()}`;
 }
 
+// The purpose check matters: other JWTs share this secret (access tokens,
+// and since email 2FA the login challenge tokens anyone with just a
+// password can obtain) — a bare signature check would accept any of them
+// as a valid OAuth state.
 export function verifyState(state) {
-  jwt.verify(state, process.env.JWT_ACCESS_SECRET);
+  const payload = jwt.verify(state, process.env.JWT_ACCESS_SECRET);
+  if (payload?.purpose !== "google-oauth") throw new Error("not an OAuth state token");
 }
 
 export async function exchangeCodeForTokens(code) {
@@ -116,8 +122,31 @@ export async function getUserAccessToken() {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Google OAuth token refresh failed: ${res.status} ${await res.text()}`);
+    const text = await res.text();
+    // "invalid_grant" = Google revoked/expired the stored refresh token (a
+    // consent screen still in Testing mode expires them after 7 days; a
+    // password change or a manual revoke does too). Not a server fault, so
+    // not a 500 "Something went wrong" (user report, 22 Sep) — a 503 that
+    // names the fix, which the client turns into a Reconnect Google button.
+    // The dead token is left in place; reconnecting overwrites it.
+    if (/invalid_grant/.test(text)) {
+      throw new ApiError(
+        503,
+        "GOOGLE_RECONNECT_REQUIRED",
+        "The connected Google account's access has expired or been revoked — an admin needs to reconnect it (Plans → Reconnect Google)."
+      );
+    }
+    throw new ApiError(502, "GOOGLE_TOKEN_REFRESH_FAILED", `Google didn't issue an access token (${res.status}) — try again in a moment.`);
   }
   const { access_token } = await res.json();
   return access_token;
+}
+
+/** Whether the stored refresh token still works — for the connection status endpoint. */
+export async function isGoogleConnectionHealthy() {
+  try {
+    return Boolean(await getUserAccessToken());
+  } catch {
+    return false;
+  }
 }

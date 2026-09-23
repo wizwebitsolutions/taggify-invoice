@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockPrisma = {
   invoice: { findMany: vi.fn() },
   link: { findMany: vi.fn() },
+  clientInvoice: { findMany: vi.fn() },
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
@@ -29,6 +30,7 @@ beforeEach(() => {
 
   mockPrisma.invoice.findMany.mockResolvedValue([]);
   mockPrisma.link.findMany.mockResolvedValue([]);
+  mockPrisma.clientInvoice.findMany.mockResolvedValue([]);
   mockGetAccessToken.mockResolvedValue("access-token");
   mockEnsureTabs.mockResolvedValue(undefined);
   mockWriteTab.mockResolvedValue(undefined);
@@ -58,14 +60,15 @@ describe("financeGoogleSheetExportJob — newTask.md, 8 Sep", () => {
     });
   });
 
-  it("ensures all three tabs exist, then writes each one, in Invoices/Links/Summary order", async () => {
+  it("ensures all four tabs exist, then writes each one, in Invoices/Links/Client invoices/Summary order", async () => {
     await financeGoogleSheetExportJob();
 
-    expect(mockEnsureTabs).toHaveBeenCalledWith({ accessToken: "access-token", spreadsheetId: "sheet-123", titles: ["Invoices", "Links", "Summary"] });
-    expect(mockWriteTab).toHaveBeenCalledTimes(3);
+    expect(mockEnsureTabs).toHaveBeenCalledWith({ accessToken: "access-token", spreadsheetId: "sheet-123", titles: ["Invoices", "Links", "Client invoices", "Summary"] });
+    expect(mockWriteTab).toHaveBeenCalledTimes(4);
     expect(mockWriteTab.mock.calls[0][0]).toMatchObject({ title: "Invoices" });
     expect(mockWriteTab.mock.calls[1][0]).toMatchObject({ title: "Links" });
-    expect(mockWriteTab.mock.calls[2][0]).toMatchObject({ title: "Summary" });
+    expect(mockWriteTab.mock.calls[2][0]).toMatchObject({ title: "Client invoices" });
+    expect(mockWriteTab.mock.calls[3][0]).toMatchObject({ title: "Summary" });
   });
 
   it("writes a header row plus one row per invoice/link, in the same column order as the Excel export", async () => {
@@ -74,6 +77,10 @@ describe("financeGoogleSheetExportJob — newTask.md, 8 Sep", () => {
     ]);
     mockPrisma.link.findMany.mockResolvedValue([
       { campaign: { title: "Launch Week" }, asset: { handle: "demo.page" }, submittedBy: { name: "Demo Creator" }, format: "reel", cost: 5000, status: "INVOICED", invoiceItem: { id: "i1" }, postedAt: null, createdAt: new Date("2026-08-18") },
+    ]);
+
+    mockPrisma.clientInvoice.findMany.mockResolvedValue([
+      { invoiceNumber: "PI-0001", plan: { name: "Q1 Push", clientName: "Rohit", clientCompany: "Acme Foods Pvt Ltd", campaign: { title: "Q1 Push" } }, subtotal: 10000, gstPercent: 18, gstAmount: 1800, total: 11800, status: "PAID", issuedAt: new Date("2026-09-20"), paidAt: new Date("2026-09-22"), paidAmount: 11800 },
     ]);
 
     await financeGoogleSheetExportJob();
@@ -86,9 +93,14 @@ describe("financeGoogleSheetExportJob — newTask.md, 8 Sep", () => {
     expect(linkRows[0]).toEqual(["Campaign", "Page", "Creator", "Format", "Cost", "Status", "Invoiced", "Posted At", "Created At"]);
     expect(linkRows[1]).toEqual(["Launch Week", "@demo.page", "Demo Creator", "reel", 5000, "INVOICED", "Yes", "", "2026-08-18"]);
 
-    const summaryRows = mockWriteTab.mock.calls[2][0].rows;
+    const clientRows = mockWriteTab.mock.calls[2][0].rows;
+    expect(clientRows[0]).toEqual(["Invoice #", "Client", "Plan", "Campaign", "Subtotal", "GST %", "GST Amount", "Total", "Status", "Issued At", "Paid At", "Paid Amount"]);
+    expect(clientRows[1]).toEqual(["PI-0001", "Acme Foods Pvt Ltd", "Q1 Push", "Q1 Push", 10000, 18, 1800, 11800, "PAID", "2026-09-20", "2026-09-22", 11800]);
+
+    const summaryRows = mockWriteTab.mock.calls[3][0].rows;
     expect(summaryRows[0]).toEqual(["Metric", "Value"]);
     expect(summaryRows.find((r) => r[0] === "Total invoiced amount")[1]).toBe(11800);
+    expect(summaryRows.find((r) => r[0] === "Total collected from clients")[1]).toBe(11800);
   });
 
   it("returns a link back to the spreadsheet", async () => {

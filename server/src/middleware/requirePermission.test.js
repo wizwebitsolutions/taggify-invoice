@@ -20,7 +20,7 @@ describe("requirePermission — sub-admin overlay guard", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    await requirePermission("plans.manage")(req, res, next);
+    await requirePermission("plans.edit")(req, res, next);
 
     expect(next).toHaveBeenCalledWith();
     expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
@@ -32,18 +32,18 @@ describe("requirePermission — sub-admin overlay guard", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    await requirePermission("campaigns.manage")(req, res, next);
+    await requirePermission("campaigns.edit")(req, res, next);
 
     expect(next).toHaveBeenCalledWith();
   });
 
   it("403s a sub-admin whose overlay turns the key off", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ role: "ADMIN", permissions: { "campaigns.manage": false } });
+    mockPrisma.user.findUnique.mockResolvedValue({ role: "ADMIN", permissions: { "campaigns.edit": false } });
     const req = { user: { id: "sub-1", role: "ADMIN" } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requirePermission("campaigns.manage")(req, res, next);
+    await requirePermission("campaigns.edit")(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
@@ -53,12 +53,12 @@ describe("requirePermission — sub-admin overlay guard", () => {
     // req.user (from the access token) carries none of this; the DB row is
     // what's actually checked, so a permission edit takes effect on this
     // account's very next request, not after its token expires.
-    mockPrisma.user.findUnique.mockResolvedValue({ role: "ADMIN", permissions: { "finance.manage": false } });
+    mockPrisma.user.findUnique.mockResolvedValue({ role: "ADMIN", permissions: { "finance.pay": false } });
     const req = { user: { id: "sub-1", role: "ADMIN" } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requirePermission("finance.manage")(req, res, next);
+    await requirePermission("finance.pay")(req, res, next);
 
     expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { id: "sub-1" }, select: { role: true, permissions: true } });
     expect(next).not.toHaveBeenCalled();
@@ -70,7 +70,7 @@ describe("requirePermission — sub-admin overlay guard", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    await requirePermission("users.manage")(req, res, next);
+    await requirePermission("users.edit")(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();

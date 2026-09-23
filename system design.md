@@ -81,10 +81,14 @@ Creator submits post link
    → Admin approves screenshot → status: screenshot_approved
    → node-cron / on-demand job calls Apify to fetch post metrics
    → Admin approves insights → status: insights_approved
-   → Link becomes eligible for invoicing (uninvoiced_links pool)
-   → Creator generates invoice from eligible links (bulk); Admin approves
-   → Invoice status: raised → Finance marks paid manually → status: paid; GST status tracked separately
+   → Any submitted, not-yet-invoiced link is eligible for invoicing (screenshot/insights are optional proof, not gates — newTask.md #3)
+   → Creator generates invoice from eligible links (bulk, POST /invoices/bulk); Admin or Finance approves
+   → Invoice status: raised → approved → Finance marks paid manually → paid; GST status tracked separately
 ```
+
+Money moves in two directions and the app models them separately:
+- **Creator invoice (payable)** — creator bills Taggify for their posts: the `Invoice` table above, `/invoices` page, RAISED → APPROVED → PAID.
+- **Client invoice (receivable)** — Taggify bills the plan's client: a Proforma Invoice minted from an APPROVED Plan (`POST /plans/:id/client-invoice`, PDF at `GET /plans/:id/client-invoice.pdf`, `PI-0001…` numbering). It is a ledger row (`ClientInvoice`, ISSUED → PAID) listed under the Receivables view of `/invoices` for Admin/Finance.
 
 **B. Auth**
 ```
@@ -365,7 +369,9 @@ server/
 | Method & Path | Role(s) | Purpose |
 |---|---|---|
 | `POST /auth/signup` | Admin (or self, phone-only) | Creates user, auto-generates password |
-| `POST /auth/login` | any | phone + password → JWT pair |
+| `POST /auth/login` | any | email (verified accounts) or phone (not yet verified) + password → `step`: JWT pair, `OTP_REQUIRED`, or `EMAIL_VERIFICATION_REQUIRED` — email 2FA, 21 Sep; see `server/README.md` |
+| `POST /auth/login/verify-otp`, `/auth/login/resend-otp` | any (challenge token) | emailed login code → JWT pair / re-send |
+| `POST /auth/email/start`, `/auth/email/confirm` | session or challenge token | add + verify the account's login email → JWT pair |
 | `POST /auth/refresh` | any (valid refresh token) | rotate access token |
 | `POST /auth/logout` | any | revoke refresh token |
 | `GET /assets` | Creator/Admin | list social profiles + rate cards |
@@ -380,9 +386,12 @@ server/
 | `POST /links/:id/review-screenshot` | Admin | approve/reject |
 | `POST /links/:id/refresh-metrics` | Admin (or cron) | trigger Apify post scrape |
 | `POST /links/:id/approve-insights` | Admin | mark insights approved |
-| `POST /links/bulk-invoice` | Creator | generate invoice from eligible links (creator-only since 13 Sep) |
-| `GET /invoices` | Creator/Admin/Finance | list + filters |
-| `POST /invoices/:id/mark-paid` | Finance | manual payment confirmation |
+| `POST /invoices/bulk` | Creator | generate invoice from eligible links (creator-only since 13 Sep) |
+| `GET /invoices` | Creator/Admin/Finance/Plan Maker | list + filters (Plan Maker: invoices on campaigns from own plans) |
+| `POST /invoices/:id/approve` | Admin/Finance | sign-off RAISED → APPROVED (Finance too since 23 Sep) |
+| `POST /invoices/:id/mark-paid` | Finance | manual payment confirmation (APPROVED only) |
+| `POST /plans/:id/client-invoice`, `GET /plans/:id/client-invoice.pdf` | Admin / Plan Maker (own plan) | Taggify → client Proforma Invoice for an approved plan |
+| `GET /invoices/client`, `POST /invoices/client/:id/mark-paid` | Admin/Finance | receivables ledger of client invoices |
 | `PUT /invoices/:id/gst-status` | Finance | update GST status |
 | `GET /notifications` | any | own notifications |
 | `GET /admin/users`, role management | Admin | RBAC management |
@@ -412,10 +421,10 @@ server/
 - Every cron run writes a `JobRun` row (start/finish/status/error) — this is the substitute for a job queue's built-in observability.
 
 ### 2.7 Invoicing & payment flow (manual)
-1. Creator/Admin selects a set of `SCREENSHOT_APPROVED` + `INSIGHTS_APPROVED`, not-yet-invoiced links (bulk select, per recommend.md #3).
-2. `POST /links/bulk-invoice` creates an `Invoice` (status `RAISED`) with `InvoiceItem` rows summing `Link.cost` (respecting `customRate` overrides), and flips each `Link.status` to `INVOICED`.
-3. `dueDate` is set (e.g. +N days from raise date) to support the aging indicator from recommend.md #4.
-4. Finance role manually marks `PAID` via `POST /invoices/:id/mark-paid` once payment is confirmed outside the system (bank transfer, etc.) — no gateway webhook involved.
+1. The creator selects their own submitted, not-yet-invoiced links (any status from `SUBMITTED` to `INSIGHTS_APPROVED`; screenshot/insights optional — newTask.md #3), filtered by date range / campaign, previews the total and picks GST (flat 18%) or non-GST.
+2. `POST /invoices/bulk` (CREATOR only, 13 Sep) creates an `Invoice` (status `RAISED`) with `InvoiceItem` rows summing `Link.cost` (respecting `customRate` overrides), and flips each `Link.status` to `INVOICED`. `campaignId` is set when every link belongs to one campaign.
+3. `dueDate` is set (+15 days) to support the aging indicator from recommend.md #4.
+4. Admin or Finance approves (`POST /invoices/:id/approve`, RAISED → APPROVED). Finance then marks `PAID` via `POST /invoices/:id/mark-paid` once payment is confirmed outside the system (bank transfer, etc.) — no gateway webhook involved. Only an APPROVED invoice can be paid; a rejection releases the links for re-invoicing.
 5. GST status tracked as an independent field, updated manually by Finance (`PUT /invoices/:id/gst-status`), matching the distinct GST vs. payment status columns observed on WLDD.
 
 ### 2.8 Notifications (no Redis pub/sub)

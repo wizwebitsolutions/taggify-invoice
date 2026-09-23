@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dateStr, invoiceRecord, linkRecord, financeSummary, INVOICE_COLUMNS, LINK_COLUMNS } from "./financeRecords.js";
+import { dateStr, invoiceRecord, linkRecord, financeSummary, INVOICE_COLUMNS, LINK_COLUMNS, clientInvoiceRecord, CLIENT_INVOICE_COLUMNS } from "./financeRecords.js";
 
 describe("financeRecords — shared row shaping (newTask.md #2 and its 8 Sep Google Sheets follow-up)", () => {
   it("dateStr formats a Date as YYYY-MM-DD, and blanks a null", () => {
@@ -71,12 +71,60 @@ describe("financeRecords — shared row shaping (newTask.md #2 and its 8 Sep Goo
     expect(summary.find((r) => r.metric === "Total links (all statuses)").value).toBe(1);
   });
 
+  it("financeSummary totals receivables (23 Sep): billed excludes cancelled, collected uses paidAmount, outstanding is the gap", () => {
+    const clientInvoices = [
+      { total: 11800, status: "PAID", paidAmount: 11000 },
+      { total: 5000, status: "ISSUED", paidAmount: null },
+      { total: 9000, status: "CANCELLED", paidAmount: null },
+    ];
+    const summary = financeSummary({ invoices: [], links: [], clientInvoices });
+
+    expect(summary.find((r) => r.metric === "Client invoices").value).toBe(3);
+    expect(summary.find((r) => r.metric === "Total billed to clients").value).toBe(16800);
+    expect(summary.find((r) => r.metric === "Total collected from clients").value).toBe(11000);
+    expect(summary.find((r) => r.metric === "Total receivable (outstanding)").value).toBe(5800);
+  });
+
+  it("clientInvoiceRecord shapes a receivable, preferring the company name and tolerating a missing plan/campaign", () => {
+    expect(
+      clientInvoiceRecord({
+        invoiceNumber: "PI-0007",
+        plan: { name: "Q1 Push", clientName: "Rohit", clientCompany: null, campaign: null },
+        subtotal: "10000",
+        gstPercent: null,
+        gstAmount: "0",
+        total: "10000",
+        status: "ISSUED",
+        issuedAt: new Date("2026-09-20"),
+        paidAt: null,
+        paidAmount: null,
+      })
+    ).toEqual({
+      invoiceNumber: "PI-0007",
+      client: "Rohit",
+      plan: "Q1 Push",
+      campaign: "",
+      subtotal: 10000,
+      gstPercent: "",
+      gstAmount: 0,
+      total: 10000,
+      status: "ISSUED",
+      issuedAt: "2026-09-20",
+      paidAt: "",
+      paidAmount: "",
+    });
+    expect(clientInvoiceRecord({ invoiceNumber: "X", subtotal: 1, gstAmount: 0, total: 1, status: "ISSUED", issuedAt: null, paidAt: null }).client).toBe("");
+  });
+
   it("INVOICE_COLUMNS/LINK_COLUMNS list every key financeWorkbook.js and the Google Sheets export both rely on", () => {
     expect(INVOICE_COLUMNS.map(([key]) => key)).toEqual([
       "invoiceNumber", "creator", "phone", "subtotal", "isGstInvoice", "gstAmount", "amount", "status", "paymentStatus", "gstStatus", "dueDate", "paidAt", "createdAt",
     ]);
     expect(LINK_COLUMNS.map(([key]) => key)).toEqual([
       "campaign", "page", "creator", "format", "cost", "status", "invoiced", "postedAt", "createdAt",
+    ]);
+    expect(CLIENT_INVOICE_COLUMNS.map(([key]) => key)).toEqual([
+      "invoiceNumber", "client", "plan", "campaign", "subtotal", "gstPercent", "gstAmount", "total", "status", "issuedAt", "paidAt", "paidAmount",
     ]);
   });
 });

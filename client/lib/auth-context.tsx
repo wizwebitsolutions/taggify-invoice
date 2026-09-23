@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-import { auth, AUTH_STORAGE_KEY, type User } from "@/lib/api-client";
+import { auth, AUTH_STORAGE_KEY, type AuthResponse, type LoginResult, type User } from "@/lib/api-client";
 
 const STORAGE_KEY = AUTH_STORAGE_KEY;
 
@@ -17,7 +17,12 @@ interface AuthContextValue {
   accessToken: string | null;
   /** True until the initial localStorage read completes — avoids a login-page flash. */
   isLoading: boolean;
-  login: (phoneNumber: string, password: string) => Promise<void>;
+  /** Password step only (email 2FA, 21 Sep). Signs in when the server says
+   *  AUTHENTICATED; for any other step the caller walks the user through it
+   *  and finishes with adoptSession(). */
+  login: (identifier: { phoneNumber: string } | { email: string }, password: string) => Promise<LoginResult>;
+  /** Installs a session the server issued outside login() — OTP verified, or email just verified. */
+  adoptSession: (session: AuthResponse) => void;
   logout: () => void;
 }
 
@@ -66,15 +71,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  async function login(phoneNumber: string, password: string) {
-    const result = await auth.login(phoneNumber, password);
-    const next: StoredAuth = { user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken };
+  function adoptSession(session: AuthResponse) {
+    const next: StoredAuth = { user: session.user, accessToken: session.accessToken, refreshToken: session.refreshToken };
     setStored(next);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     } catch {
       // best-effort; session still works for this tab via state
     }
+  }
+
+  async function login(identifier: { phoneNumber: string } | { email: string }, password: string) {
+    const result = await auth.login(identifier, password);
+    if (result.step === "AUTHENTICATED") adoptSession(result);
+    return result;
   }
 
   function logout() {
@@ -97,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         accessToken: stored?.accessToken ?? null,
         isLoading,
         login,
+        adoptSession,
         logout,
       }}
     >

@@ -286,3 +286,15 @@ export function MoreIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Payments tab (tasks.md #5, 23 Sep) — a wallet, distinct from InvoiceIcon's document shape. */
+export function WalletIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 7a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v3" />
+      <path d="M3 7v10a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-4" />
+      <rect x="15" y="11" width="6" height="5" rx="1.2" />
+      <circle cx="17.6" cy="13.5" r="0.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

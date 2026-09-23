@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Sidebar, type SidebarUser } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { BottomNav } from "@/components/layout/bottom-nav";
+import { EmailVerifyBanner } from "@/components/auth/email-verify-banner";
 
 export function AppShell({
   active,
@@ -10,6 +11,7 @@ export function AppShell({
   searchPlaceholder,
   topbarActions,
   fab,
+  hideEmailVerifyBanner,
   children,
 }: {
   active: string;
@@ -20,6 +22,8 @@ export function AppShell({
   /** Mobile-only floating action button — the topbarActions equivalent for
    *  screens narrow enough that the topbar can't carry a labeled button. */
   fab?: ReactNode;
+  /** /verify-email itself — the banner would just link to the page it is on. */
+  hideEmailVerifyBanner?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -35,7 +39,10 @@ export function AppShell({
         </div>
         {/* `page-stagger` (globals.css) fades each top-level block of the
             page up in sequence — every screen gets the same entrance. */}
-        <div className="page-stagger relative z-10 flex-1 overflow-y-auto p-4 pb-24 md:p-7 md:pb-8">{children}</div>
+        <div className="page-stagger relative z-10 flex-1 overflow-y-auto p-4 pb-24 md:p-7 md:pb-8">
+          <EmailVerifyBanner hidden={hideEmailVerifyBanner} />
+          {children}
+        </div>
       </div>
 
       {fab && (

@@ -22,6 +22,7 @@ function draftPlan(overrides: Record<string, unknown> = {}) {
     clientName: "Acme",
     clientContact: null,
     budget: null,
+    gstPercent: null,
     isGstPlan: false,
     status: "DRAFT",
     approvedBy: null,
@@ -39,7 +40,7 @@ function draftPlan(overrides: Record<string, unknown> = {}) {
 }
 
 async function openPlansTab(page: import("@playwright/test").Page) {
-  await page.goto("/plans");
+  await page.goto("/plans?maker=all");
 }
 
 test.describe("Plan approval workflow", () => {

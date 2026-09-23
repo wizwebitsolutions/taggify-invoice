@@ -26,6 +26,7 @@ const WHITE = { red: 1, green: 1, blue: 1 };
 const NAVY = { red: 0.11, green: 0.271, blue: 0.529 }; // "CAMPAIGN OVERVIEW" band
 const MED_BLUE = { red: 0.435, green: 0.659, blue: 0.863 }; // labels / category+table headers / notes band
 const LIGHT_BLUE = { red: 0.788, green: 0.855, blue: 0.973 }; // value cells / note body
+const LINK_BLUE = { red: 0.067, green: 0.333, blue: 0.8 }; // Sheets' own hyperlink colour
 
 const STYLES = {
   logo: { bg: BLACK, fg: WHITE, bold: true, italic: false, align: "CENTER", size: 14 },
@@ -37,11 +38,6 @@ const STYLES = {
   note: { bg: LIGHT_BLUE, fg: BLACK, bold: false, italic: true, align: "LEFT", size: 9 },
   tableHeader: { bg: MED_BLUE, fg: WHITE, bold: true, italic: true, align: "CENTER", size: 10 },
   data: { bg: WHITE, fg: BLACK, bold: false, italic: true, align: "LEFT", size: 10 },
-  // The Page Link column's =HYPERLINK(...) cell — blue + underlined like
-  // any real link, same as the reference sheet's own link columns.
-  // Distinct from "data" so the generic black text color there doesn't
-  // stomp Google's own link styling.
-  link: { bg: WHITE, fg: { red: 0.067, green: 0.333, blue: 0.8 }, bold: false, italic: true, align: "LEFT", size: 10, underline: true },
 };
 
 /** Google Sheets caps a tab title at 100 chars; keep comfortably under. */
@@ -80,10 +76,14 @@ function makeSection() {
       rows.push(cells);
       rowSpecs.push({ cellTypes: [type], merge: true });
     },
-    /** A row with one style per column (e.g. ["label", "value"]). */
-    row(cells, cellTypes) {
+    /** A row with one style per column (e.g. ["label", "value"]). `links`
+     *  ({ [col]: uri }) makes those cells clickable while their text stays
+     *  the visible value — a cell-level link, not a =HYPERLINK() formula
+     *  (user request, 22 Sep — "page link ... should have hyperlink of that
+     *  link as well, so can be redirected to instagram page"). */
+    row(cells, cellTypes, { links } = {}) {
       rows.push(cells);
-      rowSpecs.push({ cellTypes, merge: false });
+      rowSpecs.push({ cellTypes, merge: false, ...(links ? { links } : {}) });
     },
     /** Plain, unstyled text — still real content, just no color/weight. */
     plain(cells) {
@@ -117,33 +117,25 @@ export function buildPlanSheetTabs(plan, { internal = false } = {}) {
 // 10 Sep — "give downloadable sample template for google sheet so they'll
 // know how their execution should look like"; 11 Sep — pointed at a
 // specific reference doc to match exactly: S No / Page Name / Page Link /
-// Followers / Date / Posted link / Views / Likes / Comments / Shares, plus
-// a totals row summing the numeric columns). A couple of example rows, not
-// a blank grid, so it reads as "fill it in like this" rather than an empty
-// form.
+// Followers / Date / Posted link, plus a totals row summing Followers.
+// Views/Likes/Comments/Shares dropped (user request, 23 Sep — "should
+// support till column posted links ... not required"). A couple of
+// example rows, not a blank grid, so it reads as "fill it in like this"
+// rather than an empty form.
 export const EXECUTION_TEMPLATE_TITLE = "Sample — Execution Sheet Template";
-const EXECUTION_TEMPLATE_HEADER = ["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link", "Views", "Likes", "Comments", "Shares"];
+const EXECUTION_TEMPLATE_HEADER = ["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link"];
 
 // Shared by buildExecutionSheetTemplate() (the live Google Sheet download,
 // below) and previewExecutionSheetTemplate() (the in-app preview table,
 // see plans/routes.js's GET /execution-sheet-template/preview) so the two
 // can never drift apart on what the sample actually shows.
 const EXECUTION_TEMPLATE_EXAMPLES = [
-  { sNo: 1, pageName: "@ghantaa", pageHandle: "ghantaa", followers: 8700000, date: "10 Sept 2026", postUrl: "https://instagram.com/reel/example1", views: 1207230, likes: 14600, comments: 92, shares: 594 },
-  { sNo: 2, pageName: "Laughter Colours", pageHandle: "laughter.colours", followers: 4300000, date: "10 Sept 2026", postUrl: "https://instagram.com/reel/example2", views: 195976, likes: 4421, comments: 25, shares: 98 },
+  { sNo: 1, pageName: "ghantaa", pageHandle: "ghantaa", followers: 8700000, date: "10 Sept 2026", postUrl: "https://instagram.com/reel/example1" },
+  { sNo: 2, pageName: "Laughter Colours", pageHandle: "laughter.colours", followers: 4300000, date: "10 Sept 2026", postUrl: "https://instagram.com/reel/example2" },
 ];
 
 function executionTemplateTotals() {
-  return EXECUTION_TEMPLATE_EXAMPLES.reduce(
-    (acc, ex) => ({
-      followers: acc.followers + ex.followers,
-      views: acc.views + ex.views,
-      likes: acc.likes + ex.likes,
-      comments: acc.comments + ex.comments,
-      shares: acc.shares + ex.shares,
-    }),
-    { followers: 0, views: 0, likes: 0, comments: 0, shares: 0 }
-  );
+  return EXECUTION_TEMPLATE_EXAMPLES.reduce((acc, ex) => ({ followers: acc.followers + ex.followers }), { followers: 0 });
 }
 
 export function buildExecutionSheetTemplate() {
@@ -152,26 +144,13 @@ export function buildExecutionSheetTemplate() {
   s.row(EXECUTION_TEMPLATE_HEADER, EXECUTION_TEMPLATE_HEADER.map(() => "tableHeader"));
   for (const ex of EXECUTION_TEMPLATE_EXAMPLES) {
     s.row(
-      [
-        ex.sNo,
-        ex.pageName,
-        `=HYPERLINK("https://instagram.com/${ex.pageHandle}","@${ex.pageHandle}")`,
-        ex.followers,
-        ex.date,
-        `=HYPERLINK("${ex.postUrl}","${ex.postUrl}")`,
-        ex.views,
-        ex.likes,
-        ex.comments,
-        ex.shares,
-      ],
-      ["data", "data", "link", "data", "data", "link", "data", "data", "data", "data"]
+      [ex.sNo, ex.pageName, `https://instagram.com/${ex.pageHandle}`, ex.followers, ex.date, ex.postUrl],
+      EXECUTION_TEMPLATE_HEADER.map(() => "data"),
+      { links: { 2: `https://instagram.com/${ex.pageHandle}`, 5: ex.postUrl } }
     );
   }
   const t = executionTemplateTotals();
-  s.row(
-    ["", "TOTAL", "", t.followers, "", "", t.views, t.likes, t.comments, t.shares],
-    ["tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader"]
-  );
+  s.row(["", "TOTAL", "", t.followers, "", ""], ["tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader"]);
   return { title: EXECUTION_TEMPLATE_TITLE, rows: s.rows, rowSpecs: s.rowSpecs, numCols: EXECUTION_TEMPLATE_HEADER.length };
 }
 
@@ -190,19 +169,8 @@ export function previewExecutionSheetTemplate() {
     title: EXECUTION_TEMPLATE_TITLE,
     headers: EXECUTION_TEMPLATE_HEADER,
     linkColumns: [2, 5],
-    rows: EXECUTION_TEMPLATE_EXAMPLES.map((ex) => [
-      ex.sNo,
-      ex.pageName,
-      `https://instagram.com/${ex.pageHandle}`,
-      ex.followers,
-      ex.date,
-      ex.postUrl,
-      ex.views,
-      ex.likes,
-      ex.comments,
-      ex.shares,
-    ]),
-    totalsRow: ["", "TOTAL", "", t.followers, "", "", t.views, t.likes, t.comments, t.shares],
+    rows: EXECUTION_TEMPLATE_EXAMPLES.map((ex) => [ex.sNo, ex.pageName, `https://instagram.com/${ex.pageHandle}`, ex.followers, ex.date, ex.postUrl]),
+    totalsRow: ["", "TOTAL", "", t.followers, "", ""],
   };
 }
 
@@ -228,7 +196,7 @@ function buildOverviewSection(plan, internal) {
   s.row(["Total Posts", posts], ["label", "value"]);
   s.row(["Expected Impressions", `${impressions} (est.)`], ["label", "value"]);
   s.row([internal ? "Internal Cost" : "Cost", money(subtotal)], ["label", "value"]);
-  if (plan.isGstPlan) s.row(["GST (18%)", money(gstAmount)], ["label", "value"]);
+  if (plan.isGstPlan) s.row([`GST (${plan.gstPercent}%)`, money(gstAmount)], ["label", "value"]);
   s.row([plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(total)], ["label", "value"]);
   if (internal && plan.budgetVariance != null) {
     s.row([plan.budgetVariance < 0 ? "Over Budget" : "Under Budget", money(Math.abs(plan.budgetVariance))], ["label", "value"]);
@@ -259,13 +227,15 @@ function buildPagesSection(plan, internal) {
   // won't for each category, all pages will display, same in google sheet").
   plan.items.forEach((item, i) => {
     const handle = item.asset?.handle ?? "—";
-    // USER_ENTERED (see plans/service.js's generatePlanSheet) turns this
-    // into a real clickable link, same as the reference sheet's own
-    // "Posted Links"/"Page Link" columns.
-    const link = `=HYPERLINK("https://instagram.com/${handle}","@${handle}")`;
-    const row = [i + 1, `@${handle}`, link, item.asset?.followers ?? 0, item.format, item.postsPerProfile];
+    // Bare handle and the profile URL as its own visible text (user request,
+    // 22 Sep — "page name showing @ in front, please remove it ... show
+    // original link not hyper links"), with the cell itself linked so a
+    // click opens the page (later that day — "should have hyperlink of that
+    // link as well"). Not a =HYPERLINK() formula: the sheet is written RAW.
+    const pageUrl = `https://instagram.com/${handle}`;
+    const row = [i + 1, handle, pageUrl, item.asset?.followers ?? 0, item.format, item.postsPerProfile];
     if (internal) row.push(money(item.cost));
-    s.row(row, header.map((_, col) => (col === 2 ? "link" : "data")));
+    s.row(row, header.map(() => "data"), item.asset?.handle ? { links: { 2: pageUrl } } : {});
   });
   return s;
 }
@@ -324,6 +294,17 @@ export function buildFormatRequests(sheetId, rowSpecs, numCols) {
         if (!style) return;
         requests.push(cellStyleRequest(rowRange(sheetId, i, col, col + 1), style));
       });
+      // Clickable cells — after the style request, which rewrites textFormat
+      // wholesale and would otherwise drop the link.
+      for (const [col, uri] of Object.entries(spec.links ?? {})) {
+        requests.push({
+          repeatCell: {
+            range: rowRange(sheetId, i, Number(col), Number(col) + 1),
+            cell: { userEnteredFormat: { textFormat: { link: { uri }, underline: true, foregroundColor: LINK_BLUE } } },
+            fields: "userEnteredFormat.textFormat.link,userEnteredFormat.textFormat.underline,userEnteredFormat.textFormat.foregroundColor",
+          },
+        });
+      }
     }
   });
 

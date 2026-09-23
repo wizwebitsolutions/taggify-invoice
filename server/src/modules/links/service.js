@@ -1,9 +1,11 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { transitionLinkStatus } from "./statusTimeline.js";
+import { transitionLinkStatus, ALREADY_INVOICED } from "./statusTimeline.js";
 import { refreshLinkMetrics } from "../scraping/service.js";
 import { publicUrlFor } from "../../lib/cloudinaryClient.js";
 import { planMakerCampaignWhere } from "../../lib/campaignAccess.js";
+import { creatorPhaseLabels, phaseRowIds } from "../../lib/campaignPhases.js";
+import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 
 export async function createLink(user, { campaignId, assetId, url, format, customAmount }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
@@ -94,9 +96,24 @@ export async function autoAttachLink(asset, { campaignId, url, format, cost }) {
     resolvedCost = rateCard.amount;
   }
 
-  const link = await prisma.link.create({
-    data: { campaignId, assetId: asset.id, submittedById: asset.ownerId, url, format, cost: resolvedCost, customRate, status: "SUBMITTED" },
-  });
+  // The findFirst above is a plain read, not a lock — two overlapping calls
+  // (a double-clicked "Refresh links", or the execution-sheet auto-sync
+  // inside plans/service.js's updatePlan racing a manual sync right after)
+  // can both pass it before either write lands. Link.@@unique([url,
+  // assetId]) (23 Sep) is the actual guard: a second insert for the same
+  // post/page 404s here on P2002, and is treated exactly like the
+  // existing-row case above — this caller, and campaigns/service.js's
+  // autoAttachLinkIfPossible, both already handle a null return as
+  // "nothing to attach", so no invoice can ever double-bill one post.
+  let link;
+  try {
+    link = await prisma.link.create({
+      data: { campaignId, assetId: asset.id, submittedById: asset.ownerId, url, format, cost: resolvedCost, customRate, status: "SUBMITTED" },
+    });
+  } catch (err) {
+    if (err?.code === "P2002") return null;
+    throw err;
+  }
   await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: asset.ownerId } });
   return link;
 }
@@ -157,13 +174,17 @@ export async function bulkImportLinks(admin, { rows }) {
 }
 
 export async function listLinks(user, filters) {
+  // Fresh from the DB (23 Sep, Step 3) — restricting or granting links.view
+  // now actually changes what this returns.
+  const effective = await loadEffectivePermissions(user.id);
+  const seesAll = effective["links.view"];
   const where = {};
   // Plan Maker: every link on their own plans' campaigns (what they need
   // to generate per-creator invoices from a campaign page — 12 Sep);
-  // Creator/Team member: only links on pages they own.
+  // anyone else without links.view: only links on pages they own.
   if (user.role === "PLAN_MAKER") {
     where.OR = [{ campaign: planMakerCampaignWhere(user.id) }, { asset: { ownerId: user.id } }];
-  } else if (!["ADMIN", "FINANCE"].includes(user.role)) {
+  } else if (!seesAll) {
     where.asset = { ownerId: user.id };
   }
   // A comma-separated status list (e.g. from the dashboard's "Links
@@ -172,8 +193,17 @@ export async function listLinks(user, filters) {
   if (filters.status) {
     where.status = filters.status.includes(",") ? { in: filters.status.split(",") } : filters.status;
   }
-  if (filters.campaignId) where.campaignId = filters.campaignId;
+  // An admin/finance/plan maker looking at a phase also gets its extra posts
+  // (22 Sep) — a page's second reel is "submitted twice" in that phase, not
+  // a phase of its own. A creator's own numbered row stays exact.
+  if (filters.campaignId) {
+    where.campaignId = seesAll || user.role === "PLAN_MAKER" ? { in: await phaseRowIds(filters.campaignId) } : filters.campaignId;
+  }
   if (filters.assetId) where.assetId = filters.assetId;
+  // Not on any invoice (22 Sep) — the invoice popup's "ready" list used to
+  // go by status alone and could offer a drifted link that then failed on
+  // submit with "already on invoice INV-…".
+  if (filters.unbilled) where.invoiceItem = null;
   if (filters.from || filters.to) {
     where.createdAt = {};
     if (filters.from) where.createdAt.gte = filters.from;
@@ -207,8 +237,12 @@ export async function listLinks(user, filters) {
   // Screenshot only carries a publicId in the DB — the admin review panel
   // needs an actual image URL to show what was submitted, so compute it
   // here rather than leaving callers to reconstruct a Cloudinary URL.
+  // A creator reads each campaign under their own running phase count
+  // ("X — Phase 3"); everyone else sees the stored title plus postNumber.
+  const labels = seesAll || user.role === "PLAN_MAKER" ? null : await creatorPhaseLabels(items.map((l) => l.campaignId), user.id);
   const withScreenshotUrls = items.map((link) => ({
     ...link,
+    campaign: link.campaign && labels?.get(link.campaignId) ? { ...link.campaign, ...labels.get(link.campaignId) } : link.campaign,
     screenshot: link.screenshot ? { ...link.screenshot, url: publicUrlFor(link.screenshot.publicId) } : null,
   }));
 
@@ -232,6 +266,9 @@ export async function markPendingScreenshotReview(linkId) {
 export async function reviewScreenshot(linkId, admin, { approved, note }) {
   const link = await prisma.link.findUnique({ where: { id: linkId }, include: { submittedBy: true } });
   if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  // Checked before the screenshot row is touched, so a refused review
+  // leaves nothing half-done (transitionLinkStatus would refuse too).
+  if (link.status === "INVOICED") throw ALREADY_INVOICED("review its screenshot");
 
   await prisma.screenshot.update({
     where: { linkId },

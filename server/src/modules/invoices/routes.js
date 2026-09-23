@@ -10,9 +10,14 @@ import {
   rejectInvoiceSchema,
   listInvoicesQuerySchema,
   confirmAttachmentSchema,
+  listClientInvoicesQuerySchema,
+  markClientInvoicePaidSchema,
+  cancelClientInvoiceSchema,
 } from "./schemas.js";
 import * as invoicesService from "./service.js";
+import * as clientInvoices from "./clientInvoices.js";
 import { buildInvoicePdf } from "../../lib/invoicePdf.js";
+import { buildClientInvoicePdf } from "../../lib/clientInvoicePdf.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -20,6 +25,52 @@ router.use(requireAuth);
 router.get("/", validateQuery(listInvoicesQuerySchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.listInvoices(req.user, req.query));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Receivables: client invoices (user decision, 23 Sep) ──────────────
+// Minted on the plan (plans/routes.js POST /:id/client-invoice); listed
+// and settled here so Finance sees both directions of money in one place
+// without needing plan access. Registered before the /:id routes so
+// "client" is never read as an invoice id.
+const RECEIVABLES_READ = requireAccess("finance.view", "PLAN_MAKER");
+const RECEIVABLES_WRITE = requireAccess("finance.pay");
+
+router.get("/client", RECEIVABLES_READ, validateQuery(listClientInvoicesQuerySchema), async (req, res, next) => {
+  try {
+    res.json(await clientInvoices.listClientInvoices(req.user, req.query));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/client/:id/pdf", RECEIVABLES_READ, async (req, res, next) => {
+  try {
+    const invoice = await clientInvoices.getClientInvoicePdfSource(req.params.id, req.user);
+    const pdf = await buildClientInvoicePdf(invoice);
+    const safeName = invoice.clientInvoiceNumber.replace(/[^A-Za-z0-9._-]+/g, "-");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}.pdf"`);
+    res.setHeader("Content-Length", pdf.length);
+    res.send(pdf);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/client/:id/mark-paid", RECEIVABLES_WRITE, validateBody(markClientInvoicePaidSchema), async (req, res, next) => {
+  try {
+    res.json(await clientInvoices.markClientInvoicePaid(req.params.id, req.user, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/client/:id/cancel", RECEIVABLES_WRITE, validateBody(cancelClientInvoiceSchema), async (req, res, next) => {
+  try {
+    res.json(await clientInvoices.cancelClientInvoice(req.params.id, req.user, req.body));
   } catch (err) {
     next(err);
   }
@@ -35,9 +86,11 @@ router.post("/bulk", requireRole("CREATOR"), validateBody(bulkInvoiceSchema), as
   }
 });
 
-// Admin-only sign-off (RAISED → APPROVED) — Finance pays, Admin vets; see
-// approveInvoice for why Finance's mark-paid doesn't strictly wait on it.
-router.post("/:id/approve", requireAccess("finance.manage"), async (req, res, next) => {
+// Sign-off (RAISED → APPROVED). Finance approves and pays by default
+// (user decision, 23 Sep) — before this only ADMIN / a finance.manage
+// grant could approve, so a plain FINANCE account was stuck waiting on an
+// admin for every invoice. Same gate as every other finance action below.
+router.post("/:id/approve", requireAccess("finance.approve"), async (req, res, next) => {
   try {
     res.json(await invoicesService.approveInvoice(req.params.id, req.user));
   } catch (err) {
@@ -45,7 +98,7 @@ router.post("/:id/approve", requireAccess("finance.manage"), async (req, res, ne
   }
 });
 
-router.post("/:id/mark-paid", requireAccess("finance.manage", "FINANCE"), async (req, res, next) => {
+router.post("/:id/mark-paid", requireAccess("finance.pay"), async (req, res, next) => {
   try {
     res.json(await invoicesService.markPaid(req.params.id, req.user));
   } catch (err) {
@@ -53,7 +106,7 @@ router.post("/:id/mark-paid", requireAccess("finance.manage", "FINANCE"), async 
   }
 });
 
-router.put("/:id/gst-status", requireAccess("finance.manage", "FINANCE"), validateBody(gstStatusSchema), async (req, res, next) => {
+router.put("/:id/gst-status", requireAccess("finance.edit"), validateBody(gstStatusSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.updateGstStatus(req.params.id, req.body.gstStatus));
   } catch (err) {
@@ -61,7 +114,7 @@ router.put("/:id/gst-status", requireAccess("finance.manage", "FINANCE"), valida
   }
 });
 
-router.put("/:id/payment-status", requireAccess("finance.manage", "FINANCE"), validateBody(paymentStatusSchema), async (req, res, next) => {
+router.put("/:id/payment-status", requireAccess("finance.edit"), validateBody(paymentStatusSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.updatePaymentStatus(req.params.id, req.body.paymentStatus));
   } catch (err) {
@@ -69,7 +122,7 @@ router.put("/:id/payment-status", requireAccess("finance.manage", "FINANCE"), va
   }
 });
 
-router.post("/:id/reject", requireAccess("finance.manage", "FINANCE"), validateBody(rejectInvoiceSchema), async (req, res, next) => {
+router.post("/:id/reject", requireAccess("finance.pay"), validateBody(rejectInvoiceSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.rejectInvoice(req.params.id, req.user, req.body));
   } catch (err) {

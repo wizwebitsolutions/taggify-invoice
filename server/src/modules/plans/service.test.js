@@ -4,9 +4,13 @@ import { ApiError } from "../../middleware/errorHandler.js";
 const mockPrisma = {
   asset: { findMany: vi.fn(), create: vi.fn() },
   plan: { create: vi.fn(), update: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn(), count: vi.fn() },
-  planItem: { deleteMany: vi.fn(), createMany: vi.fn() },
-  campaign: { create: vi.fn() },
-  appSetting: { findUnique: vi.fn(), upsert: vi.fn() },
+  planItem: { deleteMany: vi.fn(), createMany: vi.fn(), create: vi.fn(), findMany: vi.fn() },
+  campaign: { create: vi.fn(), findMany: vi.fn() },
+  appSetting: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+  clientInvoice: { upsert: vi.fn() },
+  campaignAssignment: { findMany: vi.fn(), update: vi.fn() },
+  link: { findFirst: vi.fn() },
+  user: { findUnique: vi.fn() },
   // createPlanVariant wraps its count+create in a transaction (code review,
   // 10 Sep — closes a duplicate-label race) — `tx` is just `mockPrisma`
   // itself here, so every existing plan.update/count/create mock below
@@ -16,7 +20,14 @@ const mockPrisma = {
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
 const mockGetAvgEngagement = vi.fn();
-vi.mock("../assets/service.js", () => ({ getAvgEngagement: (...args) => mockGetAvgEngagement(...args) }));
+const mockCreateAsset = vi.fn();
+vi.mock("../assets/service.js", () => ({ getAvgEngagement: (...args) => mockGetAvgEngagement(...args), createAsset: (...args) => mockCreateAsset(...args) }));
+// Execution sheet sync (23 Sep): the sheet fetch and the link creation are
+// other modules' jobs — mocked so this file tests only the row → slot logic.
+const mockFetchSheetCsv = vi.fn();
+vi.mock("../campaigns/service.js", () => ({ fetchSheetCsv: (...args) => mockFetchSheetCsv(...args) }));
+const mockAutoAttachLink = vi.fn();
+vi.mock("../links/service.js", () => ({ autoAttachLink: (...args) => mockAutoAttachLink(...args) }));
 
 const mockCreateSpreadsheet = vi.fn();
 const mockDeleteSheetTab = vi.fn();
@@ -72,6 +83,9 @@ const {
   listPlanGroup,
   generatePlanSheet,
   importPlanSheetPages,
+  createPlanFromSheet,
+  syncPlanFromSheet,
+  addPendingPage,
   getExecutionSheetTemplate,
   getExecutionSheetTemplatePreview,
   generateClientInvoice,
@@ -80,6 +94,7 @@ const {
   requestInvoiceAttachmentUpload,
   confirmInvoiceAttachment,
   removeInvoiceAttachment,
+  syncExecutionSheet,
 } = await import("./service.js");
 
 const admin = { id: "admin-1", role: "ADMIN" };
@@ -88,6 +103,14 @@ const asset = { id: "asset-1", handle: "demo.page", category: "Meme page", follo
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetAvgEngagement.mockResolvedValue({ avgLikes: 1000, avgComments: 10, avgViews: 5000, sampleSize: 2 });
+  // assertCanAccessPlan / listPlans / listSavedClients (23 Sep) read the
+  // caller's effective permissions fresh from the DB — derive a plausible
+  // role from this file's id fixtures (admin-*/pm-*/creator-*/fin-*) so
+  // existing calls work without every test stubbing this.
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    role: where.id?.startsWith("admin") ? "ADMIN" : where.id?.startsWith("pm") ? "PLAN_MAKER" : where.id?.startsWith("fin") ? "FINANCE" : "CREATOR",
+    permissions: null,
+  }));
 });
 
 describe("createPlan — item costs (newTask.md #13: cost calculation)", () => {
@@ -96,7 +119,7 @@ describe("createPlan — item costs (newTask.md #13: cost calculation)", () => {
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }],
     });
 
@@ -117,7 +140,7 @@ describe("createPlan — item costs (newTask.md #13: cost calculation)", () => {
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 4200, clientCost: null, postsPerProfile: 1, asset }],
     });
 
@@ -147,7 +170,7 @@ describe("createPlan — postsPerProfile and clientCost (newTask.md, 8 Sep)", ()
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: 6000, postsPerProfile: 3, asset }],
     });
 
@@ -171,7 +194,7 @@ describe("createPlan — postsPerProfile and clientCost (newTask.md, 8 Sep)", ()
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 3, asset }],
     });
 
@@ -187,7 +210,7 @@ describe("createPlan — overview (newTask.md, 8 Sep: matches the example sheet'
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }],
     });
 
@@ -203,7 +226,7 @@ describe("createPlan — overview (newTask.md, 8 Sep: matches the example sheet'
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: 8000, postsPerProfile: 1, asset }],
     });
 
@@ -213,16 +236,16 @@ describe("createPlan — overview (newTask.md, 8 Sep: matches the example sheet'
     expect(plan.overview.subtotal).toBe(8000); // client-facing, uses the markup
   });
 
-  it("adds 18% GST on the client subtotal when isGstPlan is true", async () => {
+  it("adds GST on the client subtotal at the plan's gstPercent", async () => {
     mockPrisma.asset.findMany.mockResolvedValue([asset]);
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: true,
+      gstPercent: 18,
       items: [{ assetId: "asset-1", format: "reel", cost: 10000, clientCost: null, postsPerProfile: 1, asset }],
     });
 
-    const plan = await createPlan(admin, { name: "Q1", clientName: "Acme", isGstPlan: true, items: [{ assetId: "asset-1", format: "reel" }] });
+    const plan = await createPlan(admin, { name: "Q1", clientName: "Acme", gstPercent: 18, items: [{ assetId: "asset-1", format: "reel" }] });
 
     expect(plan.overview.subtotal).toBe(10000);
     expect(plan.overview.gstAmount).toBe(1800);
@@ -235,7 +258,7 @@ describe("createPlan — overview (newTask.md, 8 Sep: matches the example sheet'
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [
         { assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 2, asset },
         { assetId: "asset-1", format: "story", cost: 3000, clientCost: null, postsPerProfile: 1, asset },
@@ -262,7 +285,7 @@ describe("createPlan — overview (newTask.md, 8 Sep: matches the example sheet'
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 4, asset }],
     });
 
@@ -278,7 +301,7 @@ describe("createPlan — budget variance (newTask.md #13: extra cost or less cos
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: 10000,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }],
     });
 
@@ -293,7 +316,7 @@ describe("createPlan — budget variance (newTask.md #13: extra cost or less cos
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: 3000,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: 2500, postsPerProfile: 1, asset }],
     });
 
@@ -314,7 +337,7 @@ describe("createPlan — budget variance (newTask.md #13: extra cost or less cos
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }],
     });
 
@@ -330,7 +353,7 @@ describe("createPlan — expected engagement", () => {
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [
         { assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset },
         { assetId: "asset-1", format: "story", cost: 3000, clientCost: null, postsPerProfile: 1, asset },
@@ -357,7 +380,7 @@ describe("forClientPdf — strips internal cost before anything reaches the PDF 
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       clientName: "Acme",
       name: "Q1",
       createdAt: new Date("2026-01-01"),
@@ -382,7 +405,7 @@ describe("forClientPdf — strips internal cost before anything reaches the PDF 
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       clientName: "Acme",
       name: "Q1",
       createdAt: new Date("2026-01-01"),
@@ -411,7 +434,7 @@ describe("updatePlan", () => {
     mockPrisma.plan.update.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }],
     });
 
@@ -444,6 +467,23 @@ describe("Plan Maker access scoping (newTask.md, 8 Sep — \"Plan Maker... appro
     expect(mockPrisma.plan.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
   });
 
+  it("also opens the full list to any role explicitly granted plans.edit or plans.approve (23 Sep)", async () => {
+    mockPrisma.plan.findMany.mockResolvedValue([]);
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "FINANCE", permissions: { "plans.edit": true } });
+    await listPlans({ id: "fin-1", role: "FINANCE" });
+    expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: {} }));
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "TEAM_MEMBER", permissions: { "plans.approve": true } });
+    await listPlans({ id: "tm-1", role: "TEAM_MEMBER" });
+    expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: {} }));
+
+    // A plain Finance account without the grant stays scoped to its own.
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "FINANCE", permissions: null });
+    await listPlans({ id: "fin-2", role: "FINANCE" });
+    expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: { createdById: "fin-2" } }));
+  });
+
   it("getPlan 404s (not 403s) when a Plan Maker requests a plan they didn't create", async () => {
     mockPrisma.plan.findUnique.mockResolvedValue({ id: "plan-1", createdById: "pm-1", status: "DRAFT", items: [] });
 
@@ -451,7 +491,7 @@ describe("Plan Maker access scoping (newTask.md, 8 Sep — \"Plan Maker... appro
   });
 
   it("getPlan succeeds for the Plan Maker who created it, and for any ADMIN", async () => {
-    mockPrisma.plan.findUnique.mockResolvedValue({ id: "plan-1", createdById: "pm-1", status: "DRAFT", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.findUnique.mockResolvedValue({ id: "plan-1", createdById: "pm-1", status: "DRAFT", budget: null, gstPercent: null, items: [] });
 
     await expect(getPlan("plan-1", planMaker)).resolves.toMatchObject({ id: "plan-1" });
     await expect(getPlan("plan-1", admin)).resolves.toMatchObject({ id: "plan-1" });
@@ -473,7 +513,7 @@ describe("Plan approval workflow — direct self-approval, no submit step (user 
 
   it("a Plan Maker can approve their own draft plan directly, no submit required", async () => {
     mockPrisma.plan.findUnique.mockResolvedValue({ id: "plan-1", createdById: "pm-1", status: "DRAFT", items: [] });
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, gstPercent: null, items: [] });
 
     const plan = await approvePlan("plan-1", planMaker);
 
@@ -501,7 +541,7 @@ describe("Plan approval workflow — direct self-approval, no submit step (user 
       ],
     });
     mockPrisma.campaign.create.mockResolvedValue({ id: "campaign-1" });
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: 20000, isGstPlan: false, campaignId: "campaign-1", items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: 20000, gstPercent: null, campaignId: "campaign-1", items: [] });
 
     const plan = await approvePlan("plan-1", planMaker);
 
@@ -536,7 +576,7 @@ describe("Plan approval workflow — direct self-approval, no submit step (user 
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, postsPerProfile: 2, asset }],
     });
     mockPrisma.campaign.create.mockResolvedValue({ id: "campaign-2" });
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, gstPercent: null, items: [] });
 
     await approvePlan("plan-1", planMaker);
 
@@ -550,7 +590,7 @@ describe("Plan approval workflow — direct self-approval, no submit step (user 
       status: "DRAFT",
       items: [{ assetId: "asset-1", format: "reel", cost: 5000, postsPerProfile: 1, asset }],
     });
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "REJECTED", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "REJECTED", budget: null, gstPercent: null, items: [] });
 
     await rejectPlan("plan-1", planMaker);
 
@@ -567,7 +607,7 @@ describe("Plan approval workflow — direct self-approval, no submit step (user 
 
   it("ADMIN can approve or reject any Plan Maker's draft plan", async () => {
     mockPrisma.plan.findUnique.mockResolvedValue({ id: "plan-1", createdById: "pm-1", status: "DRAFT" });
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "REJECTED", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "REJECTED", budget: null, gstPercent: null, items: [] });
 
     const plan = await rejectPlan("plan-1", admin);
 
@@ -591,7 +631,7 @@ describe("Step 3 overrides — client-facing overview vs. internal computed (use
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       overrideFollowers: 500000,
       overridePosts: null,
       overrideImpressions: null,
@@ -620,7 +660,7 @@ describe("Step 3 overrides — client-facing overview vs. internal computed (use
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-1",
       budget: null,
-      isGstPlan: false,
+      gstPercent: null,
       overrideFollowers: null,
       overridePosts: null,
       overrideImpressions: null,
@@ -647,7 +687,7 @@ describe("createPlanVariant — Plan B (user request, 10 Sep)", () => {
     clientAddress: "1 Acme Way",
     notes: "Rush job",
     budget: 10000,
-    isGstPlan: true,
+    gstPercent: 18,
     overrideFollowers: null,
     overridePosts: null,
     overrideImpressions: 300000,
@@ -662,7 +702,7 @@ describe("createPlanVariant — Plan B (user request, 10 Sep)", () => {
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-2",
       budget: 10000,
-      isGstPlan: true,
+      gstPercent: 18,
       variantLabel: "Plan B",
       pitchGroupId: "plan-1",
       items: sourcePlan.items,
@@ -673,13 +713,13 @@ describe("createPlanVariant — Plan B (user request, 10 Sep)", () => {
     expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-1" }, data: { pitchGroupId: "plan-1" } });
   });
 
-  it("copies the client-details/budget shell, the Step 3 overrides, and the item selection onto the new variant", async () => {
+  it("carries over client details, brief and GST %, but starts budget, pages and the Step 3 overrides empty (23 Sep)", async () => {
     mockPrisma.plan.findUnique.mockResolvedValue({ ...sourcePlan, pitchGroupId: "group-1" });
     mockPrisma.plan.count.mockResolvedValue(1);
     mockPrisma.plan.create.mockResolvedValue({
       id: "plan-2",
       budget: 10000,
-      isGstPlan: true,
+      gstPercent: 18,
       variantLabel: "Plan B",
       pitchGroupId: "group-1",
       items: sourcePlan.items,
@@ -687,23 +727,32 @@ describe("createPlanVariant — Plan B (user request, 10 Sep)", () => {
 
     await createPlanVariant("plan-1", admin);
 
-    expect(mockPrisma.plan.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          clientName: "Acme",
-          clientCompany: "Acme Inc",
-          clientGstNumber: "GST123",
-          clientAddress: "1 Acme Way",
-          budget: 10000,
-          isGstPlan: true,
-          overrideImpressions: 300000,
-          overrideCost: 9000,
-          pitchGroupId: "group-1",
-          variantLabel: "Plan B",
-          items: { create: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1 }] },
-        }),
-      })
-    );
+    const { data } = mockPrisma.plan.create.mock.calls[0][0];
+    expect(data).toMatchObject({
+      name: "Q1 Pitch",
+      clientName: "Acme",
+      clientContact: "acme@example.com",
+      clientCompany: "Acme Inc",
+      clientGstNumber: "GST123",
+      clientAddress: "1 Acme Way",
+      notes: "Rush job",
+      gstPercent: 18,
+      pitchGroupId: "group-1",
+      variantLabel: "Plan B",
+    });
+    for (const key of ["budget", "items", "overrideCost", "overrideImpressions", "overrideFollowers", "overridePosts"]) {
+      expect(data).not.toHaveProperty(key);
+    }
+  });
+
+  it("labels by sibling count — a third plan in the group is Plan C", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue({ ...sourcePlan, pitchGroupId: "group-1" });
+    mockPrisma.plan.count.mockResolvedValue(2);
+    mockPrisma.plan.create.mockResolvedValue({ id: "plan-3", variantLabel: "Plan C", pitchGroupId: "group-1", items: [] });
+
+    await createPlanVariant("plan-1", admin);
+
+    expect(mockPrisma.plan.create.mock.calls[0][0].data.variantLabel).toBe("Plan C");
   });
 
   it("404s when the source plan doesn't exist", async () => {
@@ -723,7 +772,7 @@ describe("importPlanSheetPages — attach a Google Sheet of pages (user request,
     mockPrisma.planItem.createMany.mockResolvedValue({ count: 1 });
     // Two calls hit plan.findUnique: the initial existence/access check, then getPlan's own at the end.
     mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1" });
-    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1", budget: null, gstPercent: null, items: [] });
 
     const result = await importPlanSheetPages("plan-1", admin, [{ handle: "demo.page" }]);
 
@@ -741,7 +790,7 @@ describe("importPlanSheetPages — attach a Google Sheet of pages (user request,
     mockPrisma.asset.findMany.mockResolvedValue([]);
     mockPrisma.asset.create.mockResolvedValue({ id: "asset-new", handle: "new.page", rateCards: [] });
     mockPrisma.planItem.createMany.mockResolvedValue({ count: 1 });
-    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1", budget: null, gstPercent: null, items: [] });
 
     const result = await importPlanSheetPages("plan-1", admin, [{ handle: "new.page", category: "Meme page", cost: 3000 }]);
 
@@ -756,7 +805,7 @@ describe("importPlanSheetPages — attach a Google Sheet of pages (user request,
     mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1" });
     mockPrisma.asset.findMany.mockResolvedValue([]);
     mockPrisma.planItem.createMany.mockResolvedValue({ count: 0 });
-    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "admin-1", budget: null, gstPercent: null, items: [] });
 
     const result = await importPlanSheetPages("plan-1", admin, [{ handle: "no.rate.card" }]);
 
@@ -771,11 +820,143 @@ describe("importPlanSheetPages — attach a Google Sheet of pages (user request,
   });
 });
 
+describe("Upload plan from a Google Sheet (user request, 22 Sep) — createPlanFromSheet / syncPlanFromSheet / addPendingPage", () => {
+  const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+  const emptyPlan = (extra = {}) => ({ id: "plan-1", createdById: "pm-1", status: "DRAFT", budget: null, gstPercent: null, items: [], sourceSheetPending: null, ...extra });
+  const sheetUrl = "https://docs.google.com/spreadsheets/d/abc/edit";
+
+  beforeEach(() => {
+    mockPrisma.planItem.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => emptyPlan({ ...data, items: (data.items?.create ?? []).map((i) => ({ ...i, asset })) }));
+  });
+
+  it("creates the plan with the sheet's fields, matched rows as items and unknown / no-cost rows as pending", async () => {
+    mockPrisma.plan.create.mockResolvedValue({ id: "plan-1" });
+    mockPrisma.asset.findMany.mockResolvedValue([asset, { id: "asset-2", handle: "no.rate", rateCards: [] }]);
+
+    const plan = await createPlanFromSheet(planMaker, {
+      sourceSheetUrl: sheetUrl,
+      fields: { name: "Q1 Push", clientName: "Acme", budget: 20000, gstPercent: 18 },
+      rows: [{ handle: "@Demo.Page", postsPerProfile: 2 }, { handle: "no.rate" }, { handle: "brand.new", followers: 5000, cost: 1500 }],
+    });
+
+    expect(mockPrisma.plan.create).toHaveBeenCalledWith({ data: { name: "Q1 Push", clientName: "Acme", createdById: "pm-1", sourceSheetUrl: sheetUrl } });
+    expect(mockPrisma.planItem.deleteMany).toHaveBeenCalledWith({ where: { planId: "plan-1" } });
+    const { data } = mockPrisma.plan.update.mock.calls[0][0];
+    expect(data).toMatchObject({ name: "Q1 Push", clientName: "Acme", budget: 20000, gstPercent: 18, items: { create: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 2 }] } });
+    expect(data.sourceSheetFetchedAt).toBeInstanceOf(Date);
+    expect(data.sourceSheetPending).toEqual([
+      expect.objectContaining({ kind: "page", handle: "no.rate", reason: expect.stringMatching(/No cost in the sheet/) }),
+      expect.objectContaining({ kind: "page", handle: "brand.new", followers: 5000, cost: 1500, reason: "Not in Inventory yet." }),
+    ]);
+    expect(plan.sourceSheetPending).toHaveLength(2);
+    expect(plan.totalCost).toBe(10000);
+  });
+
+  it("doesn't store a budget the pages exceed — reports it as a pending budget entry instead", async () => {
+    mockPrisma.plan.create.mockResolvedValue({ id: "plan-1" });
+    mockPrisma.asset.findMany.mockResolvedValue([asset]);
+
+    await createPlanFromSheet(planMaker, { sourceSheetUrl: sheetUrl, fields: { name: "P", clientName: "C", budget: 4000 }, rows: [{ handle: "demo.page" }] });
+
+    const { data } = mockPrisma.plan.update.mock.calls[0][0];
+    expect(data.budget).toBeNull();
+    expect(data.sourceSheetPending).toEqual([expect.objectContaining({ kind: "budget", sheetBudget: 4000 })]);
+  });
+
+  it("Refresh: non-blank sheet cells overwrite, blank ones keep what was typed in the app; items are rebuilt", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetUrl: sheetUrl, notes: "typed in app", clientContact: "Rohit" }));
+    mockPrisma.asset.findMany.mockResolvedValue([asset]);
+
+    await syncPlanFromSheet("plan-1", planMaker, { fields: { name: "Renamed", clientContact: "", notes: undefined }, rows: [{ handle: "demo.page", cost: 7000 }] });
+
+    const { data } = mockPrisma.plan.update.mock.calls[0][0];
+    expect(data.name).toBe("Renamed");
+    expect(data).not.toHaveProperty("notes");
+    expect(data).not.toHaveProperty("clientContact");
+    expect(data.items.create).toEqual([{ assetId: "asset-1", format: "reel", cost: 7000, clientCost: null, postsPerProfile: 1 }]);
+    expect(mockPrisma.planItem.deleteMany).toHaveBeenCalled();
+  });
+
+  it("Refresh: a sheet with no page table leaves the plan's pages alone (blank keeps in-app), and the in-app budget is checked against them", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetUrl: sheetUrl, budget: 3000 }));
+    mockPrisma.planItem.findMany.mockResolvedValue([{ assetId: "asset-1", cost: 5000, clientCost: null, postsPerProfile: 1 }]);
+
+    await syncPlanFromSheet("plan-1", planMaker, { fields: { name: "Renamed" }, rows: [] });
+
+    expect(mockPrisma.planItem.deleteMany).not.toHaveBeenCalled();
+    const { data } = mockPrisma.plan.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty("items");
+    // In-app budget 3000 < the kept pages' 5000 → cleared and asked for again.
+    expect(data.budget).toBeNull();
+    expect(data.sourceSheetPending).toEqual([expect.objectContaining({ kind: "budget", sheetBudget: 3000 })]);
+  });
+
+  it("saving a budget on the plan clears the sheet's pending budget entry", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ budget: null, sourceSheetPending: [{ kind: "budget", sheetBudget: 100, reason: "x" }, { kind: "page", handle: "p", reason: "y" }] }));
+    mockPrisma.planItem.findMany.mockResolvedValue([]);
+
+    await updatePlan("plan-1", planMaker, { budget: 9000 });
+
+    expect(mockPrisma.plan.update.mock.calls[0][0].data.sourceSheetPending).toEqual([{ kind: "page", handle: "p", reason: "y" }]);
+  });
+
+  it("Add to inventory respects the plan's budget like every other way of adding a page", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ budget: 2000, sourceSheetPending: [{ kind: "page", handle: "big", cost: 1500, postsPerProfile: 2, reason: "x" }] }));
+    mockPrisma.planItem.findMany.mockResolvedValue([]);
+
+    await expect(addPendingPage("plan-1", planMaker, { handle: "big" })).rejects.toMatchObject({ code: "PLAN_OVER_BUDGET" });
+    expect(mockCreateAsset).not.toHaveBeenCalled();
+  });
+
+  it("Refresh refuses a plan that wasn't uploaded from a sheet, one that's no longer a draft, and someone else's plan", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetUrl: null }));
+    await expect(syncPlanFromSheet("plan-1", planMaker, { fields: {}, rows: [] })).rejects.toMatchObject({ code: "PLAN_NOT_FROM_SHEET" });
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetUrl: sheetUrl, status: "APPROVED" }));
+    await expect(syncPlanFromSheet("plan-1", planMaker, { fields: {}, rows: [] })).rejects.toMatchObject({ code: "PLAN_NOT_DRAFT" });
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetUrl: sheetUrl, createdById: "someone-else" }));
+    await expect(syncPlanFromSheet("plan-1", planMaker, { fields: {}, rows: [] })).rejects.toMatchObject({ code: "PLAN_NOT_FOUND" });
+    expect(mockPrisma.plan.update).not.toHaveBeenCalled();
+  });
+
+  it("Add to inventory: registers the page via createAsset (own account for a Plan Maker), adds the item and drops the pending row", async () => {
+    const pendingRow = { kind: "page", handle: "brand.new", category: "Meme page", followers: 5000, format: null, cost: 1500, clientCost: null, postsPerProfile: 2, reason: "Not in Inventory yet." };
+    const other = { kind: "page", handle: "other", cost: null, reason: "x" };
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetPending: [pendingRow, other] }));
+    mockCreateAsset.mockResolvedValue({ id: "asset-new" });
+    mockPrisma.planItem.create.mockResolvedValue({});
+
+    await addPendingPage("plan-1", planMaker, { handle: "@brand.new" });
+
+    expect(mockCreateAsset).toHaveBeenCalledWith(planMaker, { platform: "instagram", handle: "brand.new", category: "Meme page", ownerId: undefined, followers: 5000, rateCards: undefined });
+    expect(mockPrisma.planItem.create).toHaveBeenCalledWith({ data: { planId: "plan-1", assetId: "asset-new", format: "reel", cost: 1500, clientCost: null, postsPerProfile: 2 } });
+    expect(mockPrisma.plan.update.mock.calls[0][0].data.sourceSheetPending).toEqual([other]);
+  });
+
+  it("Add to inventory: an Admin may pick the owner and the sheet cost becomes the page's rate card", async () => {
+    const pendingRow = { kind: "page", handle: "brand.new", format: "story", cost: 900, postsPerProfile: 1, reason: "Not in Inventory yet." };
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ createdById: "admin-1", sourceSheetPending: [pendingRow] }));
+    mockCreateAsset.mockResolvedValue({ id: "asset-new" });
+    mockPrisma.planItem.create.mockResolvedValue({});
+
+    await addPendingPage("plan-1", admin, { handle: "brand.new", ownerId: "creator-9" });
+
+    expect(mockCreateAsset).toHaveBeenCalledWith(admin, expect.objectContaining({ ownerId: "creator-9", rateCards: [{ format: "story", amount: 900 }] }));
+  });
+
+  it("Add to inventory: a row with no cost stays pending; a handle that isn't pending 404s", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(emptyPlan({ sourceSheetPending: [{ kind: "page", handle: "no.cost", cost: null, reason: "x" }] }));
+    await expect(addPendingPage("plan-1", planMaker, { handle: "no.cost" })).rejects.toMatchObject({ code: "PENDING_PAGE_NO_COST" });
+    await expect(addPendingPage("plan-1", planMaker, { handle: "unknown" })).rejects.toMatchObject({ code: "PENDING_PAGE_NOT_FOUND" });
+    expect(mockCreateAsset).not.toHaveBeenCalled();
+  });
+});
+
 describe("listPlanGroup — every plan sharing a pitchGroupId (code review, 10 Sep: was untested)", () => {
   it("returns every plan in the group, ordered oldest first", async () => {
     mockPrisma.plan.findMany.mockResolvedValue([
-      { id: "plan-1", createdById: "admin-1", pitchGroupId: "group-1", budget: null, isGstPlan: false, items: [] },
-      { id: "plan-2", createdById: "admin-1", pitchGroupId: "group-1", budget: null, isGstPlan: false, items: [] },
+      { id: "plan-1", createdById: "admin-1", pitchGroupId: "group-1", budget: null, gstPercent: null, items: [] },
+      { id: "plan-2", createdById: "admin-1", pitchGroupId: "group-1", budget: null, gstPercent: null, items: [] },
     ]);
 
     const plans = await listPlanGroup("group-1", admin);
@@ -791,8 +972,8 @@ describe("listPlanGroup — every plan sharing a pitchGroupId (code review, 10 S
 
   it("rejects if any plan in the group isn't the requester's own (a Plan Maker can't see into a group via someone else's plan)", async () => {
     mockPrisma.plan.findMany.mockResolvedValue([
-      { id: "plan-1", createdById: "pm-1", pitchGroupId: "group-1", budget: null, isGstPlan: false, items: [] },
-      { id: "plan-2", createdById: "someone-else", pitchGroupId: "group-1", budget: null, isGstPlan: false, items: [] },
+      { id: "plan-1", createdById: "pm-1", pitchGroupId: "group-1", budget: null, gstPercent: null, items: [] },
+      { id: "plan-2", createdById: "someone-else", pitchGroupId: "group-1", budget: null, gstPercent: null, items: [] },
     ]);
 
     await expect(listPlanGroup("group-1", { id: "pm-1", role: "PLAN_MAKER" })).rejects.toBeInstanceOf(ApiError);
@@ -811,7 +992,7 @@ describe("generatePlanSheet — one real spreadsheet per plan (user request, 10 
     clientAddress: null,
     notes: null,
     budget: null,
-    isGstPlan: false,
+    gstPercent: null,
     clientSheetUrl: null,
     internalSheetUrl: null,
     items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }],
@@ -850,8 +1031,8 @@ describe("generatePlanSheet — one real spreadsheet per plan (user request, 10 
     expect(mockMakeFilePublicViewable).toHaveBeenCalledWith({ accessToken: "access-token", fileId: "new-sheet-1" });
     expect(mockEnsureSheetTabsExist).toHaveBeenCalledWith(expect.objectContaining({ spreadsheetId: "new-sheet-1" }));
     expect(mockWriteSheetTab).toHaveBeenCalledTimes(2);
-    // Pages tab needs USER_ENTERED so its =HYPERLINK(...) formula evaluates (see planSheet.js).
-    expect(mockWriteSheetTab.mock.calls[1][0]).toMatchObject({ valueInputOption: "USER_ENTERED" });
+    // Plain text only since 22 Sep (no =HYPERLINK formulas) — written RAW, never USER_ENTERED.
+    expect(mockWriteSheetTab.mock.calls[1][0].valueInputOption).toBeUndefined();
     expect(mockBatchUpdateSpreadsheet).toHaveBeenCalledWith(
       expect.objectContaining({ spreadsheetId: "new-sheet-1", requests: expect.arrayContaining([expect.objectContaining({ unmergeCells: expect.anything() })]) })
     );
@@ -896,6 +1077,58 @@ describe("generatePlanSheet — one real spreadsheet per plan (user request, 10 
   });
 });
 
+describe("generatePlanSheet — Plan A, B, C… share one sheet, two tabs per plan (user request, 23 Sep)", () => {
+  const planA = { id: "plan-a", name: "Q1 Push", variantLabel: "Plan A", pitchGroupId: "g1", createdById: "admin-1", clientName: "Acme", budget: null, gstPercent: null, clientSheetUrl: "https://docs.google.com/spreadsheets/d/group-sheet/edit?gid=1#gid=1", internalSheetUrl: null, items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }] };
+  const planB = { ...planA, id: "plan-b", variantLabel: "Plan B", clientSheetUrl: null, items: [] };
+
+  beforeEach(() => {
+    mockIsGoogleOAuthConfigured.mockReturnValue(true);
+    mockGetUserAccessToken.mockResolvedValue("access-token");
+    mockGetSheetTabIds.mockImplementation(({ titles }) => Object.fromEntries(titles.map((t, i) => [t, 100 + i])));
+  });
+
+  it("generating from Plan B writes into the group's existing sheet, rewrites every plan's tab pair, and links each plan to its own Overview tab", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(planB);
+    mockPrisma.plan.findMany.mockResolvedValue([planA, planB]);
+
+    const result = await generatePlanSheet("plan-b", admin);
+
+    expect(mockCreateSpreadsheet).not.toHaveBeenCalled();
+    const { spreadsheetId, titles } = mockEnsureSheetTabsExist.mock.calls[0][0];
+    expect(spreadsheetId).toBe("group-sheet");
+    expect(titles).toHaveLength(4);
+    expect(titles.filter((t) => t.includes("Plan A"))).toHaveLength(2);
+    expect(titles.filter((t) => t.includes("Plan B"))).toHaveLength(2);
+    expect(mockWriteSheetTab).toHaveBeenCalledTimes(4);
+    // Titles are [A overview, A pages, B overview, B pages] → gids 100..103.
+    expect(result.spreadsheetUrl).toBe("https://docs.google.com/spreadsheets/d/group-sheet/edit?gid=102#gid=102");
+    expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-a" }, data: { clientSheetUrl: "https://docs.google.com/spreadsheets/d/group-sheet/edit?gid=100#gid=100" } });
+    expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-b" }, data: { clientSheetUrl: result.spreadsheetUrl } });
+  });
+
+  it("a brand-new group sheet is named without a variant label, since it holds every plan", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue({ ...planB });
+    mockPrisma.plan.findMany.mockResolvedValue([{ ...planA, clientSheetUrl: null }, planB]);
+    mockCreateSpreadsheet.mockResolvedValue({ spreadsheetId: "new-group-sheet", defaultSheetId: 0 });
+
+    await generatePlanSheet("plan-b", admin);
+
+    expect(mockCreateSpreadsheet).toHaveBeenCalledWith({ accessToken: "access-token", title: "Q1 Push — Client (Taggify)" });
+  });
+
+  it("leaves out a sibling a Plan Maker can't open instead of leaking it into their sheet", async () => {
+    const pm = { id: "pm-1", role: "PLAN_MAKER" };
+    mockPrisma.plan.findUnique.mockResolvedValue({ ...planB, createdById: "pm-1" });
+    mockPrisma.plan.findMany.mockResolvedValue([{ ...planA, createdById: "someone-else" }, { ...planB, createdById: "pm-1" }]);
+
+    await generatePlanSheet("plan-b", pm, { internal: true });
+
+    const { titles } = mockEnsureSheetTabsExist.mock.calls[0][0];
+    expect(titles).toHaveLength(2);
+    expect(titles.every((t) => t.includes("Plan B"))).toBe(true);
+  });
+});
+
 describe("getExecutionSheetTemplate — the downloadable sample sheet (user request, 10 Sep), reused across requests via AppSetting", () => {
   beforeEach(() => {
     mockIsGoogleOAuthConfigured.mockReturnValue(true);
@@ -929,7 +1162,7 @@ describe("getExecutionSheetTemplate — the downloadable sample sheet (user requ
     expect(mockPrisma.appSetting.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { key: "executionTemplateSpreadsheetId" }, create: { key: "executionTemplateSpreadsheetId", value: "template-sheet-1" } })
     );
-    expect(mockWriteSheetTab).toHaveBeenCalledWith(expect.objectContaining({ valueInputOption: "USER_ENTERED" }));
+    expect(mockWriteSheetTab.mock.calls.at(-1)[0].valueInputOption).toBeUndefined();
     expect(result.spreadsheetUrl).toBe("https://docs.google.com/spreadsheets/d/template-sheet-1/edit?gid=555#gid=555");
   });
 
@@ -949,7 +1182,7 @@ describe("getExecutionSheetTemplatePreview — the in-app preview table (user re
   it("returns the sample as plain headers/rows, matching the reference sheet's columns", () => {
     const result = getExecutionSheetTemplatePreview();
 
-    expect(result.headers).toEqual(["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link", "Views", "Likes", "Comments", "Shares"]);
+    expect(result.headers).toEqual(["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link"]);
     expect(result.rows).toHaveLength(2);
     expect(result.totalsRow[3]).toBe(8700000 + 4300000); // Followers total
     expect(mockGetUserAccessToken).not.toHaveBeenCalled(); // never touches Google
@@ -963,16 +1196,40 @@ describe("Client invoice (user request, 13 Sep — \"on clicking generate invoic
     name: "Q1 Push",
     createdById: "pm-1",
     status: "APPROVED",
-    isGstPlan: true,
+    gstPercent: 18,
     budget: null,
     overrideCost: null,
     clientInvoiceNumber: null,
     items: [{ id: "i1", assetId: "asset-1", format: "reel", cost: 4000, clientCost: 5000, postsPerProfile: 2, asset }],
     ...overrides,
   });
-  const details = { clientCompany: " Acme Foods Pvt Ltd ", clientGstNumber: "27ABCDE1234F1Z5", clientAddress: "12 MG Road, Pune", clientPhone: "" };
+  const details = { clientCompany: " Acme Foods Pvt Ltd ", clientGstNumber: "27ABCDE1234F1Z5", clientAddress: "12 MG Road, Pune", clientPhone: "", invoiceDescription: " Influencer marketing services ", hsnSac: "" };
+  const financeUser = { id: "fin-1", role: "FINANCE" };
+  const numbering = (prefix, next) => [
+    { key: "clientInvoicePrefix", value: prefix },
+    { key: "clientInvoiceNextNumber", value: String(next) },
+  ];
+  beforeEach(() => mockPrisma.appSetting.findMany.mockResolvedValue(numbering("TAG/", 7)));
 
-  it("saves the popup's details onto the plan, mints a CINV number and stamps the time", async () => {
+  it("writes the receivables ledger row (23 Sep): number + client-facing totals, issued by the requester; a regenerate only refreshes number/totals", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ campaignId: "camp-1" }));
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan({ campaignId: "camp-1" }), ...data }));
+
+    await generateClientInvoice("plan-1", planMaker, details);
+
+    // 2 posts × 5000 client cost = 10000, 18% GST = 1800.
+    expect(mockPrisma.clientInvoice.upsert).toHaveBeenCalledWith({
+      where: { planId: "plan-1" },
+      create: expect.objectContaining({ planId: "plan-1", issuedById: "pm-1", invoiceNumber: "TAG/0007", subtotal: 10000, gstPercent: 18, gstAmount: 1800, total: 11800, campaignId: "camp-1" }),
+      update: { invoiceNumber: "TAG/0007", subtotal: 10000, gstPercent: 18, gstAmount: 1800, total: 11800, campaignId: "camp-1" },
+    });
+    const { update } = mockPrisma.clientInvoice.upsert.mock.calls[0][0];
+    expect(update).not.toHaveProperty("status");
+    expect(update).not.toHaveProperty("issuedAt");
+    expect(update).not.toHaveProperty("paidAt");
+  });
+
+  it("saves the popup's details onto the plan, takes the counter's next number and stamps the time", async () => {
     mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
     mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
 
@@ -980,7 +1237,10 @@ describe("Client invoice (user request, 13 Sep — \"on clicking generate invoic
 
     const data = mockPrisma.plan.update.mock.calls[0][0].data;
     expect(data).toMatchObject({ clientCompany: "Acme Foods Pvt Ltd", clientGstNumber: "27ABCDE1234F1Z5", clientAddress: "12 MG Road, Pune", clientPhone: null });
-    expect(data.clientInvoiceNumber).toMatch(/^CINV-\d+-[A-Z0-9]{6}$/); // no _ or - on a client-facing number
+    expect(data).toMatchObject({ invoiceDescription: "Influencer marketing services", hsnSac: null });
+    expect(data.clientInvoiceNumber).toBe("TAG/0007");
+    // ...and the counter moves on only after the number was really taken.
+    expect(mockPrisma.appSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { key: "clientInvoiceNextNumber" }, update: { value: "8" } }));
     expect(data.clientInvoiceAt).toBeInstanceOf(Date);
     expect(plan.clientInvoiceNumber).toBe(data.clientInvoiceNumber);
     // The client-facing total is what gets invoiced: 5000 × 2 posts + 18% GST.
@@ -994,6 +1254,83 @@ describe("Client invoice (user request, 13 Sep — \"on clicking generate invoic
     await generateClientInvoice("plan-1", planMaker, { ...details, clientAddress: "New address" });
 
     expect(mockPrisma.plan.update.mock.calls[0][0].data).toMatchObject({ clientInvoiceNumber: "CINV-1-ABCDEF", clientAddress: "New address" });
+    expect(mockPrisma.appSetting.upsert).not.toHaveBeenCalled(); // an old-series number never moves the counter
+  });
+
+  it("a role granted plans.edit (not ADMIN, not PLAN_MAKER) can invoice a plan it didn't create — 23 Sep, assertCanAccessPlan reads the permission, not bare role", async () => {
+    // The plan belongs to pm-1, not fin-1 — before the 23 Sep fix this threw
+    // PLAN_NOT_FOUND for anyone but an ADMIN-role account or the plan's own
+    // creator, even though the route already let a plans.edit grant through.
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "FINANCE", permissions: { "plans.edit": true } });
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
+
+    await expect(generateClientInvoice("plan-1", financeUser, details)).resolves.toBeTruthy();
+  });
+
+  it("a plain FINANCE account (no grant) still can't invoice another maker's plan", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
+
+    await expect(generateClientInvoice("plan-1", financeUser, details)).rejects.toMatchObject({ code: "PLAN_NOT_FOUND" });
+  });
+
+  it("Admin/Finance can type the invoice number; ahead of the counter it pulls the counter past it", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ createdById: "fin-1" }));
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
+
+    await generateClientInvoice("plan-1", financeUser, { ...details, clientInvoiceNumber: "TAG/0020" });
+
+    expect(mockPrisma.plan.update.mock.calls[0][0].data.clientInvoiceNumber).toBe("TAG/0020");
+    expect(mockPrisma.appSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { value: "21" } }));
+  });
+
+  it("a typed number below the counter, or outside the series, leaves the counter alone", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
+
+    await generateClientInvoice("plan-1", { id: "admin-1", role: "ADMIN" }, { ...details, clientInvoiceNumber: "TAG/0003" });
+    await generateClientInvoice("plan-1", { id: "admin-1", role: "ADMIN" }, { ...details, clientInvoiceNumber: "MANUAL-9" });
+
+    expect(mockPrisma.appSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  it("a Plan Maker can't set the invoice number, but re-sending the plan's own number is fine", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ clientInvoiceNumber: "TAG/0002" }));
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
+
+    await expect(generateClientInvoice("plan-1", planMaker, { ...details, clientInvoiceNumber: "TAG/0099" })).rejects.toMatchObject({ code: "INVOICE_NUMBER_FORBIDDEN" });
+    expect(mockPrisma.plan.update).not.toHaveBeenCalled();
+    await expect(generateClientInvoice("plan-1", planMaker, { ...details, clientInvoiceNumber: "TAG/0002" })).resolves.toBeTruthy();
+  });
+
+  it("a taken number the counter proposed is stepped past, so a Plan Maker (who can't type one) isn't stuck", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
+    // TAG/0007 is taken; the counter then reads 8.
+    mockPrisma.appSetting.findMany.mockResolvedValueOnce(numbering("TAG/", 7)).mockResolvedValueOnce(numbering("TAG/", 7)).mockResolvedValue(numbering("TAG/", 8));
+    mockPrisma.plan.update
+      .mockRejectedValueOnce(Object.assign(new Error("unique"), { code: "P2002" }))
+      .mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
+
+    const plan = await generateClientInvoice("plan-1", planMaker, details);
+
+    expect(plan.clientInvoiceNumber).toBe("TAG/0008");
+  });
+
+  it("a typed number far too long to be a counter value never touches the counter", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan(), ...data }));
+
+    await generateClientInvoice("plan-1", { id: "admin-1", role: "ADMIN" }, { ...details, clientInvoiceNumber: "TAG/1234567890123456789012" });
+
+    expect(mockPrisma.appSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  it("a number already used on another plan is a 409, and the counter doesn't move", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan());
+    mockPrisma.plan.update.mockRejectedValue(Object.assign(new Error("unique"), { code: "P2002" }));
+
+    await expect(generateClientInvoice("plan-1", { id: "admin-1", role: "ADMIN" }, { ...details, clientInvoiceNumber: "TAG/0001" })).rejects.toMatchObject({ code: "INVOICE_NUMBER_TAKEN" });
+    expect(mockPrisma.appSetting.upsert).not.toHaveBeenCalled();
   });
 
   it("refuses a plan that isn't approved yet", async () => {
@@ -1002,14 +1339,13 @@ describe("Client invoice (user request, 13 Sep — \"on clicking generate invoic
     expect(mockPrisma.plan.update).not.toHaveBeenCalled();
   });
 
-  it("a GST plan needs the client's GST number; a non-GST plan doesn't", async () => {
-    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ isGstPlan: true }));
+  it("the client's GST number is mandatory — on a GST plan and a non-GST plan alike (21 Sep)", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ gstPercent: 18 }));
     await expect(generateClientInvoice("plan-1", planMaker, { ...details, clientGstNumber: "  " })).rejects.toMatchObject({ code: "CLIENT_GST_REQUIRED" });
 
-    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ isGstPlan: false }));
-    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approvedPlan({ isGstPlan: false }), ...data }));
-    await expect(generateClientInvoice("plan-1", planMaker, { ...details, clientGstNumber: "" })).resolves.toBeTruthy();
-    expect(mockPrisma.plan.update.mock.calls[0][0].data.clientGstNumber).toBeNull();
+    mockPrisma.plan.findUnique.mockResolvedValue(approvedPlan({ gstPercent: null }));
+    await expect(generateClientInvoice("plan-1", planMaker, { ...details, clientGstNumber: "" })).rejects.toMatchObject({ code: "CLIENT_GST_REQUIRED" });
+    expect(mockPrisma.plan.update).not.toHaveBeenCalled();
   });
 
   it("refuses a plan with nothing to invoice (no client-facing cost)", async () => {
@@ -1190,8 +1526,8 @@ describe("Phases on approval (user request, 14 Sep — \"if post per page will b
       ],
     });
     mockPrisma.campaign.create.mockClear();
-    mockPrisma.campaign.create.mockImplementation(async ({ data }) => ({ id: data.parentCampaignId ? `phase-${data.phaseNumber}` : "root-1", brandName: data.brandName, title: data.title }));
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: 50000, isGstPlan: false, campaignId: "root-1", items: [] });
+    mockPrisma.campaign.create.mockImplementation(async ({ data }) => ({ id: data.parentCampaignId ? `post-${data.postNumber}` : "root-1", brandName: data.brandName, title: data.title }));
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: 50000, gstPercent: null, campaignId: "root-1", items: [] });
 
     const plan = await approvePlan("plan-1", planMaker);
 
@@ -1201,11 +1537,14 @@ describe("Phases on approval (user request, 14 Sep — \"if post per page will b
     expect(calls[0]).toMatchObject({ title: "Q1 Push", costCap: 50000 });
     expect(calls[0].parentCampaignId).toBeUndefined();
     expect(calls[0].assignments.create.map((a) => a.assetId)).toEqual(["asset-1", "asset-2", "asset-3"]);
-    // Phase 2: pages with ≥2 posts; phase 3: pages with ≥3. Same brand, under the root, no separate cap.
-    expect(calls[1]).toMatchObject({ brandName: "Acme", title: "Q1 Push — Phase 2", parentCampaignId: "root-1", phaseNumber: 2 });
+    // 22 Sep — posts 2 and 3 are extra posts OF PHASE 1 (not real phases):
+    // phaseNumber 1, postNumber 2/3, titled like the campaign. Creators still
+    // see them as Phase 2/3 (lib/campaignPhases.js); admins see one phase.
+    // Post 2: pages with ≥2 posts; post 3: pages with ≥3. Same brand, under the root, no separate cap.
+    expect(calls[1]).toMatchObject({ brandName: "Acme", title: "Q1 Push", parentCampaignId: "root-1", phaseNumber: 1, postNumber: 2 });
     expect(calls[1].assignments.create.map((a) => a.assetId)).toEqual(["asset-1", "asset-2"]);
     expect(calls[1].costCap).toBeUndefined();
-    expect(calls[2]).toMatchObject({ title: "Q1 Push — Phase 3", parentCampaignId: "root-1", phaseNumber: 3 });
+    expect(calls[2]).toMatchObject({ title: "Q1 Push", parentCampaignId: "root-1", phaseNumber: 1, postNumber: 3 });
     expect(calls[2].assignments.create).toEqual([{ assetId: "asset-1", pageHandle: "demo.page", format: "reel", cost: 5000, status: "matched" }]);
     // The plan links to the root, not a phase.
     expect(mockPrisma.plan.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ campaignId: "root-1" }) }));
@@ -1228,7 +1567,7 @@ describe("Phases on approval (user request, 14 Sep — \"if post per page will b
     });
     mockPrisma.campaign.create.mockClear();
     mockPrisma.campaign.create.mockImplementation(async ({ data }) => ({ id: data.parentCampaignId ? `phase-${data.phaseNumber}` : "root-1", brandName: data.brandName }));
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, gstPercent: null, items: [] });
     await approvePlan("plan-1", planMaker);
     const calls = mockPrisma.campaign.create.mock.calls.map((c) => c[0].data);
     expect(calls).toHaveLength(3);
@@ -1241,8 +1580,159 @@ describe("Phases on approval (user request, 14 Sep — \"if post per page will b
     mockPrisma.plan.findUnique.mockResolvedValue({ id: "plan-1", createdById: "pm-1", status: "DRAFT", name: "Q1", clientName: "Acme", clientCompany: null, budget: null, items: [{ assetId: "asset-1", format: "reel", cost: 5000, postsPerProfile: 1, asset }] });
     mockPrisma.campaign.create.mockClear();
     mockPrisma.campaign.create.mockResolvedValue({ id: "root-1" });
-    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, isGstPlan: false, items: [] });
+    mockPrisma.plan.update.mockResolvedValue({ id: "plan-1", status: "APPROVED", budget: null, gstPercent: null, items: [] });
     await approvePlan("plan-1", planMaker);
     expect(mockPrisma.campaign.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("syncExecutionSheet — execution sheet → links (user decision, 23 Sep: parse, auto-create links, list the rest as pending)", () => {
+  const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+  const page2 = { id: "asset-2", handle: "laughter.colours", followers: 4300000, rateCards: [] };
+  const approved = (overrides = {}) => ({
+    id: "plan-1",
+    name: "Q1 Push",
+    createdById: "pm-1",
+    status: "APPROVED",
+    campaignId: "camp-root",
+    executionSheetUrl: "https://docs.google.com/spreadsheets/d/abc/edit",
+    budget: null,
+    gstPercent: null,
+    overrideCost: null,
+    items: [
+      { id: "i1", assetId: "asset-1", format: "reel", cost: 4000, clientCost: 5000, postsPerProfile: 2, asset },
+      { id: "i2", assetId: "asset-2", format: "story", cost: 1000, clientCost: 1200, postsPerProfile: 1, asset: page2 },
+    ],
+    ...overrides,
+  });
+  const CSV = [
+    "S No,Page Name,Page Link,Followers,Date,Posted Link",
+    "1,demo.page,https://instagram.com/demo.page,100000,10 Sept,https://instagram.com/reel/r1",
+    "2,demo.page,https://instagram.com/demo.page,100000,11 Sept,https://instagram.com/reel/r2",
+    "3,demo.page,https://instagram.com/demo.page,100000,12 Sept,https://instagram.com/reel/r3",
+    "4,Laughter Colours,https://instagram.com/laughter.colours,4300000,10 Sept,",
+    "5,Unknown Page,https://instagram.com/nobody,1,10 Sept,https://instagram.com/reel/r9",
+    ",TOTAL,,,,",
+  ].join("\n");
+  // Slots the approval created: demo.page has 2 posts (root + postNumber 2), laughter.colours 1.
+  const slots = () => [
+    { id: "a-root-1", campaignId: "camp-root", assetId: "asset-1", format: "reel", cost: 4000, linkId: null, asset },
+    { id: "a-p2-1", campaignId: "camp-p2", assetId: "asset-1", format: "reel", cost: 4000, linkId: null, asset },
+    { id: "a-root-2", campaignId: "camp-root", assetId: "asset-2", format: "story", cost: 1000, linkId: null, asset: page2 },
+  ];
+
+  beforeEach(() => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approved());
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...approved(), ...data }));
+    mockPrisma.campaign.findMany.mockResolvedValue([{ id: "camp-root", postNumber: null }, { id: "camp-p2", postNumber: 2 }]);
+    mockPrisma.campaignAssignment.findMany.mockResolvedValue(slots());
+    mockPrisma.campaignAssignment.update.mockResolvedValue({});
+    mockPrisma.link.findFirst.mockResolvedValue(null);
+    mockFetchSheetCsv.mockResolvedValue(CSV);
+    let n = 0;
+    mockAutoAttachLink.mockImplementation(async () => ({ id: `link-${++n}` }));
+  });
+
+  it("creates one SUBMITTED link per posted row on the page's next free slot (1st post → root row, 2nd → postNumber 2), carrying the slot's format/cost", async () => {
+    const { summary, plan } = await syncExecutionSheet("plan-1", planMaker);
+
+    expect(mockFetchSheetCsv).toHaveBeenCalledWith("https://docs.google.com/spreadsheets/d/abc/edit");
+    expect(mockAutoAttachLink).toHaveBeenCalledTimes(2);
+    expect(mockAutoAttachLink.mock.calls[0]).toEqual([asset, { campaignId: "camp-root", url: "https://instagram.com/reel/r1", format: "reel", cost: 4000 }]);
+    expect(mockAutoAttachLink.mock.calls[1]).toEqual([asset, { campaignId: "camp-p2", url: "https://instagram.com/reel/r2", format: "reel", cost: 4000 }]);
+    // Each filled slot remembers its link + post URL, like the campaign sheet import does.
+    expect(mockPrisma.campaignAssignment.update).toHaveBeenCalledWith({ where: { id: "a-root-1" }, data: { linkId: "link-1", postUrl: "https://instagram.com/reel/r1" } });
+    expect(mockPrisma.campaignAssignment.update).toHaveBeenCalledWith({ where: { id: "a-p2-1" }, data: { linkId: "link-2", postUrl: "https://instagram.com/reel/r2" } });
+
+    expect(summary).toEqual({ attached: 2, alreadyLinked: 0, pending: 3, rows: 5 });
+    // Pending rows say why, in the order they appear in the sheet.
+    expect(plan.executionSheetPending.map((p) => [p.rowNumber, p.reason])).toEqual([
+      [4, "More posts than the plan booked for @demo.page (2)"],
+      [5, "No posted link yet"],
+      [6, "@nobody isn't a page on this plan"],
+    ]);
+    const { data } = mockPrisma.plan.update.mock.calls[0][0];
+    expect(data.executionSheetFetchedAt).toBeInstanceOf(Date);
+  });
+
+  it("is idempotent: a URL already linked for the page is counted, not re-created, and a filled slot isn't reused", async () => {
+    mockPrisma.link.findFirst.mockImplementation(async ({ where }) => (where.url === "https://instagram.com/reel/r1" ? { id: "link-existing" } : null));
+    mockPrisma.campaignAssignment.findMany.mockResolvedValue(slots().map((s) => (s.id === "a-root-1" ? { ...s, linkId: "link-existing" } : s)));
+
+    const { summary } = await syncExecutionSheet("plan-1", planMaker);
+
+    expect(summary).toMatchObject({ attached: 1, alreadyLinked: 1 });
+    expect(mockAutoAttachLink).toHaveBeenCalledTimes(1);
+    expect(mockAutoAttachLink.mock.calls[0][1]).toMatchObject({ campaignId: "camp-p2", url: "https://instagram.com/reel/r2" });
+  });
+
+  it("a pricing/attach failure on one row becomes that row's pending reason and doesn't stop the rest", async () => {
+    mockAutoAttachLink.mockRejectedValueOnce(new ApiError(400, "NO_RATE_CARD", 'No rate card set for format "reel" on @demo.page')).mockResolvedValue({ id: "link-x" });
+
+    const { summary, plan } = await syncExecutionSheet("plan-1", planMaker);
+
+    // The failed row's slot stays free, so rows 2 and 3 both attach.
+    expect(summary.attached).toBe(2);
+    expect(plan.executionSheetPending[0]).toMatchObject({ rowNumber: 2, reason: 'No rate card set for format "reel" on @demo.page' });
+  });
+
+  it("refuses without a sheet, before approval, and on a sheet with no recognisable header", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approved({ executionSheetUrl: null }));
+    await expect(syncExecutionSheet("plan-1", planMaker)).rejects.toMatchObject({ code: "NO_EXECUTION_SHEET" });
+
+    mockPrisma.plan.findUnique.mockResolvedValue(approved({ status: "DRAFT", campaignId: null }));
+    await expect(syncExecutionSheet("plan-1", planMaker)).rejects.toMatchObject({ code: "PLAN_NOT_APPROVED" });
+
+    mockPrisma.plan.findUnique.mockResolvedValue(approved());
+    mockFetchSheetCsv.mockResolvedValue("Name,Amount\nx,1\n");
+    await expect(syncExecutionSheet("plan-1", planMaker)).rejects.toMatchObject({ code: "SHEET_FORMAT" });
+    expect(mockAutoAttachLink).not.toHaveBeenCalled();
+  });
+
+  it("404s a Plan Maker on someone else's plan", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(approved({ createdById: "someone-else" }));
+    await expect(syncExecutionSheet("plan-1", planMaker)).rejects.toMatchObject({ code: "PLAN_NOT_FOUND" });
+  });
+});
+
+describe("updatePlan — saving an execution sheet link on an approved plan reads it straight away (23 Sep)", () => {
+  const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+  const base = { id: "plan-1", createdById: "pm-1", status: "APPROVED", campaignId: "camp-root", executionSheetUrl: null, budget: null, gstPercent: null, overrideCost: null, items: [], sourceSheetPending: null };
+  const url = "https://docs.google.com/spreadsheets/d/xyz/edit";
+
+  beforeEach(() => {
+    mockPrisma.plan.findUnique.mockReset().mockResolvedValueOnce(base).mockResolvedValue({ ...base, executionSheetUrl: url });
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...base, executionSheetUrl: url, ...data }));
+    mockPrisma.campaign.findMany.mockResolvedValue([{ id: "camp-root", postNumber: null }]);
+    mockPrisma.campaignAssignment.findMany.mockResolvedValue([]);
+  });
+
+  it("clears the old pending list, then syncs and returns the synced plan", async () => {
+    mockFetchSheetCsv.mockResolvedValue("Page Name,Posted Link\n");
+
+    const plan = await updatePlan("plan-1", planMaker, { executionSheetUrl: url });
+
+    expect(mockPrisma.plan.update.mock.calls[0][0].data).toMatchObject({ executionSheetUrl: url, executionSheetPending: null, executionSheetFetchedAt: null });
+    expect(mockFetchSheetCsv).toHaveBeenCalledWith(url);
+    expect(plan.executionSheetFetchedAt).toBeInstanceOf(Date);
+    expect(plan.executionSheetSyncError).toBeUndefined();
+  });
+
+  it("a sheet that can't be read still saves the link and reports the problem on the response instead of failing", async () => {
+    mockFetchSheetCsv.mockRejectedValue(new ApiError(400, "SHEET_NOT_SHARED", "Couldn't read that sheet — make sure it's shared"));
+
+    const plan = await updatePlan("plan-1", planMaker, { executionSheetUrl: url });
+
+    expect(plan.executionSheetUrl).toBe(url);
+    expect(plan.executionSheetSyncError).toMatch(/shared/);
+  });
+
+  it("does not try to read the sheet on a plan that isn't approved yet", async () => {
+    mockPrisma.plan.findUnique.mockReset().mockResolvedValue({ ...base, status: "DRAFT", campaignId: null });
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...base, status: "DRAFT", campaignId: null, ...data }));
+
+    await updatePlan("plan-1", planMaker, { executionSheetUrl: url });
+
+    expect(mockFetchSheetCsv).not.toHaveBeenCalled();
   });
 });

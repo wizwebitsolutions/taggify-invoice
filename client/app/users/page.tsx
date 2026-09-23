@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { cn } from "@/lib/utils";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -17,23 +16,41 @@ import { Tabs } from "@/components/ui/chips";
 import { Tag } from "@/components/ui/tag";
 import { Card, CardHeader, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
 import { useAuth } from "@/lib/auth-context";
-import { admin as adminApi, auth as authApi, assets as assetsApi, LINK_FORMATS, ApiError, hasAccess, type User, type Role, type Permissions, type Asset } from "@/lib/api-client";
+import {
+  admin as adminApi,
+  auth as authApi,
+  assets as assetsApi,
+  LINK_FORMATS,
+  ApiError,
+  hasAccess,
+  PERMISSION_KEYS,
+  ROLE_DEFAULT_PERMISSIONS,
+  type User,
+  type Role,
+  type Permissions,
+  type Asset,
+} from "@/lib/api-client";
+import { AccessEditor, AccessSummary } from "@/components/users/access-editor";
 import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
 
 const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
 
-// Sub-admin permission overlay (newTask.md, 8 Sep) — one checkbox per
-// server-side key (lib/permissions.js), labeled by the section it actually
-// gates rather than the raw key name.
-const PERMISSION_LABELS: Record<keyof Permissions, string> = {
-  "users.manage": "Users — create accounts, change roles, reset passwords",
-  "campaigns.manage": "Campaigns — create/edit, phases, sheet import",
-  "inventory.manage": "Inventory — add pages, approve, rate cards",
-  "links.review": "Link review — screenshots, insights, cost revisions",
-  "finance.manage": "Finance — invoices, billing approvals, finance export",
-  "plans.manage": "Plans — create/edit/approve any plan",
-};
-const PERMISSION_KEYS = Object.keys(PERMISSION_LABELS) as (keyof Permissions)[];
+// Roles an access overlay can be stored on (23 Sep, mirrors the server's
+// NON_GRANTABLE_ROLES in lib/permissions.js): a Creator / Team member only
+// ever sees their own rows, so any section grant would just let them approve
+// or price their own work. No checklist is shown for them at all.
+const isGrantableRole = (role: Role | undefined) => role !== "CREATOR" && role !== "TEAM_MEMBER";
+
+// A plain, unrestricted ADMIN — the only actor the server lets touch another
+// ADMIN account's role or password, or promote anyone to ADMIN (see
+// admin/service.js's updateUserRole). Mirrored here so the dropdown doesn't
+// offer what would 403.
+const isFullAdmin = (u: { role?: Role; permissions?: Permissions } | null | undefined) =>
+  u?.role === "ADMIN" && !PERMISSION_KEYS.some((k) => u.permissions?.[k] === false);
+
+/** True once a role's overlay deviates at all from that role's own baseline — used to badge both directions (a sub-admin missing something, or any role granted something extra) with one check. */
+const deviatesFromBaseline = (role: Role, permissions: Permissions | undefined) =>
+  !!permissions && PERMISSION_KEYS.some((k) => permissions[k] !== ROLE_DEFAULT_PERMISSIONS[role][k]);
 
 // Only CREATOR accounts own Instagram pages (see system design.md's roles) —
 // Team member/Admin/Finance accounts have no use for one, so the "at least
@@ -67,8 +84,15 @@ function UsersContent() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const token = accessToken!;
   // "Admin" in the loose sense of "can manage People" — a plain ADMIN by
-  // default, or (15 Sep) any other role explicitly granted users.manage.
-  const isAdmin = hasAccess(user, "users.manage");
+  // default, or (15 Sep) any other role explicitly granted users.view.
+  const isAdmin = hasAccess(user, "users.view");
+  const actorIsFullAdmin = isFullAdmin(user);
+  // Mirror admin/service.js's guards so the UI never offers what would 403
+  // (23 Sep): a non-full-admin may only reset Creator / Team member
+  // passwords (any other role could out-rank them once signed in as), and
+  // may not edit an ADMIN's overlay at all.
+  const canResetPassword = (u: User) => actorIsFullAdmin || !isGrantableRole(u.role);
+  const canEditAccess = (u: User) => isGrantableRole(u.role) && (actorIsFullAdmin || u.role !== "ADMIN");
 
   const usersQuery = useQuery({ queryKey: ["adminUsers"], queryFn: () => adminApi.users(token), enabled: isAdmin });
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token), enabled: isAdmin });
@@ -95,10 +119,11 @@ function UsersContent() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adminUsers"] }),
   });
 
-  const isSubAdmin = (u: User) => u.role === "ADMIN" && !!u.permissions && PERMISSION_KEYS.some((k) => u.permissions![k] === false);
-  // The non-ADMIN counterpart (15 Sep) — a Creator/Team member/Finance/
-  // Planner whose overlay turns at least one of the six sections on.
-  const hasGrantedAccess = (u: User) => u.role !== "ADMIN" && !!u.permissions && PERMISSION_KEYS.some((k) => u.permissions![k] === true);
+  const isSubAdmin = (u: User) => u.role === "ADMIN" && deviatesFromBaseline(u.role, u.permissions);
+  // The non-ADMIN counterpart (15 Sep) — a Finance/Planner whose overlay
+  // deviates from that role's own baseline (a grant on top of it, or a
+  // baseline section taken away).
+  const hasGrantedAccess = (u: User) => u.role !== "ADMIN" && isGrantableRole(u.role) && deviatesFromBaseline(u.role, u.permissions);
 
   return (
     <AppShell
@@ -187,12 +212,19 @@ function UsersContent() {
                                 <select
                                   value={u.role}
                                   onChange={(e) => roleMutation.mutate({ id: u.id, role: e.target.value as Role })}
-                                  disabled={roleMutation.isPending || u.id === user?.id}
-                                  title={u.id === user?.id ? "You can't change your own role" : "Change role"}
+                                  disabled={roleMutation.isPending || u.id === user?.id || (!actorIsFullAdmin && u.role === "ADMIN")}
+                                  title={
+                                    u.id === user?.id
+                                      ? "You can't change your own role"
+                                      : !actorIsFullAdmin && u.role === "ADMIN"
+                                        ? "Only a full admin can change an admin's role"
+                                        : "Change role"
+                                  }
+                                  aria-label={`Role for ${u.name ?? u.phoneNumber}`}
                                   className="h-8 w-fit rounded-[6px] border border-border-strong bg-surface px-2 text-[0.78rem] text-text shadow-card focus:border-ink focus:outline-none disabled:opacity-50"
                                 >
                                   {ROLES.map((r) => (
-                                    <option key={r} value={r}>
+                                    <option key={r} value={r} disabled={r === "ADMIN" && !actorIsFullAdmin && u.role !== "ADMIN"}>
                                       {roleLabel(r)}
                                     </option>
                                   ))}
@@ -204,10 +236,12 @@ function UsersContent() {
                             <TD className="hidden whitespace-nowrap text-text-muted xl:table-cell">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</TD>
                             <TD right onClick={(e) => e.stopPropagation()}>
                               <div className="flex flex-col items-end gap-1">
-                                <button type="button" onClick={() => setResettingUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
-                                  Reset password
-                                </button>
-                                {u.id !== user?.id && (
+                                {canResetPassword(u) && (
+                                  <button type="button" onClick={() => setResettingUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
+                                    Reset password
+                                  </button>
+                                )}
+                                {u.id !== user?.id && canEditAccess(u) && (
                                   <button type="button" onClick={() => setEditingAccessUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
                                     Edit access
                                   </button>
@@ -229,9 +263,11 @@ function UsersContent() {
                       title={selected.name ?? "—"}
                       meta={<span className="text-[0.78rem] text-text-muted">{roleLabel(selected.role)} · {selected.phoneNumber}</span>}
                       action={
-                        <Button size="sm" variant="secondary" onClick={() => setResettingUser(selected)}>
-                          Reset password
-                        </Button>
+                        canResetPassword(selected) ? (
+                          <Button size="sm" variant="secondary" onClick={() => setResettingUser(selected)}>
+                            Reset password
+                          </Button>
+                        ) : undefined
                       }
                     />
                     <div className="flex flex-col gap-4 p-[18px]">
@@ -259,18 +295,11 @@ function UsersContent() {
                           </div>
                         )}
                       </div>
-                      {selected.permissions && (
+                      {selected.permissions && isGrantableRole(selected.role) && (
                         <div>
-                          <p className="mb-2 text-[0.8125rem] font-semibold">Permissions</p>
-                          <div className="flex flex-col gap-1.5">
-                            {PERMISSION_KEYS.map((k) => (
-                              <div key={k} className="flex items-center justify-between text-[0.8125rem]">
-                                <span className="text-text-2">{PERMISSION_LABELS[k].split(" — ")[0]}</span>
-                                <span className={cn("h-5 w-9 rounded-full", selected.permissions![k] ? "bg-ink" : "bg-border-strong")} aria-label={selected.permissions![k] ? "on" : "off"} />
-                              </div>
-                            ))}
-                          </div>
-                          {selected.id !== user?.id && (
+                          <p className="mb-2 text-[0.8125rem] font-semibold">Access</p>
+                          <AccessSummary value={selected.permissions} />
+                          {selected.id !== user?.id && canEditAccess(selected) && (
                             <Button size="sm" variant="secondary" className="mt-3" onClick={() => setEditingAccessUser(selected)}>
                               Edit access
                             </Button>
@@ -291,7 +320,7 @@ function UsersContent() {
         {roleMutation.isError && <ErrorNotice message={roleMutation.error instanceof ApiError ? roleMutation.error.message : "Couldn't update that user's role."} />}
       </div>
 
-      {showCreate && <CreateUserModal token={token} onClose={() => setShowCreate(false)} onCreated={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })} />}
+      {showCreate && <CreateUserModal token={token} actorIsFullAdmin={actorIsFullAdmin} onClose={() => setShowCreate(false)} onCreated={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })} />}
 
       {resettingUser && <ResetPasswordModal token={token} targetUser={resettingUser} onClose={() => setResettingUser(null)} />}
 
@@ -333,9 +362,9 @@ function EditAccessModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [values, setValues] = useState<Record<keyof Permissions, boolean>>(() => {
+  const [values, setValues] = useState<Permissions>(() => {
     const current = targetUser.permissions;
-    return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, current?.[k] ?? true])) as Record<keyof Permissions, boolean>;
+    return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, current?.[k] ?? true])) as Permissions;
   });
 
   const saveMutation = useMutation({
@@ -350,23 +379,12 @@ function EditAccessModal({
           <h2 className="text-lg font-semibold">Edit access</h2>
           <p className="mt-1 text-[0.8125rem] text-text-muted">
             What <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> can see and do. Checking a section grants
-            it, unchecking hides it and blocks its actions server-side, even if they still have the link.
+            it, unchecking hides it and blocks its actions server-side, even if they still have the link. Check the section to see and toggle
+            its individual actions (edit, approve, pay…).
           </p>
         </div>
 
-        <div className="flex flex-col gap-3">
-          {PERMISSION_KEYS.map((key) => (
-            <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-surface-2">
-              <input
-                type="checkbox"
-                checked={values[key]}
-                onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.checked }))}
-                className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
-              />
-              <span className="text-[0.8125rem] text-text">{PERMISSION_LABELS[key]}</span>
-            </label>
-          ))}
-        </div>
+        <AccessEditor value={values} onChange={setValues} role={targetUser.role} />
 
         {saveMutation.isError && (
           <ErrorNotice message={saveMutation.error instanceof ApiError ? saveMutation.error.message : "Couldn't save this account's access."} />
@@ -450,7 +468,7 @@ function emptyPage(): DraftPage {
   return { handle: "", category: "", rates: {} };
 }
 
-function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose: () => void; onCreated: () => void }) {
+function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { token: string; actorIsFullAdmin: boolean; onClose: () => void; onCreated: () => void }) {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("CREATOR");
@@ -462,11 +480,13 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
   // created before this feature existed unless something was deliberately
   // toggled. Reset whenever Role changes so leftover checks from one role
   // don't silently carry over as a grant on another.
-  const [permissions, setPermissions] = useState<Record<keyof Permissions, boolean>>(
-    () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, role === "ADMIN"])) as Record<keyof Permissions, boolean>
-  );
+  // Starts at `role`'s own baseline — full for ADMIN, Finance/Planner's
+  // usual sections for those roles, all-off for Creator/Team member (whose
+  // editor is hidden entirely). Reset whenever Role changes so a leftover
+  // toggle from one role doesn't silently carry over as a grant on another.
+  const [permissions, setPermissions] = useState<Permissions>(() => ({ ...ROLE_DEFAULT_PERMISSIONS[role] }));
   useEffect(() => {
-    setPermissions(Object.fromEntries(PERMISSION_KEYS.map((k) => [k, role === "ADMIN"])) as Record<keyof Permissions, boolean>);
+    setPermissions({ ...ROLE_DEFAULT_PERMISSIONS[role] });
   }, [role]);
   const [pages, setPages] = useState<DraftPage[]>([emptyPage()]);
   // Page creation happens after signup succeeds, one request per page — a
@@ -508,11 +528,9 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
   }
 
   // Only send `permissions` at all once it actually deviates from this
-  // role's own baseline (ADMIN: everything true; every other role:
-  // everything false) — see auth/service.js's signup for the matching
+  // role's own baseline — see auth/service.js's signup for the matching
   // server-side default.
-  const hasCustomAccess =
-    role === "ADMIN" ? PERMISSION_KEYS.some((k) => !permissions[k]) : PERMISSION_KEYS.some((k) => permissions[k]);
+  const hasCustomAccess = isGrantableRole(role) && PERMISSION_KEYS.some((k) => permissions[k] !== ROLE_DEFAULT_PERMISSIONS[role][k]);
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -589,34 +607,28 @@ function CreateUserModal({ token, onClose, onCreated }: { token: string; onClose
             <Field label="Role">
               <Select value={role} onChange={(v) => setRole(v as Role)}>
                 {ROLES.map((r) => (
-                  <option key={r} value={r}>
+                  // Only a full admin can create an ADMIN account (server:
+                  // auth/service.js signup → 403 ADMIN_ACCOUNT_RESTRICTED).
+                  <option key={r} value={r} disabled={r === "ADMIN" && !actorIsFullAdmin}>
                     {roleLabel(r)}
                   </option>
                 ))}
               </Select>
             </Field>
 
+            {isGrantableRole(role) && (
             <div className="flex flex-col gap-3 border-t border-border pt-4">
               <div>
-                <p className="text-[0.8125rem] font-semibold">{role === "ADMIN" ? "Access (Sub-admin)" : "Access (optional)"}</p>
+                <p className="text-[0.8125rem] font-semibold">{role === "ADMIN" ? "Access (Sub-admin)" : "Access"}</p>
                 <p className="text-[0.75rem] text-text-faint">
                   {role === "ADMIN"
-                    ? "Leave everything checked for a full admin. Uncheck a section to create a Sub-admin restricted to the rest."
-                    : `Leave everything unchecked for a plain ${roleLabel(role)}. Check a section to also grant that admin page.`}
+                    ? "Leave everything checked for a full admin. Uncheck a section (or just one of its actions) to create a Sub-admin restricted to the rest."
+                    : `Starts at a plain ${roleLabel(role)}'s usual access. Check a section, or one of its actions, to grant more.`}
                 </p>
               </div>
-              {PERMISSION_KEYS.map((key) => (
-                <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-surface-2">
-                  <input
-                    type="checkbox"
-                    checked={permissions[key]}
-                    onChange={(e) => setPermissions((prev) => ({ ...prev, [key]: e.target.checked }))}
-                    className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
-                  />
-                  <span className="text-[0.8125rem] text-text">{PERMISSION_LABELS[key]}</span>
-                </label>
-              ))}
+              <AccessEditor value={permissions} onChange={setPermissions} role={role} />
             </div>
+            )}
 
             {requiresPage && (
               <div className="flex flex-col gap-3 border-t border-border pt-4">

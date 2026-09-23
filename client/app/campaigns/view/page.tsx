@@ -69,19 +69,34 @@ function CampaignDetailContent() {
   // Sep — a granted non-admin role might hold one without the other):
   // campaigns.manage for phases/edit/resolve-pending, links.review for the
   // post review panel.
-  const isAdmin = hasAccess(user, "campaigns.manage");
-  const canReviewLinks = hasAccess(user, "links.review");
+  const isAdmin = hasAccess(user, "campaigns.edit");
+  // The post review panel bundles screenshot/insight approval (links.approve)
+  // with cost revision / invalidation (links.edit); either opens it.
+  const canReviewLinks = hasAccess(user, "links.approve") || hasAccess(user, "links.edit");
   const isPrivileged = user?.role === "ADMIN" || user?.role === "FINANCE" || user?.role === "PLAN_MAKER";
+  // 22 Sep — a Plan Maker can add a real phase to their own plans' campaigns
+  // (the server scopes which); deleting one stays an admin action.
+  const canAddPhase = isAdmin || user?.role === "PLAN_MAKER";
+  const canDeletePhase = isAdmin;
 
   const [detailId, setDetailId] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
   const [showResolvePending, setShowResolvePending] = useState(false);
   const [filter, setFilter] = useState<PostFilter>("all");
+  const [phaseToDelete, setPhaseToDelete] = useState<{ id: string; phaseNumber: number } | null>(null);
 
   const campaignQuery = useQuery({ queryKey: ["campaign", campaignId], queryFn: () => campaignsApi.get(token, campaignId), enabled: Boolean(campaignId) });
   const linksQuery = useQuery({ queryKey: ["links", { campaignId }], queryFn: () => linksApi.list(token, { campaignId, pageSize: 100 }), enabled: Boolean(campaignId) });
   const assignmentsQuery = useQuery({ queryKey: ["campaignAssignments", campaignId], queryFn: () => campaignsApi.listAssignments(token, campaignId), enabled: Boolean(campaignId) });
   const invoicesQuery = useQuery({ queryKey: ["invoices", { campaignId }], queryFn: () => invoicesApi.list(token, { campaignId, pageSize: 100 }), enabled: Boolean(campaignId) && isPrivileged });
+
+  // Opening a page's 2nd-post row directly (dashboards link to a link's
+  // campaignId) answers with the phase it belongs to — follow it, so every
+  // query and action on this page is about the real phase.
+  const resolvedId = campaignQuery.data?.id;
+  useEffect(() => {
+    if (resolvedId && resolvedId !== campaignId) router.replace(`/campaigns/view?id=${resolvedId}${focusInvoices ? "&section=invoices" : ""}`);
+  }, [resolvedId, campaignId, focusInvoices, router]);
 
   const readyToFocus = Boolean(campaignQuery.data) && !linksQuery.isLoading;
   useEffect(() => {
@@ -105,6 +120,17 @@ function CampaignDetailContent() {
     onSuccess: (newPhase) => {
       queryClient.invalidateQueries({ queryKey: ["campaign"] });
       router.push(`/campaigns/view?id=${newPhase.id}`);
+    },
+  });
+
+  const deletePhaseMutation = useMutation({
+    mutationFn: (phaseId: string) => campaignsApi.deletePhase(token, phaseId),
+    onSuccess: (result, phaseId) => {
+      setPhaseToDelete(null);
+      queryClient.invalidateQueries({ queryKey: ["campaign"] });
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      // The phase being viewed is gone — land on Phase 1.
+      if (phaseId === campaignId) router.push(`/campaigns/view?id=${result.rootId}`);
     },
   });
 
@@ -168,16 +194,23 @@ function CampaignDetailContent() {
                 </>
               }
               actions={
-                isAdmin ? (
+                canAddPhase ? (
                   <>
-                    <Button variant="secondary" onClick={() => createPhaseMutation.mutate()} disabled={createPhaseMutation.isPending}>
+                    <Button
+                      variant="secondary"
+                      onClick={() => createPhaseMutation.mutate()}
+                      disabled={createPhaseMutation.isPending}
+                      title="Adds the next phase, starting with Phase 1's pages (one post each)"
+                    >
                       <PlusIcon className="h-4 w-4" />
                       {createPhaseMutation.isPending ? "Adding…" : "Add phase"}
                     </Button>
-                    <Button onClick={() => setShowEdit(true)}>
-                      <EditIcon className="h-4 w-4" />
-                      Edit campaign
-                    </Button>
+                    {isAdmin && (
+                      <Button onClick={() => setShowEdit(true)}>
+                        <EditIcon className="h-4 w-4" />
+                        Edit campaign
+                      </Button>
+                    )}
                   </>
                 ) : undefined
               }
@@ -272,7 +305,19 @@ function CampaignDetailContent() {
                               <Thumb src={null} />
                             </TD>
                             <TD>
-                              <Cell2 primary={`@${link.asset?.handle ?? "—"}`} secondary={`${link.format} · ${ago(link.createdAt)} · ${link.url}`}>
+                              <Cell2
+                                primary={
+                                  <span className="inline-flex items-center gap-1.5">
+                                    @{link.asset?.handle ?? "—"}
+                                    {isPrivileged && (link.campaign?.postNumber ?? 1) > 1 && (
+                                      <span className="rounded-[5px] border border-border bg-surface-2 px-1.5 py-px text-[0.66rem] font-semibold text-text-2" data-testid="post-number-tag">
+                                        Post {link.campaign!.postNumber}
+                                      </span>
+                                    )}
+                                  </span>
+                                }
+                                secondary={`${link.format} · ${ago(link.createdAt)} · ${link.url}`}
+                              >
                                 <StatusSteps status={link.status} className="mt-1" animate={false} />
                               </Cell2>
                             </TD>
@@ -341,7 +386,7 @@ function CampaignDetailContent() {
                       <CardHeader
                         title="Phases"
                         action={
-                          isAdmin ? (
+                          canAddPhase ? (
                             <button type="button" onClick={() => createPhaseMutation.mutate()} className="flex items-center gap-1 text-[0.8125rem] font-medium text-blue hover:text-text">
                               <PlusIcon className="h-3 w-3" /> Add
                             </button>
@@ -350,10 +395,25 @@ function CampaignDetailContent() {
                       />
                       <div className="flex flex-col gap-2.5 p-[18px] pt-3">
                         {(campaign.phases ?? [{ id: campaign.id, phaseNumber: campaign.phaseNumber ?? 1, title: campaign.title, createdAt: campaign.createdAt }]).map((p) => (
-                          <Link key={p.id} href={`/campaigns/view?id=${p.id}`} className="flex items-center gap-2">
-                            <Cell2 primary={`Phase ${p.phaseNumber}`} secondary={`created ${shortDate(p.createdAt)}`} />
-                            <span className="ml-auto">{p.id === campaign.id ? <Tag tone="ok">Viewing</Tag> : <Tag tone="neutral">Open</Tag>}</span>
-                          </Link>
+                          <div key={p.id} className="flex items-center gap-2" data-testid="phase-row">
+                            <Link href={`/campaigns/view?id=${p.id}`} className="flex min-w-0 flex-1 items-center gap-2">
+                              <Cell2 primary={`Phase ${p.phaseNumber}`} secondary={`created ${shortDate(p.createdAt)}`} />
+                              <span className="ml-auto">{p.id === campaign.id ? <Tag tone="ok">Viewing</Tag> : <Tag tone="neutral">Open</Tag>}</span>
+                            </Link>
+                            {canDeletePhase && p.phaseNumber > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  deletePhaseMutation.reset();
+                                  setPhaseToDelete({ id: p.id, phaseNumber: p.phaseNumber });
+                                }}
+                                aria-label={`Delete phase ${p.phaseNumber}`}
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-text-faint transition-colors hover:bg-rose-soft hover:text-rose"
+                              >
+                                <CloseIcon className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
                         ))}
                       </div>
                     </Card>
@@ -385,7 +445,10 @@ function CampaignDetailContent() {
                   <tbody>
                     {assignments.map((a) => (
                       <TR key={a.id}>
-                        <TD className="font-semibold">@{a.pageHandle}</TD>
+                        <TD className="font-semibold">
+                          @{a.pageHandle}
+                          {isPrivileged && (a.postNumber ?? 1) > 1 && <span className="ml-1.5 text-[0.72rem] font-medium text-text-muted">· Post {a.postNumber}</span>}
+                        </TD>
                         {isPrivileged && <TD className="text-text-muted">{a.creatorPhone ?? "—"}</TD>}
                         <TD className="text-[0.8125rem]">
                           {a.postUrl ? (
@@ -413,6 +476,26 @@ function CampaignDetailContent() {
         <Sheet onClose={() => setDetailId(null)} overlayClassName="lg:hidden" panelClassName="lg:hidden">
           <div className="overflow-y-auto p-6 pt-1">
             <LinkDetailPanel link={detail} token={token} isAdmin={canReviewLinks} canUploadScreenshot={false} onChanged={invalidate} />
+          </div>
+        </Sheet>
+      )}
+
+      {phaseToDelete && (
+        <Sheet onClose={() => setPhaseToDelete(null)} panelClassName="md:max-w-[440px]">
+          <div className="flex flex-col gap-4 p-6 pt-1" data-testid="delete-phase-confirm">
+            <h2 className="text-[1.0625rem] font-semibold tracking-[-0.02em]">Delete Phase {phaseToDelete.phaseNumber}?</h2>
+            <p className="text-[0.8125rem] text-text-muted">
+              This removes the phase and the pages booked on it. Later phases move up a number. A phase with submitted posts or invoices can&apos;t be deleted.
+            </p>
+            {deletePhaseMutation.isError && <ErrorNotice message={deletePhaseMutation.error instanceof ApiError ? deletePhaseMutation.error.message : "Couldn't delete this phase."} />}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setPhaseToDelete(null)}>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={() => deletePhaseMutation.mutate(phaseToDelete.id)} disabled={deletePhaseMutation.isPending}>
+                {deletePhaseMutation.isPending ? "Deleting…" : `Delete Phase ${phaseToDelete.phaseNumber}`}
+              </Button>
+            </div>
           </div>
         </Sheet>
       )}

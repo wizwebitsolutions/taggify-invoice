@@ -19,6 +19,11 @@ const getAccountMetricsBatch = vi.fn();
 vi.mock("../../lib/apifyClient.js", () => ({ ApifyInstagramProvider: { getAccountMetricsBatch: (...a) => getAccountMetricsBatch(...a) } }));
 const fetchSheetCsv = vi.fn();
 vi.mock("../campaigns/service.js", () => ({ fetchSheetCsv: (...a) => fetchSheetCsv(...a) }));
+vi.mock("../../lib/cloudinaryClient.js", () => ({ uploadProfilePic: vi.fn(async () => "https://res.cloudinary.com/x/profile-pics/a.jpg"), isCloudinaryConfigured: () => true }));
+
+// What Instagram "returns" for a page it found (22 Sep: every imported page
+// must be confirmed on Instagram before it's stored).
+const found = (over = {}) => ({ followers: 4321, mediaCount: 3, avgViews: null, avgLikes: null, avgComments: null, sampleSize: 0, fullName: null, biography: null, profilePicUrl: null, ...over });
 
 const { previewImport, importAssets, resolveOwnerRef, previewImportFromSheetUrl, fetchImportFollowers } = await import("./service.js");
 const { ApiError } = await import("../../middleware/errorHandler.js");
@@ -37,6 +42,8 @@ beforeEach(() => {
   mockPrisma.asset.findMany.mockResolvedValue([]);
   mockPrisma.asset.findFirst.mockResolvedValue(null);
   mockPrisma.asset.create.mockImplementation(async ({ data }) => ({ id: `asset-${data.handle}`, handle: data.handle, ownerId: data.ownerId }));
+  // By default every page asked about exists on Instagram.
+  getAccountMetricsBatch.mockImplementation(async (handles) => Object.fromEntries(handles.map((h) => [h, found()])));
 });
 
 describe("resolveOwnerRef — matching a sheet's owner cell to a creator account", () => {
@@ -158,15 +165,15 @@ describe("fetchImportFollowers → importAssets reuse", () => {
     expect(out.profiles).not.toHaveProperty("unreached.page");
   });
 
-  it("falls back to the background scrape when storing the preview scrape fails", async () => {
-    getAccountMetricsBatch.mockResolvedValue({ "flaky.page": { followers: 1, mediaCount: 0, avgViews: null, avgLikes: null, avgComments: null, sampleSize: 0, fullName: null, biography: null, profilePicUrl: null } });
+  it("still creates the page when saving the fetched profile fails (logged), and doesn't re-scrape it", async () => {
+    getAccountMetricsBatch.mockResolvedValue({ "flaky.page": found({ followers: 1 }) });
     await fetchImportFollowers(["flaky.page"]);
     applyProfileMetrics.mockRejectedValueOnce(new Error("db hiccup"));
     const admin = { id: "admin-1", role: "ADMIN" };
     const result = await importAssets(admin, [{ handle: "flaky.page", ownerId: "creator-1" }]);
     expect(result.created).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 10));
-    expect(refreshAssetMetrics).toHaveBeenCalledWith("asset-flaky.page");
+    expect(refreshAssetMetrics).not.toHaveBeenCalled();
   });
 
   it("turns an Apify outage into a 502 the modal can show, without blocking the import", async () => {
@@ -174,26 +181,105 @@ describe("fetchImportFollowers → importAssets reuse", () => {
     await expect(fetchImportFollowers(["x.page"])).rejects.toMatchObject({ statusCode: 502, code: "FOLLOWERS_FETCH_FAILED" });
   });
 
-  it("a confirmed import stores the preview's scrape directly and skips the background re-scrape for that page", async () => {
-    getAccountMetricsBatch.mockResolvedValue({ "cached.page": { followers: 777, mediaCount: 1, avgViews: null, avgLikes: null, avgComments: null, sampleSize: 0, fullName: null, biography: null, profilePicUrl: null } });
+  it("reuses the preview's answer and only looks up pages the preview never checked", async () => {
+    getAccountMetricsBatch.mockResolvedValueOnce({ "cached.page": found({ followers: 777 }) });
     await fetchImportFollowers(["cached.page"]);
+    getAccountMetricsBatch.mockClear();
     const admin = { id: "admin-1", role: "ADMIN" };
     const result = await importAssets(admin, [
       { handle: "cached.page", ownerId: "creator-1" },
       { handle: "fresh.page", ownerId: "creator-1" },
     ]);
     expect(result.created.map((a) => a.handle)).toEqual(["cached.page", "fresh.page"]);
+    expect(getAccountMetricsBatch).toHaveBeenCalledTimes(1);
+    expect(getAccountMetricsBatch).toHaveBeenCalledWith(["fresh.page"]);
     expect(applyProfileMetrics).toHaveBeenCalledWith("asset-cached.page", expect.objectContaining({ followers: 777 }));
+    expect(applyProfileMetrics).toHaveBeenCalledWith("asset-fresh.page", expect.objectContaining({ followers: 4321 }));
+    // Nothing is left for a background scrape to do.
     await new Promise((r) => setTimeout(r, 10));
-    expect(refreshAssetMetrics).toHaveBeenCalledWith("asset-fresh.page");
-    expect(refreshAssetMetrics).not.toHaveBeenCalledWith("asset-cached.page");
+    expect(refreshAssetMetrics).not.toHaveBeenCalled();
+  });
+});
+
+// 22 Sep — "if page not found, showing with message link broken or not
+// found and it won't be stored in database". The server decides, not the
+// client: a row the client sends anyway is refused here.
+describe("importAssets — only pages confirmed on Instagram are stored", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+
+  it("a page the preview found missing is skipped with a clear reason and never written", async () => {
+    getAccountMetricsBatch.mockResolvedValueOnce({ "gone.page": null });
+    await fetchImportFollowers(["gone.page"]);
+    getAccountMetricsBatch.mockClear();
+
+    const result = await importAssets(admin, [{ handle: "gone.page", ownerId: "creator-1" }]);
+
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual([{ handle: "gone.page", reason: "Link broken or page not found on Instagram." }]);
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+    // The preview's "not found" is trusted — no second lookup.
+    expect(getAccountMetricsBatch).not.toHaveBeenCalled();
+  });
+
+  it("a page first checked at import that Instagram doesn't know is skipped too", async () => {
+    getAccountMetricsBatch.mockResolvedValueOnce({ "typo.pagee": null, "real.page2": found() });
+    const result = await importAssets(admin, [
+      { handle: "typo.pagee", ownerId: "creator-1" },
+      { handle: "real.page2", ownerId: "creator-1" },
+    ]);
+    expect(result.created.map((a) => a.handle)).toEqual(["real.page2"]);
+    expect(result.skipped).toEqual([{ handle: "typo.pagee", reason: "Link broken or page not found on Instagram." }]);
+    expect(mockPrisma.asset.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("when Instagram can't be reached, nothing unverified is stored", async () => {
+    getAccountMetricsBatch.mockRejectedValueOnce(new Error("Apify timeout"));
+    const result = await importAssets(admin, [{ handle: "unverified.page", ownerId: "creator-1" }]);
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual([{ handle: "unverified.page", reason: "Couldn't verify this page on Instagram right now — try again." }]);
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+  });
+
+  it("a page whose lookup timed out (left out of the answer) is also refused", async () => {
+    getAccountMetricsBatch.mockResolvedValueOnce({});
+    const result = await importAssets(admin, [{ handle: "slow.page", ownerId: "creator-1" }]);
+    expect(result.skipped).toEqual([{ handle: "slow.page", reason: "Couldn't verify this page on Instagram right now — try again." }]);
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+  });
+
+  it("re-checks for the page right before creating it — someone registering it during the Instagram wait wins, no second owner", async () => {
+    let lookups = 0;
+    mockPrisma.asset.findFirst.mockImplementation(async () => {
+      lookups += 1;
+      // Free at the first check; registered under Rahul by the time the insert would run.
+      return lookups === 1 ? null : { ownerId: "creator-2", owner: { name: "Rahul Creator", phoneNumber: "+919000000002" } };
+    });
+    const result = await importAssets(admin, [{ handle: "contested.page", ownerId: "creator-1" }]);
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual([{ handle: "contested.page", reason: "Already registered under Rahul Creator." }]);
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+  });
+
+  it("won't hold the request open verifying a huge never-checked batch — past the cap those rows are refused, not stored", async () => {
+    const rows = Array.from({ length: 101 }, (_, i) => ({ handle: `bulk.page${i}`, ownerId: "creator-1" }));
+    const result = await importAssets(admin, rows);
+    expect(getAccountMetricsBatch).not.toHaveBeenCalled();
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toHaveLength(101);
+    expect(result.skipped[0].reason).toMatch(/Couldn't verify/);
+  });
+
+  it("saves the sheet's Page Name as the display name and Instagram's follower count over the sheet's", async () => {
+    getAccountMetricsBatch.mockResolvedValueOnce({ "named.page": found({ followers: 98765 }) });
+    await importAssets(admin, [{ handle: "named.page", ownerId: "creator-1", pageName: "  Named Page  ", followers: 10 }]);
+    expect(mockPrisma.asset.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ fullName: "Named Page", followers: 98765 }) }));
   });
 });
 
 describe("importAssets — creating the confirmed rows", () => {
   const admin = { id: "admin-1", role: "ADMIN" };
 
-  it("creates each page under its account (approved, since only admins import), with any rate cards from the sheet, and scrapes in the background", async () => {
+  it("creates each page under its account (approved, since only admins import), with any rate cards from the sheet", async () => {
     const result = await importAssets(admin, [
       { handle: "@One.Page", ownerId: "creator-1", category: "News page", followers: 1000, rateCards: [{ format: "reel", amount: 5000 }] },
       { handle: "two.page", ownerId: "creator-2" },
@@ -206,12 +292,11 @@ describe("importAssets — creating the confirmed rows", () => {
     expect(mockPrisma.asset.create).toHaveBeenCalledWith(
       expect.objectContaining({
         // Admin-only route → approved on creation (14 Sep), same as createAsset.
-        data: expect.objectContaining({ handle: "One.Page", ownerId: "creator-1", category: "News page", followers: 1000, approvalStatus: "approved", rateCards: { create: [{ format: "reel", amount: 5000 }] } }),
+        data: expect.objectContaining({ handle: "One.Page", ownerId: "creator-1", category: "News page", followers: 4321, approvalStatus: "approved", rateCards: { create: [{ format: "reel", amount: 5000 }] } }),
       })
     );
-    // Let the (unawaited) scrape chain start.
-    await new Promise((r) => setTimeout(r, 10));
-    expect(refreshAssetMetrics).toHaveBeenCalledWith("asset-One.Page");
+    // The confirmed Instagram profile is stored straight away.
+    expect(applyProfileMetrics).toHaveBeenCalledWith("asset-One.Page", expect.objectContaining({ followers: 4321 }));
   });
 
   it("skips (not fails) rows whose owner isn't a creator, whose handle is taken, or that repeat within the batch", async () => {

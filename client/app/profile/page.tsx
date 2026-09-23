@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -86,6 +86,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState(me.name ?? "");
   const [email, setEmail] = useState(me.email ?? "");
+  const emailLocked = Boolean(me.emailVerifiedAt);
   const [secondaryPhone, setSecondaryPhone] = useState((me.secondaryPhone ?? "").replace(/^\+91/, "").replace(/\D/g, "").slice(0, 10));
   const [addressLine1, setAddressLine1] = useState(me.addressLine1 ?? "");
   const [addressLine2, setAddressLine2] = useState(me.addressLine2 ?? "");
@@ -97,7 +98,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
       // Omit blank fields rather than sending "" — they're optional server-side
       // but validated (e.g. secondaryPhone min length) when present at all.
       const body = Object.fromEntries(
-        Object.entries({ name, email, secondaryPhone: secondaryPhone ? `+91${secondaryPhone}` : "", addressLine1, addressLine2, state, pincode }).filter(([, v]) => v !== "")
+        Object.entries({ name, email: emailLocked ? "" : email, secondaryPhone: secondaryPhone ? `+91${secondaryPhone}` : "", addressLine1, addressLine2, state, pincode }).filter(([, v]) => v !== "")
       );
       return usersApi.updateProfile(token, body);
     },
@@ -115,10 +116,19 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
           <Field label="Phone (registered)">
             <TextField value={me.phoneNumber} onChange={() => {}} disabled className="opacity-60" />
           </Field>
-          <Field label="Email">
-            <TextField type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
-            <FieldError message={VALIDATORS.email(email)} />
-          </Field>
+          {/* Once verified, the email is the sign-in identifier (email 2FA,
+              21 Sep) and the server refuses to change it from here — show it
+              the same locked way as the registered phone. */}
+          {emailLocked ? (
+            <Field label="Email (verified — used to sign in)">
+              <TextField type="email" value={email} onChange={() => {}} disabled className="opacity-60" />
+            </Field>
+          ) : (
+            <Field label="Email">
+              <TextField type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
+              <FieldError message={VALIDATORS.email(email)} />
+            </Field>
+          )}
           <Field label="Secondary phone">
             <PhoneField value={secondaryPhone} onChange={setSecondaryPhone} placeholder="For WhatsApp invoice alerts" />
           </Field>
@@ -222,128 +232,237 @@ function ChangePasswordCard({ token }: { token: string }) {
   );
 }
 
+/**
+ * Billing profiles (user request, 22 Sep — "admin can [add a] billing
+ * profile for himself as well ... and can edit billing details for any
+ * profile ... show list of name, number, and on the right on selection
+ * show all details of billings"). A reviewer (Admin / Finance) gets a
+ * master–detail view: every account with a profile on the left (their own
+ * account always first, even with none yet), the selected account's
+ * profiles — every field, Edit, Approve/Reject — on the right. Everyone
+ * else keeps the plain list of their own profiles, now with Edit.
+ */
 function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean }) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<BillingProfile | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
   const profilesQuery = useQuery({ queryKey: ["billingProfiles"], queryFn: () => billingApi.list(token) });
   const items = profilesQuery.data ?? [];
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["billingProfiles"] });
 
   const approvalMutation = useMutation({
     mutationFn: ({ id, approvalStatus }: { id: string; approvalStatus: BillingProfile["approvalStatus"] }) =>
       billingApi.setApproval(token, id, approvalStatus),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["billingProfiles"] }),
+    onSuccess: refresh,
   });
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <p className="text-[0.8125rem] text-text-faint">
-          {isReviewer
-            ? "Every creator's billing profile, for approval."
-            : "Add at least one approved billing profile to receive payments and raise invoices. Each PAN can only be registered once."}
-        </p>
-        {!isReviewer && (
+  // One row per account, the signed-in user's own first (so an admin can
+  // add their own even with none yet), then the rest by name.
+  const accounts = useMemo(() => {
+    const byUser = new Map<string, { id: string; name: string | null; phoneNumber: string; profiles: BillingProfile[] }>();
+    if (user) byUser.set(user.id, { id: user.id, name: user.name, phoneNumber: user.phoneNumber, profiles: [] });
+    for (const bp of items) {
+      const u = bp.user ?? { id: bp.userId, name: null, phoneNumber: "—" };
+      if (!byUser.has(u.id)) byUser.set(u.id, { ...u, profiles: [] });
+      byUser.get(u.id)!.profiles.push(bp);
+    }
+    const [me, ...rest] = [...byUser.values()].sort((a, b) => Number(b.id === user?.id) - Number(a.id === user?.id) || (a.name ?? "").localeCompare(b.name ?? ""));
+    return me ? [me, ...rest] : rest;
+  }, [items, user]);
+  const selected = accounts.find((a) => a.id === (selectedUserId ?? user?.id)) ?? accounts[0] ?? null;
+  const selectedIsMe = selected?.id === user?.id;
+  const shownProfiles = isReviewer ? (selected?.profiles ?? []) : items;
+
+  const modals = (
+    <>
+      {showForm && (
+        <BillingProfileModal
+          token={token}
+          onClose={() => setShowForm(false)}
+          onSaved={() => {
+            setShowForm(false);
+            refresh();
+          }}
+        />
+      )}
+      {editing && (
+        <BillingProfileModal
+          token={token}
+          profile={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            refresh();
+          }}
+        />
+      )}
+    </>
+  );
+
+  const profileCards = (list: BillingProfile[]) =>
+    list.map((bp) => (
+      <div key={bp.id} className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-5 shadow-card" data-testid={`billing-profile-${bp.id}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[0.9375rem] font-semibold">
+              {bp.pan} — {bp.name}
+            </p>
+            {isReviewer && bp.user && (
+              <p className="mt-0.5 text-xs text-text-faint">
+                {bp.user.name ?? "—"} · {bp.user.phoneNumber}
+              </p>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold",
+                bp.approvalStatus === "approved" ? "bg-accent-soft text-accent" : bp.approvalStatus === "rejected" ? "bg-rose-soft text-rose" : "bg-slate-soft text-slate"
+              )}
+            >
+              {bp.approvalStatus}
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => setEditing(bp)} aria-label={`Edit billing profile ${bp.pan}`}>
+              Edit
+            </Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 border-t border-border pt-3 text-[0.8125rem] sm:grid-cols-2">
+          <div>
+            <p className="text-xs text-text-faint">GSTIN</p>
+            <p className="font-medium">{bp.gstin || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-text-faint">MSME</p>
+            <p className="font-medium">{bp.msme || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-text-faint">Bank account number</p>
+            <p className="font-medium">{bp.bankAccountNumber}</p>
+          </div>
+          <div>
+            <p className="text-xs text-text-faint">IFSC code</p>
+            <p className="font-medium">{bp.ifscCode}</p>
+          </div>
+        </div>
+        {isReviewer && bp.approvalStatus === "pending" && (
+          <div className="flex gap-2 border-t border-border pt-3">
+            <Button size="sm" className="flex-1" onClick={() => approvalMutation.mutate({ id: bp.id, approvalStatus: "approved" })} disabled={approvalMutation.isPending}>
+              Approve
+            </Button>
+            <Button variant="danger" size="sm" className="flex-1" onClick={() => approvalMutation.mutate({ id: bp.id, approvalStatus: "rejected" })} disabled={approvalMutation.isPending}>
+              Reject
+            </Button>
+          </div>
+        )}
+      </div>
+    ));
+
+  if (!isReviewer) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <p className="text-[0.8125rem] text-text-faint">Add at least one approved billing profile to receive payments and raise invoices. Each PAN can only be registered once.</p>
           <Button size="sm" onClick={() => setShowForm(true)}>
             Add billing profile
           </Button>
+        </div>
+        {profilesQuery.isLoading ? (
+          <div className="rounded-lg border border-border bg-surface shadow-card">
+            <TableSkeleton />
+          </div>
+        ) : items.length === 0 ? (
+          <div className="rounded-lg border border-border bg-surface shadow-card">
+            <EmptyState label="No billing profiles yet." />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">{profileCards(items)}</div>
         )}
+        {modals}
       </div>
+    );
+  }
 
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-[0.8125rem] text-text-faint">Every account's billing profiles — pick one on the left to see, edit or approve its details. Your own is first.</p>
       {profilesQuery.isLoading ? (
         <div className="rounded-lg border border-border bg-surface shadow-card">
           <TableSkeleton />
         </div>
-      ) : items.length === 0 ? (
-        <div className="rounded-lg border border-border bg-surface shadow-card">
-          <EmptyState label="No billing profiles yet." />
-        </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          {items.map((bp) => (
-            <div key={bp.id} className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-5 shadow-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-[0.9375rem] font-semibold">
-                    {bp.pan} — {bp.name}
-                  </p>
-                  {isReviewer && bp.user && (
-                    <p className="mt-0.5 text-xs text-text-faint">
-                      {bp.user.name ?? "—"} · {bp.user.phoneNumber}
-                    </p>
-                  )}
-                </div>
-                <span
-                  className={cn(
-                    "rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold",
-                    bp.approvalStatus === "approved"
-                      ? "bg-accent-soft text-accent"
-                      : bp.approvalStatus === "rejected"
-                        ? "bg-rose-soft text-rose"
-                        : "bg-slate-soft text-slate"
-                  )}
-                >
-                  {bp.approvalStatus}
-                </span>
-              </div>
-              <div className="grid grid-cols-1 gap-3 border-t border-border pt-3 text-[0.8125rem] sm:grid-cols-2">
-                <div>
-                  <p className="text-xs text-text-faint">GSTIN</p>
-                  <p className="font-medium">{bp.gstin || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-text-faint">MSME</p>
-                  <p className="font-medium">{bp.msme || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-text-faint">Bank account number</p>
-                  <p className="font-medium">{bp.bankAccountNumber}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-text-faint">IFSC code</p>
-                  <p className="font-medium">{bp.ifscCode}</p>
-                </div>
-              </div>
-              {isReviewer && bp.approvalStatus === "pending" && (
-                <div className="flex gap-2 border-t border-border pt-3">
-                  <Button size="sm" className="flex-1" onClick={() => approvalMutation.mutate({ id: bp.id, approvalStatus: "approved" })} disabled={approvalMutation.isPending}>
-                    Approve
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[260px_1fr]">
+          <ul className="flex max-h-[520px] flex-col overflow-y-auto rounded-lg border border-border bg-surface shadow-card" aria-label="Accounts with billing profiles" data-testid="billing-accounts">
+            {accounts.map((a) => {
+              const active = a.id === selected?.id;
+              const pending = a.profiles.filter((p) => p.approvalStatus === "pending").length;
+              return (
+                <li key={a.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUserId(a.id)}
+                    aria-current={active ? "true" : undefined}
+                    className={cn("flex w-full items-center justify-between gap-2 border-b border-border px-4 py-3 text-left last:border-b-0", active ? "bg-accent-soft" : "hover:bg-surface-2")}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-[0.875rem] font-semibold">{a.id === user?.id ? `${a.name ?? "You"} (you)` : (a.name ?? "—")}</p>
+                      <p className="truncate text-[0.75rem] text-text-faint">{a.phoneNumber}</p>
+                    </div>
+                    <span className="shrink-0 text-[0.6875rem] text-text-faint">
+                      {pending > 0 ? <span className="rounded-full bg-slate-soft px-2 py-0.5 font-semibold text-slate">{pending} pending</span> : `${a.profiles.length}`}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex flex-col gap-3" data-testid="billing-detail">
+            {selected && (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[0.8125rem] text-text-muted">
+                  <span className="font-semibold text-text">{selectedIsMe ? "Your billing profiles" : (selected.name ?? selected.phoneNumber)}</span>
+                  {!selectedIsMe && ` · ${selected.phoneNumber}`}
+                </p>
+                {selectedIsMe && (
+                  <Button size="sm" onClick={() => setShowForm(true)}>
+                    Add billing profile
                   </Button>
-                  <Button variant="danger" size="sm" className="flex-1" onClick={() => approvalMutation.mutate({ id: bp.id, approvalStatus: "rejected" })} disabled={approvalMutation.isPending}>
-                    Reject
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            )}
+            {shownProfiles.length === 0 ? (
+              <div className="rounded-lg border border-border bg-surface shadow-card">
+                <EmptyState label={selectedIsMe ? "You have no billing profile yet — add one to be paid like any creator." : "No billing profiles for this account."} />
+              </div>
+            ) : (
+              profileCards(shownProfiles)
+            )}
+          </div>
         </div>
       )}
-
-      {showForm && (
-        <NewBillingProfileModal
-          token={token}
-          onClose={() => setShowForm(false)}
-          onCreated={() => {
-            setShowForm(false);
-            queryClient.invalidateQueries({ queryKey: ["billingProfiles"] });
-          }}
-        />
-      )}
+      {modals}
     </div>
   );
 }
 
-function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; onClose: () => void; onCreated: () => void }) {
-  const [pan, setPan] = useState("");
-  const [name, setName] = useState("");
-  const [gstin, setGstin] = useState("");
-  const [msme, setMsme] = useState("");
-  const [bankAccountNumber, setBankAccountNumber] = useState("");
-  const [ifscCode, setIfscCode] = useState("");
+/** Add (no `profile`) or edit (with one) a billing profile — same form, prefilled for an edit. */
+function BillingProfileModal({ token, profile, onClose, onSaved }: { token: string; profile?: BillingProfile; onClose: () => void; onSaved: () => void }) {
+  const [pan, setPan] = useState(profile?.pan ?? "");
+  const [name, setName] = useState(profile?.name ?? "");
+  const [gstin, setGstin] = useState(profile?.gstin ?? "");
+  const [msme, setMsme] = useState(profile?.msme ?? "");
+  const [bankAccountNumber, setBankAccountNumber] = useState(profile?.bankAccountNumber ?? "");
+  const [ifscCode, setIfscCode] = useState(profile?.ifscCode ?? "");
 
   const createMutation = useMutation({
-    mutationFn: () => billingApi.create(token, { pan: pan.toUpperCase(), name, gstin: gstin || undefined, msme: msme || undefined, bankAccountNumber, ifscCode: ifscCode.toUpperCase() }),
-    onSuccess: onCreated,
+    mutationFn: () =>
+      profile
+        ? billingApi.update(token, profile.id, { pan: pan.toUpperCase(), name, gstin: gstin || null, msme: msme || null, bankAccountNumber, ifscCode: ifscCode.toUpperCase() })
+        : billingApi.create(token, { pan: pan.toUpperCase(), name, gstin: gstin || undefined, msme: msme || undefined, bankAccountNumber, ifscCode: ifscCode.toUpperCase() }),
+    onSuccess: onSaved,
   });
 
   return (
@@ -354,8 +473,9 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
           createMutation.mutate();
         }}
         className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
+        data-testid="billing-profile-form"
       >
-        <h2 className="text-lg font-semibold">Add a billing profile</h2>
+        <h2 className="text-lg font-semibold">{profile ? `Edit billing profile — ${profile.pan}` : "Add a billing profile"}</h2>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="PAN">
@@ -383,7 +503,7 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
         </div>
 
         {createMutation.isError && (
-          <ErrorNotice message={createMutation.error instanceof ApiError ? createMutation.error.message : "Couldn't add this billing profile."} />
+          <ErrorNotice message={createMutation.error instanceof ApiError ? createMutation.error.message : `Couldn't ${profile ? "save" : "add"} this billing profile.`} />
         )}
 
         <div className="flex gap-2.5">
@@ -391,7 +511,7 @@ function NewBillingProfileModal({ token, onClose, onCreated }: { token: string; 
             Cancel
           </Button>
           <Button type="submit" className="flex-1" disabled={createMutation.isPending || Boolean(VALIDATORS.pan(pan) || VALIDATORS.gstin(gstin) || VALIDATORS.ifsc(ifscCode) || VALIDATORS.bankAccount(bankAccountNumber)) || !name.trim()}>
-            {createMutation.isPending ? "Adding…" : "Add profile"}
+            {createMutation.isPending ? (profile ? "Saving…" : "Adding…") : profile ? "Save changes" : "Add profile"}
           </Button>
         </div>
       </form>

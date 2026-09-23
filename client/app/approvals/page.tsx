@@ -17,7 +17,7 @@ import { TableSkeleton, EmptyState } from "@/components/ui/table-parts";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { ChevronRightIcon, CheckIcon, ArrowRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { links as linksApi, assets as assetsApi, billing as billingApi, plans as plansApi, campaigns as campaignsApi, type Link as LinkRow, type Plan, type Asset, type BillingProfile, type Campaign } from "@/lib/api-client";
+import { links as linksApi, assets as assetsApi, billing as billingApi, plans as plansApi, campaigns as campaignsApi, hasAccess, type Link as LinkRow, type Plan, type Asset, type BillingProfile, type Campaign } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -56,7 +56,14 @@ function ApprovalsContent() {
   const params = useSearchParams();
   const queryClient = useQueryClient();
   const token = accessToken!;
-  const isAdmin = user?.role === "ADMIN";
+  // Approvals bundles four independent decisions (23 Sep) — each one is its
+  // own permission key, not one bare ADMIN flag, so a role granted just one
+  // of them (e.g. Finance given inventory.approve) gets a working queue for
+  // that kind instead of a page it can look at but never act on.
+  const canReviewLinks = hasAccess(user, "links.approve");
+  const canApprovePlans = hasAccess(user, "plans.approve");
+  const canApprovePages = hasAccess(user, "inventory.approve");
+  const canApproveBilling = hasAccess(user, "finance.pay");
 
   const [filter, setFilter] = useState<"all" | Kind>(() => {
     // The admin home's pipeline chart links here with the link status.
@@ -68,7 +75,7 @@ function ApprovalsContent() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const linksQuery = useQuery({ queryKey: ["links", "approvals"], queryFn: () => linksApi.list(token, { status: "PENDING_SCREENSHOT_REVIEW,INSIGHTS_PENDING", pageSize: 100 }) });
-  const plansQuery = useQuery({ queryKey: ["plans"], queryFn: () => plansApi.list(token), enabled: isAdmin });
+  const plansQuery = useQuery({ queryKey: ["plans"], queryFn: () => plansApi.list(token), enabled: canApprovePlans });
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
   const billingQuery = useQuery({ queryKey: ["billingProfiles"], queryFn: () => billingApi.list(token) });
   const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
@@ -138,11 +145,15 @@ function ApprovalsContent() {
     { key: "billing", label: "Billing", count: counts.billing },
   ];
 
+  const canDecide =
+    selected?.kind === "plan" ? canApprovePlans : selected?.kind === "page" ? canApprovePages : selected?.kind === "billing" ? canApproveBilling : false;
+
   const detail = selected && (
     <DetailPanel
       item={selected}
       token={token}
-      isAdmin={isAdmin}
+      canReviewLinks={canReviewLinks}
+      canDecide={canDecide}
       onChanged={refresh}
       onDecide={(approve) => {
         if (selected.kind === "plan") planDecision.mutate({ id: selected.id, approve });
@@ -246,7 +257,26 @@ function ApprovalsContent() {
   );
 }
 
-function DetailPanel({ item, token, isAdmin, onChanged, onDecide, pending, onOpenCampaign }: { item: Item; token: string; isAdmin: boolean; onChanged: () => void; onDecide: (approve: boolean) => void; pending: boolean; onOpenCampaign: (id: string) => void }) {
+function DetailPanel({
+  item,
+  token,
+  canReviewLinks,
+  canDecide,
+  onChanged,
+  onDecide,
+  pending,
+  onOpenCampaign,
+}: {
+  item: Item;
+  token: string;
+  canReviewLinks: boolean;
+  /** Reject/Approve footer for plan/page/billing kinds — the one action that item's own permission key allows. */
+  canDecide: boolean;
+  onChanged: () => void;
+  onDecide: (approve: boolean) => void;
+  pending: boolean;
+  onOpenCampaign: (id: string) => void;
+}) {
   const days = daysSince(item.since);
   const header = (title: string, sub: string) => (
     <div className="flex items-start gap-3 border-b border-border px-[18px] py-[13px]">
@@ -259,7 +289,7 @@ function DetailPanel({ item, token, isAdmin, onChanged, onDecide, pending, onOpe
       </Tag>
     </div>
   );
-  const footer = (
+  const footer = canDecide ? (
     <div className="mt-auto flex items-center gap-2 border-t border-border px-[18px] py-3.5">
       <Button variant="danger" onClick={() => onDecide(false)} disabled={pending}>
         Reject
@@ -269,6 +299,8 @@ function DetailPanel({ item, token, isAdmin, onChanged, onDecide, pending, onOpe
         Approve &amp; next
       </Button>
     </div>
+  ) : (
+    <p className="border-t border-border px-[18px] py-3.5 text-[0.78rem] text-text-muted">You can see this, but approving it needs a different access grant.</p>
   );
 
   if (item.kind === "screenshot" || item.kind === "insights") {
@@ -276,7 +308,7 @@ function DetailPanel({ item, token, isAdmin, onChanged, onDecide, pending, onOpe
       <Card className="flex flex-col" data-testid="approval-detail">
         {header(item.title, `${item.campaign} · ${money(item.link.cost)}`)}
         <div className="p-[18px]">
-          <LinkDetailPanel link={item.link} token={token} isAdmin={isAdmin} canUploadScreenshot={false} onChanged={onChanged} />
+          <LinkDetailPanel link={item.link} token={token} isAdmin={canReviewLinks} canUploadScreenshot={false} onChanged={onChanged} />
         </div>
       </Card>
     );

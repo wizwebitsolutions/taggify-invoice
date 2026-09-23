@@ -47,7 +47,9 @@ test.describe("input validation", () => {
 
   test("login phone stops at 10 digits and the button waits for a full number", async ({ page }) => {
     await page.goto("/login");
-    const phone = page.getByLabel("Phone number");
+    // One "Gmail address" field since email 2FA (21 Sep) — digit-only
+    // input still behaves like the old phone field.
+    const phone = page.getByLabel("Gmail address");
     await phone.pressSequentially("12345");
     await expect(page.getByRole("button", { name: "Sign in" })).toBeDisabled();
     await phone.pressSequentially("6789012345");

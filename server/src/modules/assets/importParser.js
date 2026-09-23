@@ -17,7 +17,15 @@ export const MAX_IMPORT_ROWS = 500;
 // How many leading rows to scan for the header (a title/blank row or two above it is common in hand-made sheets).
 const HEADER_SEARCH_ROWS = 10;
 
-const HANDLE_HEADERS = ["handle", "page", "page handle", "instagram", "instagram handle", "username", "page name"];
+const HANDLE_HEADERS = ["handle", "page", "page handle", "instagram", "instagram handle", "username"];
+// Template columns since 22 Sep: Page Name, Page Link, Followers, Reel Rate,
+// Story Rate. The page is identified (and fetched) by its link; the name is
+// only the display name saved on the page until Instagram's own name
+// replaces it. A link column wins over a handle column when a sheet has
+// both, so older handle-based sheets keep working unchanged.
+const PAGE_LINK_HEADERS = ["page link", "page url", "profile link", "profile url", "instagram link", "instagram url", "link", "url"];
+// Not a bare "name": in older sheets that column is usually the owner's name.
+const PAGE_NAME_HEADERS = ["page name", "display name"];
 // Phone-ish headers first: when a sheet carries both an "owner name" and a
 // "phone" column, the phone (the unique login key) is the one to match on.
 const OWNER_PHONE_HEADERS = ["owner phone", "account phone", "phone", "phone number", "creator phone", "mobile", "mobile number"];
@@ -49,12 +57,21 @@ const HANDLE_PATTERN = /^[a-z0-9._]{1,30}$/i;
 export function normalizeHandle(raw) {
   let value = String(raw ?? "").trim();
   if (!value) return null;
-  const urlMatch = value.match(/^(?:https?:\/\/)?(?:www\.)?instagram\.com\/([^/?#\s]+)/i);
-  if (urlMatch) value = urlMatch[1];
-  else if (/^(?:https?:\/\/|www\.)/i.test(value)) return null;
+  const urlMatch = value.match(/^(?:https?:\/\/)?(?:www\.|m\.)?instagram\.com\/([^/?#\s]+)(?:\/([^/?#\s]+))?/i);
+  if (urlMatch) {
+    const [, first, second] = urlMatch;
+    const lower = first.toLowerCase();
+    // instagram.com/stories/<handle>/… and instagram.com/_u/<handle> still name a profile…
+    if (lower === "stories" || lower === "_u") value = second ?? "";
+    // …but a post / reel / explore link doesn't name one at all (22 Sep — links are the main input now).
+    else if (NON_PROFILE_PATHS.includes(lower)) return null;
+    else value = first;
+  } else if (/^(?:https?:\/\/|www\.)/i.test(value)) return null;
   value = value.replace(/^@+/, "").trim();
   return value || null;
 }
+
+const NON_PROFILE_PATHS = ["p", "reel", "reels", "tv", "explore", "accounts", "direct"];
 
 export function isValidHandle(handle) {
   return typeof handle === "string" && HANDLE_PATTERN.test(handle);
@@ -192,12 +209,21 @@ export async function parseImportSheet(buffer, fileName = "") {
   const nonEmpty = (cells) => (cells ?? []).some((c) => String(c ?? "").trim() !== "");
   if (!grid.some(nonEmpty)) throw new ImportParseError("That file is empty — it needs a header row (e.g. handle, owner phone) and one row per page.");
   const lowerRow = (cells) => (cells ?? []).map((h) => String(h ?? "").trim().toLowerCase());
-  const headerIdx = grid.slice(0, HEADER_SEARCH_ROWS).findIndex((cells) => findColumn(lowerRow(cells), HANDLE_HEADERS) !== null);
+  const namesAPage = (cells) => [PAGE_LINK_HEADERS, HANDLE_HEADERS, PAGE_NAME_HEADERS].some((h) => findColumn(lowerRow(cells), h) !== null);
+  const headerIdx = grid.slice(0, HEADER_SEARCH_ROWS).findIndex(namesAPage);
   if (headerIdx === -1) {
-    throw new ImportParseError('Couldn\'t find a page-handle column — add a header named "handle" (or "page" / "username") to the first row.');
+    throw new ImportParseError('Couldn\'t find a "Page Link" column — download the template, or add a header named "Page Link" (or "handle") to the first row.');
   }
   const headers = lowerRow(grid[headerIdx]);
-  const handleCol = findColumn(headers, HANDLE_HEADERS);
+  const linkCol = findColumn(headers, PAGE_LINK_HEADERS);
+  const handleOnlyCol = findColumn(headers, HANDLE_HEADERS);
+  // The column a row's page is read from; with both present, the link wins
+  // row by row (below) and the handle column is the fallback. A sheet with
+  // neither but a "Page Name" column is a pre-22-Sep sheet, where that
+  // column held the handle — read it as the handle, as before.
+  const namedCol = findColumn(headers, PAGE_NAME_HEADERS);
+  const handleCol = linkCol ?? handleOnlyCol ?? namedCol;
+  const pageNameCol = linkCol === null && handleOnlyCol === null ? null : namedCol;
   const ownerCol = findColumn(headers, OWNER_PHONE_HEADERS) ?? findColumn(headers, OWNER_OTHER_HEADERS);
   const categoryCol = findColumn(headers, CATEGORY_HEADERS);
   const followersCol = findColumn(headers, FOLLOWERS_HEADERS);
@@ -206,7 +232,7 @@ export async function parseImportSheet(buffer, fileName = "") {
   const rateCols = [];
   const seenFormats = new Set();
   headers.forEach((h, i) => {
-    if (i === handleCol || i === ownerCol || i === categoryCol || i === followersCol) return;
+    if (i === linkCol || i === handleOnlyCol || i === namedCol || i === ownerCol || i === categoryCol || i === followersCol) return;
     if (rateCols.length >= MAX_RATE_COLUMNS) return;
     let format = null;
     if (STANDARD_FORMATS.includes(h)) format = h;
@@ -226,10 +252,19 @@ export async function parseImportSheet(buffer, fileName = "") {
   }
 
   const rows = dataRows.map(({ cells, rowNumber }) => {
-    const rawHandle = cellText(cells[handleCol]).trim();
-    const handle = normalizeHandle(rawHandle);
+    let rawHandle = cellText(cells[handleCol]).trim();
+    let handle = normalizeHandle(rawHandle);
+    // A sheet with both columns: a row whose "link" isn't an Instagram profile
+    // (an old sheet's website column, say) falls back to its handle cell.
+    if (!handle && linkCol !== null && handleOnlyCol !== null) {
+      const fallback = cellText(cells[handleOnlyCol]).trim();
+      if (normalizeHandle(fallback)) {
+        rawHandle = fallback;
+        handle = normalizeHandle(fallback);
+      }
+    }
     let problem = null;
-    if (!handle) problem = rawHandle ? "Not an Instagram handle or profile link." : "Missing handle.";
+    if (!handle) problem = rawHandle ? "Link broken or not an Instagram profile link." : "Missing page link.";
     else if (!isValidHandle(handle)) problem = `"${handle}" isn't a valid Instagram handle (letters, digits, dots and underscores only, up to 30 characters).`;
 
     const rateCards = [];
@@ -242,6 +277,7 @@ export async function parseImportSheet(buffer, fileName = "") {
       rowNumber,
       rawHandle,
       handle,
+      pageName: pageNameCol === null ? null : cellText(cells[pageNameCol]).trim().slice(0, 100) || null,
       ownerRef: ownerCol === null ? null : cellText(cells[ownerCol]).trim() || null,
       category,
       followers: followersCol === null ? null : parseFollowerCount(cells[followersCol]),

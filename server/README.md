@@ -19,7 +19,14 @@ npm run dev
 Server starts on `http://localhost:4000`. `GET /health` for a liveness check. All other routes are namespaced under `/api` (e.g. `/api/auth/login`) — see `src/app.js` — since in production this same server also hosts `client/`'s static export at the bare paths (`/campaigns`, `/users`, etc.), so the API can't live at those paths too.
 
 ## Auth model
-No OTP. `POST /api/auth/signup` takes only a phone number (+ optional name/role); the server generates a random password and returns it once in the response — that's the only place it's ever visible in plaintext. Login is `POST /api/auth/login` with phone + password, returning a short-lived access JWT and a longer-lived refresh JWT (refresh tokens are hashed and stored in Postgres for revocation — no Redis).
+`POST /api/auth/signup` (admin-only) takes only a phone number (+ optional name/role); the server generates a random password and returns it once in the response — that's the only place it's ever visible in plaintext.
+
+**Email 2FA (21 Sep).** `POST /api/auth/login` takes `{ phoneNumber | email, password }` and answers with a `step`; only `AUTHENTICATED` carries the access/refresh JWT pair (refresh tokens are hashed and stored in Postgres for revocation — no Redis):
+
+- Account with a verified email → must log in with that **email** (phone number is refused with `USE_EMAIL_LOGIN`). A 6-digit code is emailed and the response is `OTP_REQUIRED` + a 15-minute `challengeToken`; `POST /api/auth/login/verify-otp { challengeToken, code }` returns the session, `POST /api/auth/login/resend-otp { challengeToken }` re-sends.
+- Account without one → logs in by phone number. The first `MAX_UNVERIFIED_LOGINS` (2) logins are normal sessions (`user.emailVerified: false`, `unverifiedLoginsLeft`); after that login returns `EMAIL_VERIFICATION_REQUIRED` + a `challengeToken` and no session.
+- Verifying: `POST /api/auth/email/start { email }` then `POST /api/auth/email/confirm { code }` — authenticated by either a bearer access token (in-app, during the grace logins) or a body `challengeToken` (locked out). Confirm returns a fresh session. A verified email can't be changed via `PUT /api/users/me` (`EMAIL_LOCKED`).
+- Codes (`src/lib/auth/emailOtp.js`): 6 digits, hashed at rest, 10-minute expiry, 5 wrong attempts burns the code, 60s resend cooldown. Sent through Resend (`src/lib/mailer.js`, `RESEND_API_KEY` / `EMAIL_FROM`); with no key set, dev prints the code to the server console and production returns 503.
 
 ## Roles
 `CREATOR`, `TEAM_MEMBER`, `ADMIN`, `FINANCE` — see `system design.md` §0 and the roles discussion in `recommend.md`.
@@ -38,8 +45,18 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
   preview), `POST /assets/import/followers` (`{ handles }` ≤100 — one Apify
   run per 25 handles for live followers/avg views shown in the preview; a
   handle whose run didn't finish is omitted = unknown, `null` = not on
-  Instagram; cached 30 min so the confirm stores them instead of re-scraping) and `POST /assets/import` (creates the
+  Instagram; both answers cached 30 min) and `POST /assets/import` (creates the
   confirmed rows; re-validated server-side, skipped rows come back with reasons).
+  Since 22 Sep: sheets use the template from `GET /assets/import/template.xlsx`
+  (Page Name, Page Link, Followers, Reel Rate, Story Rate — the page comes from
+  the link; old `handle`-column sheets still parse). `POST /assets/import` only
+  stores pages confirmed on Instagram: not found → skipped "Link broken or page
+  not found", unreachable/unchecked (or more than 100 unchecked) → skipped
+  "Couldn't verify"; the "already registered" check is repeated right before
+  each insert. The account is chosen (or created via `POST /auth/signup`) in
+  the popup. Profile pictures are copied to Cloudinary (`profile-pics/<assetId>`)
+  after every scrape and saved as `Asset.profilePicStoredUrl`, which
+  `GET /assets/:id/profile-pic` serves first.
   A page an ADMIN creates or imports is `approved` immediately (the approval
   queue is for creator-added pages); `POST /assets` also accepts an optional
   `rateCards` array. Every profile scrape stores `profileAvg*` engagement from
@@ -47,11 +64,22 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
   `scrapeQueuedAt` is set while a scrape is queued/running (create, import,
   `POST /assets/refresh-profiles { assetIds }` — the bulk "Refresh from
   Instagram" for a selection, background, one page at a time).
-- `campaigns` — brand campaigns
+- `campaigns` — brand campaigns. Phases (22 Sep): every child row hangs off
+  the root (`parentCampaignId`). `postNumber` 1 = a real phase (added via
+  `POST /campaigns/:id/phases` by Admin or the Plan Maker who owns it; starts
+  with Phase 1's pages); `postNumber` 2+ = an extra post of phase
+  `phaseNumber` (a page booked for 2+ reels in a plan). Admin/Finance/Plan
+  Maker views list real phases only and fold extra posts into their phase;
+  creators get every row as its own numbered phase in one running count
+  (`lib/campaignPhases.js`, `creatorPhaseNumber` + titles on `GET /campaigns`
+  and on their links). `DELETE /campaigns/:id/phase` (admin) removes a phase
+  and its extra posts — refused for Phase 1 and while posts/invoices exist;
+  later phases renumber.
 - `links` — post link submission, status machine, timeline
 - `screenshots` — Cloudinary signed upload flow, mounted at `/links/:linkId/screenshot`
-- `invoices` — creator-raised invoices (`POST /invoices/bulk`, CREATOR only), admin approve, manual mark-paid, GST status
+- `invoices` — creator-raised invoices (`POST /invoices/bulk`, CREATOR only), Admin/Finance approve (`POST /invoices/:id/approve`), Finance manual mark-paid (APPROVED only), GST status. Also the receivables ledger of client invoices (`GET /invoices/client`, `POST /invoices/client/:id/mark-paid`, `/cancel`) — see `plans` below for where they are minted
 - `plans` also owns the Taggify → client invoice: `POST /plans/:id/client-invoice` (client details from the popup) and `GET /plans/:id/client-invoice.pdf`
+- `GET /plans/clients` — saved clients (21 Sep): there's no Client table, so this folds the caller's visible plans (ADMIN: all; otherwise own — same scope as `GET /plans`) into one entry per billing identity (client name + GSTIN, newest plan wins). Feeds the wizard's Client name suggestions and the invoice popup's Company name dropdown / auto-fill
 - `plans` also keeps an attached invoice PDF per plan (Admin / Plan Maker, 14 Sep): `POST /plans/:id/invoice-attachment/upload-url` → direct Cloudinary upload → `POST /plans/:id/invoice-attachment` (`{ publicId, fileName }`, `.pdf` names only) / `DELETE /plans/:id/invoice-attachment`; surfaced as `plan.invoiceAttachment`
 - `notifications` — in-app notification rows (polled, no pub/sub)
 - `scraping` — Apify Instagram provider wrapper

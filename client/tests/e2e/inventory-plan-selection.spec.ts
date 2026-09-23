@@ -111,14 +111,17 @@ test.describe("Inventory — select pages, then create a plan from the selection
     // Multi-step now (user request, 10 Sep — "not everything at one time
     // ui"): Step 1 is Basics only, nothing about pages yet.
     await expect(page.getByRole("textbox", { name: "Plan name" })).toBeVisible();
-    await expect(page.getByRole("combobox")).toHaveCount(0);
+    // The only combobox on Step 1 is Client name's saved-client suggestions
+    // (21 Sep) — still none of Step 2's page/format pickers.
+    await expect(page.getByRole("combobox")).toHaveCount(1);
+    await expect(page.getByRole("combobox", { name: "Client name" })).toBeVisible();
 
     // The ?assetIds= param is consumed once, then stripped — a refresh
     // shouldn't reopen the wizard with the same stale selection later.
     await expect(page).toHaveURL(/\/plans$/);
 
     await page.getByRole("textbox", { name: "Plan name" }).fill("Q1 Push");
-    await page.getByRole("textbox", { name: "Client name" }).fill("Acme");
+    await page.getByRole("combobox", { name: "Client name" }).fill("Acme");
     await page.getByRole("textbox", { name: "Brief" }).fill("Launch week push"); // mandatory since 14 Sep
     await page.getByRole("button", { name: "Next: Budget & pages" }).click();
 
@@ -149,7 +152,7 @@ test.describe("Inventory — select pages, then create a plan from the selection
     await expect(page.getByRole("checkbox")).toHaveCount(0);
 
     await page.getByRole("textbox", { name: "Plan name" }).fill("Q1 Push");
-    await page.getByRole("textbox", { name: "Client name" }).fill("Acme");
+    await page.getByRole("combobox", { name: "Client name" }).fill("Acme");
     await page.getByRole("textbox", { name: "Brief" }).fill("Launch week push");
     await page.getByRole("button", { name: "Next: Budget & pages" }).click();
 

@@ -8,6 +8,7 @@ import {
   saveRefreshToken,
   isGoogleDriveConnected,
   isGoogleOAuthConfigured,
+  isGoogleConnectionHealthy,
 } from "../../lib/googleOAuthClient.js";
 
 /**
@@ -24,9 +25,13 @@ import {
  */
 const router = Router();
 
+// `healthy` (22 Sep): connected AND the stored refresh token still works —
+// "connected but expired" is what the plan card's Reconnect Google fixes.
 router.get("/status", async (req, res, next) => {
   try {
-    res.json({ configured: isGoogleOAuthConfigured(), connected: isGoogleOAuthConfigured() && (await isGoogleDriveConnected()) });
+    const configured = isGoogleOAuthConfigured();
+    const connected = configured && (await isGoogleDriveConnected());
+    res.json({ configured, connected, healthy: connected && (await isGoogleConnectionHealthy()) });
   } catch (err) {
     next(err);
   }

@@ -13,6 +13,36 @@ const AUTH_STORAGE_KEY = "taggify_auth";
 
 export type MockRole = "CREATOR" | "ADMIN" | "FINANCE" | "TEAM_MEMBER" | "PLAN_MAKER";
 
+const PERMISSION_SECTIONS = {
+  users: ["view", "edit"],
+  campaigns: ["view", "edit"],
+  inventory: ["view", "edit", "approve"],
+  links: ["view", "edit", "approve"],
+  finance: ["view", "edit", "approve", "pay"],
+  plans: ["view", "edit", "approve"],
+} as const;
+const PERMISSION_KEYS = Object.entries(PERMISSION_SECTIONS).flatMap(([s, actions]) => actions.map((a) => `${s}.${a}`));
+const allTrue = () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
+const allFalse = () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false]));
+
+/**
+ * The effective permissions map a real login actually returns for each
+ * role (mirrors server/src/lib/permissions.js's ROLE_DEFAULTS exactly —
+ * keep the two in sync). A mocked session with no `permissions` at all
+ * makes client/lib/api-client.ts's hasAccess() treat every non-ADMIN role
+ * as having nothing, which the real app never does, so tests asserting a
+ * FINANCE/PLAN_MAKER-only action (approve/pay an invoice, see Receivables,
+ * …) need this to behave like the real API a test with a plain `signIn`
+ * call is standing in for.
+ */
+const ROLE_DEFAULT_PERMISSIONS: Record<MockRole, Record<string, boolean>> = {
+  ADMIN: allTrue(),
+  FINANCE: { ...allFalse(), "finance.view": true, "finance.edit": true, "finance.approve": true, "finance.pay": true, "campaigns.view": true, "inventory.view": true, "links.view": true },
+  PLAN_MAKER: { ...allFalse(), "inventory.view": true },
+  CREATOR: allFalse(),
+  TEAM_MEMBER: allFalse(),
+};
+
 export function userFor(role: MockRole = "CREATOR") {
   return {
     id: "test-user-1",
@@ -20,6 +50,10 @@ export function userFor(role: MockRole = "CREATOR") {
     name: "Test User",
     role,
     whatsappVerified: true,
+    // Verified by default so AppShell's EmailVerifyBanner (email 2FA, 21 Sep)
+    // stays out of every unrelated test — login.spec.ts overrides this.
+    emailVerified: true,
+    permissions: ROLE_DEFAULT_PERMISSIONS[role],
   };
 }
 

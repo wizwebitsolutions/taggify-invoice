@@ -130,9 +130,14 @@ test.describe("Invoices — collapsed row actions", () => {
     await expect(row.getByRole("button", { name: "Approve" })).toHaveCount(0);
   });
 
-  test("FINANCE never sees Approve — sign-off is Admin's; they pay once it's APPROVED, and wait on a RAISED one", async ({ page }) => {
+  test("FINANCE sees Approve on a RAISED row and Mark paid on an APPROVED one — Finance approves and pays (23 Sep)", async ({ page }) => {
     await signIn(page, "FINANCE");
     await mockApi(page);
+    let approveCalled = false;
+    await page.route("**/invoices/inv-raised/approve", (route) => {
+      approveCalled = true;
+      return route.fulfill({ json: invoice({ id: "inv-raised", invoiceNumber: "INV-RAISED", status: "APPROVED" }) });
+    });
     await page.route("**/invoices?**", (route) => {
       if (route.request().method() !== "GET") return route.fulfill({ status: 204, body: "" });
       return route.fulfill({
@@ -150,10 +155,12 @@ test.describe("Invoices — collapsed row actions", () => {
 
     await page.goto("/invoices");
     const raised = page.locator("div.grid", { hasText: "INV-RAISED" });
-    await expect(raised.getByRole("button", { name: "Approve" })).toHaveCount(0);
+    await expect(raised.getByRole("button", { name: "Approve" })).toBeVisible();
     await expect(raised.getByRole("button", { name: "Mark paid" })).toHaveCount(0);
     await raised.click();
-    await expect(page.getByTestId("invoice-detail-panel")).toContainText("Awaiting an admin's approval");
+    await expect(page.getByTestId("invoice-detail-panel")).not.toContainText("Awaiting an admin's approval");
+    await raised.getByRole("button", { name: "Approve" }).click();
+    await expect.poll(() => approveCalled).toBe(true);
 
     const approved = page.locator("div.grid", { hasText: "INV-APPROVED" });
     await expect(approved.getByRole("button", { name: "Mark paid" })).toBeVisible();

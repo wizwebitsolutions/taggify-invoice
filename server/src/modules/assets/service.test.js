@@ -8,11 +8,24 @@ vi.mock("../scraping/service.js", () => ({ refreshAssetMetrics: vi.fn(async () =
 const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement } = await import("./service.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
+// listAssets (23 Sep, Step 3) reads the *caller's* effective permissions
+// fresh from the DB — this derives a plausible role from the id fixtures
+// already used throughout this file (admin-*/creator-*/fin-*/pm-*) so that
+// works without every test having to stub it. createAsset's own
+// user.findUnique use (looking up an *ownerId* target's role) overrides
+// this per test where it matters (line ~98/106 below).
+function roleForId(id) {
+  if (id?.startsWith("admin")) return "ADMIN";
+  if (id?.startsWith("fin")) return "FINANCE";
+  if (id?.startsWith("pm") || id?.startsWith("plan")) return "PLAN_MAKER";
+  return "CREATOR";
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.asset.create.mockImplementation(async ({ data }) => ({ id: "asset-1", ...data }));
   mockPrisma.asset.findFirst.mockResolvedValue(null);
-  mockPrisma.user.findUnique.mockResolvedValue({ role: "CREATOR" });
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({ role: roleForId(where.id), permissions: null }));
 });
 
 describe("createAsset — admin registering a page for someone else (newTask.md #6/#7)", () => {
@@ -176,6 +189,31 @@ describe("listAssets — owner name included for Inventory's owner filter (newTa
     const creator = { id: "creator-1", role: "CREATOR" };
     await listAssets(creator);
     expect(mockPrisma.asset.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { ownerId: "creator-1" } }));
+  });
+});
+
+describe("listAssets — inventory.view scoping is read fresh, not just role (23 Sep, Step 3)", () => {
+  it("a plain ADMIN or FINANCE account (inventory.view true by baseline) sees every asset", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([]);
+    await listAssets({ id: "admin-1", role: "ADMIN" });
+    expect(mockPrisma.asset.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+
+    await listAssets({ id: "fin-1", role: "FINANCE" });
+    expect(mockPrisma.asset.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+  });
+
+  it("restricting a FINANCE account's inventory.view actually scopes them to their own assets now — it used to be a no-op", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "FINANCE", permissions: { "inventory.view": false, "inventory.edit": false, "inventory.approve": false } });
+    mockPrisma.asset.findMany.mockResolvedValue([]);
+    await listAssets({ id: "fin-1", role: "FINANCE" });
+    expect(mockPrisma.asset.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { ownerId: "fin-1" } }));
+  });
+
+  it("a PLAN_MAKER still sees every asset even with inventory.view overlaid off — their full-catalogue access is role-based, not the key", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "PLAN_MAKER", permissions: { "inventory.view": false, "inventory.edit": false, "inventory.approve": false } });
+    mockPrisma.asset.findMany.mockResolvedValue([]);
+    await listAssets({ id: "pm-1", role: "PLAN_MAKER" });
+    expect(mockPrisma.asset.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
   });
 });
 

@@ -85,7 +85,16 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
     expect(flat.some((r) => r.includes("News"))).toBe(false);
     expect(t.pagesRows.filter((r) => r[0] === "S No")).toHaveLength(1);
     expect(t.pagesRows.map((r) => r[0]).filter((v) => typeof v === "number")).toEqual([1, 2]);
-    expect(flat.some((r) => r.includes('HYPERLINK("https://instagram.com/a.page"'))).toBe(true);
+    // 22 Sep — bare handle as Page Name, the plain profile URL as text (no
+    // "@" prefix, no =HYPERLINK() formula) in Page Link.
+    const pageRow = t.pagesRows.find((r) => r[0] === 1);
+    expect(pageRow[1]).toBe("a.page");
+    expect(pageRow[2]).toBe("https://instagram.com/a.page");
+    expect(flat.some((r) => r.includes("HYPERLINK") || r.includes("@a.page"))).toBe(false);
+    // …and the Page Link cell is clickable through a cell-level link (later
+    // 22 Sep — "should have hyperlink of that link as well"), never a formula.
+    const pageSpec = t.pagesRowSpecs[t.pagesRows.indexOf(pageRow)];
+    expect(pageSpec.links).toEqual({ 2: "https://instagram.com/a.page" });
   });
 
   it("the NOTES block carries only the brief typed on Step 1 — no GST/availability boilerplate (user request, 14 Sep)", () => {
@@ -97,9 +106,9 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
     expect(withoutNotes).not.toContain("NOTES");
   });
 
-  it("includes GST rows only when isGstPlan is true", () => {
+  it("includes GST rows only when the plan has a gstPercent", () => {
     const withoutGst = buildPlanSheetTabs(basePlan).overviewRows.flat().join(" ");
-    const withGst = buildPlanSheetTabs({ ...basePlan, isGstPlan: true, overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 } }).overviewRows
+    const withGst = buildPlanSheetTabs({ ...basePlan, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 } }).overviewRows
       .flat()
       .join(" ");
 
@@ -111,6 +120,7 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
     const annotatedPlan = {
       ...basePlan,
       isGstPlan: true,
+      gstPercent: 18,
       totalCost: 5000,
       budgetVariance: -2000,
       overview: { ...basePlan.overview, subtotal: 8000, gstAmount: 1440, total: 9440 }, // overridden client-facing numbers
@@ -163,6 +173,18 @@ describe("buildFormatRequests — the styling that makes a tab actually look lik
     expect(borders.updateBorders.innerHorizontal.style).toBe("SOLID");
   });
 
+  it("a row's `links` become cell-level link formats after the style request, so the style can't wipe them (22 Sep)", () => {
+    const rowSpecs = [{ cellTypes: ["data", "data", "data"], merge: false, links: { 2: "https://instagram.com/a.page" } }];
+    const requests = buildFormatRequests(5, rowSpecs, 3);
+
+    const link = requests.find((r) => r.repeatCell?.cell?.userEnteredFormat?.textFormat?.link);
+    expect(link.repeatCell.range).toMatchObject({ sheetId: 5, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 });
+    expect(link.repeatCell.cell.userEnteredFormat.textFormat.link).toEqual({ uri: "https://instagram.com/a.page" });
+    expect(link.repeatCell.fields).toContain("textFormat.link");
+    const styleOfLinkedCell = requests.findIndex((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor && r.repeatCell.range.startColumnIndex === 2);
+    expect(requests.indexOf(link)).toBeGreaterThan(styleOfLinkedCell);
+  });
+
   it("skips styling for a null cellType (a plain, unstyled row) without throwing", () => {
     const rowSpecs = [{ cellTypes: [null], merge: false }];
     expect(() => buildFormatRequests(1, rowSpecs, 1)).not.toThrow();
@@ -172,13 +194,12 @@ describe("buildFormatRequests — the styling that makes a tab actually look lik
 /**
  * buildExecutionSheetTemplate — the downloadable sample (user request, 10
  * Sep — "give downloadable sample template for google sheet so they'll
- * know how their execution should look like"; 11 Sep — matched exactly to
- * a specific reference doc's columns: S No / Page Name / Page Link /
- * Followers / Date / Posted Link / Views / Likes / Comments / Shares,
- * plus a totals row).
+ * know how their execution should look like"; 11 Sep — matched to a
+ * reference doc's columns; 23 Sep — trimmed to stop at Posted Link,
+ * Views/Likes/Comments/Shares dropped as "not required").
  */
 describe("buildExecutionSheetTemplate", () => {
-  const HEADER = ["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link", "Views", "Likes", "Comments", "Shares"];
+  const HEADER = ["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link"];
 
   it("has the reference sheet's exact header columns, with example rows below it, in lockstep with the format specs", () => {
     const t = buildExecutionSheetTemplate();
@@ -187,25 +208,24 @@ describe("buildExecutionSheetTemplate", () => {
     expect(t.rows.length).toBe(t.rowSpecs.length);
     const headerRow = t.rows.find((r) => r[0] === "S No");
     expect(headerRow).toEqual(HEADER);
-    expect(t.numCols).toBe(10);
+    expect(t.numCols).toBe(6);
   });
 
-  it("includes real example rows (not a blank grid) with Page Link and Posted Link as HYPERLINK formulas", () => {
+  it("includes real example rows (not a blank grid) with Page Link and Posted Link as plain URL text, page names without an @ (22 Sep)", () => {
     const t = buildExecutionSheetTemplate();
-    const exampleRow = t.rows.find((r) => r[1] === "@ghantaa");
+    const exampleRow = t.rows.find((r) => r[1] === "ghantaa");
 
-    expect(exampleRow[2]).toMatch(/^=HYPERLINK\(/);
-    expect(exampleRow[5]).toMatch(/^=HYPERLINK\(/);
+    expect(exampleRow).toBeDefined();
+    expect(exampleRow[2]).toBe("https://instagram.com/ghantaa");
+    expect(exampleRow[5]).toBe("https://instagram.com/reel/example1");
+    expect(t.rows.flat().some((c) => String(c).includes("HYPERLINK"))).toBe(false);
   });
 
-  it("ends with a totals row summing Followers/Views/Likes/Comments/Shares across the example rows", () => {
+  it("ends with a totals row summing Followers across the example rows", () => {
     const t = buildExecutionSheetTemplate();
     const totalsRow = t.rows.at(-1);
 
-    expect(totalsRow[1]).toBe("TOTAL");
-    expect(totalsRow[3]).toBe(8700000 + 4300000); // Followers
-    expect(totalsRow[6]).toBe(1207230 + 195976); // Views
-    expect(totalsRow[7]).toBe(14600 + 4421); // Likes
+    expect(totalsRow).toEqual(["", "TOTAL", "", 8700000 + 4300000, "", ""]);
   });
 });
 
@@ -219,7 +239,7 @@ describe("previewExecutionSheetTemplate", () => {
     const preview = previewExecutionSheetTemplate();
 
     expect(preview.title).toBe(EXECUTION_TEMPLATE_TITLE);
-    expect(preview.headers).toEqual(["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link", "Views", "Likes", "Comments", "Shares"]);
+    expect(preview.headers).toEqual(["S No", "Page Name", "Page Link", "Followers", "Date", "Posted Link"]);
     expect(preview.rows).toHaveLength(2);
     expect(preview.rows[0][2]).toBe("https://instagram.com/ghantaa"); // plain URL, no =HYPERLINK(...) wrapper
     expect(preview.linkColumns).toEqual([2, 5]);

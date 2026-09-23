@@ -100,7 +100,13 @@ function refreshAccessToken(): Promise<string | null> {
 
 async function request<T>(
   path: string,
-  { method = "GET", body, token, _isRetry = false }: { method?: string; body?: unknown; token?: string | null; _isRetry?: boolean } = {}
+  {
+    method = "GET",
+    body,
+    token,
+    credentials,
+    _isRetry = false,
+  }: { method?: string; body?: unknown; token?: string | null; credentials?: RequestCredentials; _isRetry?: boolean } = {}
 ): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method,
@@ -109,6 +115,12 @@ async function request<T>(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // Opt-in only (login/verify-otp) — the trusted-device cookie ("skip OTP
+    // for 7 days", 23 Sep) needs the browser to send/accept it, which
+    // requires this explicitly on a cross-origin fetch (client :3000 vs
+    // API :4000 in dev; same-origin in production). Every other call is
+    // unaffected — this app is otherwise entirely bearer-token based.
+    ...(credentials ? { credentials } : {}),
   });
 
   if (res.status === 204) return undefined as T;
@@ -118,7 +130,12 @@ async function request<T>(
     // Never intercept /auth/* itself — login failing with 401 is a wrong
     // password, not an expired session, and refresh's own 401 is handled
     // by refreshAccessToken's catch, not by recursing back into refreshing.
-    if (res.status === 401 && token && !_isRetry && !path.startsWith("/auth/")) {
+    // Exception: /auth/email/* called *with a session* (in-app email
+    // verification, 21 Sep) — a 401 there can only mean an expired access
+    // token, and without the retry /verify-email dead-ends after 15 minutes
+    // with the only way out being a re-login the account may not have left.
+    const isAuthPath = path.startsWith("/auth/") && !path.startsWith("/auth/email/");
+    if (res.status === 401 && token && !_isRetry && !isAuthPath) {
       const freshToken = await refreshAccessToken();
       if (freshToken) return request<T>(path, { method, body, token: freshToken, _isRetry: true });
     }
@@ -130,33 +147,65 @@ async function request<T>(
 // ── Types (fields the UI actually reads) ──────────────────────────────
 export type Role = "CREATOR" | "TEAM_MEMBER" | "ADMIN" | "FINANCE" | "PLAN_MAKER";
 
-// Per-account permission overlay (newTask.md, 8 Sep for the ADMIN sub-admin
-// case; extended 15 Sep so any role can be granted these same six sections
-// — "admin can give any user access permissions") — see server's
-// lib/permissions.js for the canonical key list. Always the *effective*
-// map (role defaults merged with any override), never the raw overlay — a
-// plain ADMIN has every key true, a restricted sub-admin has some false,
-// and every other role has every key false unless an overlay grants one.
-export interface Permissions {
-  "users.manage": boolean;
-  "campaigns.manage": boolean;
-  "inventory.manage": boolean;
-  "links.review": boolean;
-  "finance.manage": boolean;
-  "plans.manage": boolean;
-}
+// Per-account permissions (newTask.md, 8 Sep for the ADMIN sub-admin case;
+// 15 Sep any role can be granted; 23 Sep split into per-action keys —
+// "user selects Invoices, then checkboxes for edit, approve … appear
+// below"). Mirrors the server's lib/permissions.js SECTIONS: every key is
+// `<section>.<action>`, and edit/approve/pay each imply that section's
+// view. The server always sends the *effective* map (role baseline merged
+// with the account's overlay), never the raw overlay.
+export const PERMISSION_SECTIONS = {
+  users: ["view", "edit"],
+  campaigns: ["view", "edit"],
+  inventory: ["view", "edit", "approve"],
+  links: ["view", "edit", "approve"],
+  finance: ["view", "edit", "approve", "pay"],
+  plans: ["view", "edit", "approve"],
+} as const;
+export type PermissionSection = keyof typeof PERMISSION_SECTIONS;
+export type PermissionAction = "view" | "edit" | "approve" | "pay";
+export type PermissionKey = {
+  [S in PermissionSection]: `${S}.${(typeof PERMISSION_SECTIONS)[S][number]}`;
+}[PermissionSection];
+export type Permissions = Record<PermissionKey, boolean>;
+export const PERMISSION_KEYS = (Object.keys(PERMISSION_SECTIONS) as PermissionSection[]).flatMap((s) =>
+  PERMISSION_SECTIONS[s].map((a) => `${s}.${a}` as PermissionKey)
+);
+
+// A session stored before the split still carries the six old keys until
+// its next token refresh — read them as the sections they covered.
+const LEGACY_KEY_MAP: Record<string, PermissionKey[]> = {
+  "users.manage": ["users.view", "users.edit"],
+  "campaigns.manage": ["campaigns.view", "campaigns.edit"],
+  "inventory.manage": ["inventory.view", "inventory.edit", "inventory.approve"],
+  "links.review": ["links.view", "links.edit", "links.approve"],
+  "finance.manage": ["finance.view", "finance.edit", "finance.approve", "finance.pay"],
+  "plans.manage": ["plans.view", "plans.edit", "plans.approve"],
+};
+
+type AccessUser = { role?: Role; permissions?: Partial<Record<string, boolean>> } | null | undefined;
 
 /**
- * Same rule the server's requireAccess()/getEffectivePermissions() applies:
- * an ADMIN has `key` unless their overlay explicitly turns it off; any
- * other role has it only if their overlay explicitly turns it on. Use this
- * (not a bare `role === "ADMIN"` check) for any UI gate on one of the six
- * sections above, so a granted non-admin role sees the same controls a
- * sub-admin restricted to just that section would.
+ * Same answer the server's hasPermission() gives. The server's effective
+ * map is authoritative when present; a session with no map at all (older
+ * login) falls back to "ADMIN has everything, nobody else has anything".
+ * Use this (not a bare `role === "ADMIN"` check) for any UI gate on a
+ * permission key, so a granted Finance/Planner sees the same controls a
+ * sub-admin restricted to just that action would.
  */
-export function hasAccess(user: { role?: Role; permissions?: Permissions } | null | undefined, key: keyof Permissions): boolean {
-  if (user?.role === "ADMIN") return user?.permissions?.[key] !== false;
-  return user?.permissions?.[key] === true;
+export function hasAccess(user: AccessUser, key: PermissionKey): boolean {
+  const map = user?.permissions;
+  if (!map) return user?.role === "ADMIN";
+  if (typeof map[key] === "boolean") return map[key] === true;
+  for (const [legacy, keys] of Object.entries(LEGACY_KEY_MAP)) {
+    if (keys.includes(key) && typeof map[legacy] === "boolean") return map[legacy] === true;
+  }
+  // Implied view: an action grant on the section shows the section.
+  if (key.endsWith(".view")) {
+    const section = key.split(".")[0] as PermissionSection;
+    if (PERMISSION_SECTIONS[section].some((a) => a !== "view" && map[`${section}.${a}`] === true)) return true;
+  }
+  return user?.role === "ADMIN" && map[key] === undefined;
 }
 
 export interface User {
@@ -166,6 +215,12 @@ export interface User {
   role: Role;
   whatsappVerified: boolean;
   email?: string | null;
+  /** Login/refresh payloads only (email 2FA, 21 Sep). `false` = still signing
+   *  in by phone number and must verify an email; undefined on a session
+   *  stored before this existed, until its next token refresh. */
+  emailVerified?: boolean;
+  /** /users/me only — same fact as emailVerified, as the profile endpoint reports it. */
+  emailVerifiedAt?: string | null;
   secondaryPhone?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
@@ -197,6 +252,18 @@ export interface AuthResponse {
   accessToken: string;
   refreshToken: string;
 }
+
+// Email 2FA (21 Sep) — POST /auth/login answers with a step, and only
+// AUTHENTICATED carries a session (see server auth/service.js's login).
+// The challengeToken is the proof-of-password to hand to the next step's
+// endpoint; it is not a session and must never be stored as one.
+export type LoginResult =
+  | ({ step: "AUTHENTICATED"; unverifiedLoginsLeft?: number } & AuthResponse)
+  | { step: "OTP_REQUIRED"; challengeToken: string; emailHint: string }
+  | { step: "EMAIL_VERIFICATION_REQUIRED"; challengeToken: string };
+
+/** How email setup proves who's asking: a locked-out login's challenge token, or a normal session's access token. */
+export type EmailSetupIdentity = { challengeToken: string } | { token: string };
 
 export interface RateCard {
   id: string;
@@ -270,8 +337,12 @@ export interface Campaign {
   pendingAssignmentCount?: number;
   /** Set when this campaign is a phase (2+) of another — points at phase 1's id. Null/undefined for a standalone campaign or phase 1 itself. */
   parentCampaignId?: string | null;
-  /** 1 for a standalone campaign or the first phase; 2+ for later phases. */
+  /** 1 for a standalone campaign or the first phase; 2+ for later phases. For a creator this is their running count (see creatorPhaseNumber). */
   phaseNumber?: number;
+  /** 22 Sep — 1 for a phase itself, 2+ for an extra post of that phase (a page booked for 2 reels). Admins see an extra post as a 2nd post of its phase. */
+  postNumber?: number;
+  /** Creator / team member responses only — this row's number in one running count over the campaign's phases and extra posts ("X — Phase 3"). */
+  creatorPhaseNumber?: number;
   /** The whole phase group (including this campaign), phase-1-first. Only present on getCampaignById's response, not the list. */
   phases?: { id: string; phaseNumber: number; title: string; createdAt: string }[];
   /** Only present on listCampaigns' response — how many phases (including this root) exist. 1 for a campaign with no phases. */
@@ -292,6 +363,8 @@ export interface CampaignAssignment {
   linkId: string | null;
   status: "pending" | "matched";
   createdAt: string;
+  /** 2+ when this page's row belongs to an extra post of the phase (listAssignments, 22 Sep). */
+  postNumber?: number;
   asset?: { id: string; handle: string; category: string | null; approvalStatus: string } | null;
   link?: { id: string; status: Link["status"] } | null;
 }
@@ -402,6 +475,42 @@ export interface Invoice {
   billingProfile?: BillingProfile | null;
 }
 
+/**
+ * Receivables (user decision, 23 Sep): the ledger row for a plan's
+ * Taggify → client invoice. Minted by plans.generateClientInvoice, listed
+ * and settled via `clientInvoices` below. The document is still the plan's
+ * (`GET /plans/:id/client-invoice.pdf`); `clientInvoices.downloadPdf` is the
+ * same PDF reached without plan access.
+ */
+export interface ClientInvoice {
+  id: string;
+  planId: string;
+  campaignId: string | null;
+  invoiceNumber: string;
+  subtotal: string;
+  gstPercent: string | null;
+  gstAmount: string;
+  total: string;
+  status: "ISSUED" | "PAID" | "CANCELLED";
+  issuedAt: string;
+  paidAt: string | null;
+  paidAmount: string | null;
+  remarks: string | null;
+  plan?: {
+    id: string;
+    name: string;
+    clientName: string;
+    clientCompany: string | null;
+    clientGstNumber: string | null;
+    createdById: string;
+    createdBy?: { id: string; name: string | null } | null;
+    campaign?: { id: string; title: string; brandName: string } | null;
+    /** The real (non-Proforma) invoice document, attached from the Plan page. */
+    invoiceAttachment?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
+  } | null;
+  issuedBy?: { id: string; name: string | null; role: Role } | null;
+}
+
 export interface TeamMembership {
   id: string;
   userId: string;
@@ -447,11 +556,16 @@ export interface Plan {
   /** The Taggify → client invoice number, minted on first generation and kept across regenerations. Null until generated. */
   clientInvoiceNumber: string | null;
   clientInvoiceAt: string | null;
+  /** Saved from the "Generate invoice" popup (17 Sep). */
+  invoiceDescription: string | null;
+  hsnSac: string | null;
   /** Free-form brief/note, rendered as an extra bullet on the PDF's NOTES block. */
   notes: string | null;
   budget: string | null;
-  /** Whether the PDF/overview adds 18% GST on top of the client subtotal. */
+  /** Whether the PDF/overview adds a GST line on top of the client subtotal — derived from gstPercent. */
   isGstPlan: boolean;
+  /** The GST % applied to this plan's overview/invoice, editable at plan creation. Null = no GST line. */
+  gstPercent: number | null;
   /** Approval workflow (newTask.md, 8 Sep — Plan → Approve step). New plans start DRAFT. */
   status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED";
   approvedBy?: { id: string; name: string | null } | null;
@@ -499,13 +613,41 @@ export interface Plan {
   clientSheetUrl: string | null;
   /** The generated internal (real-numbers) Google Sheet link — "list of plans ... option of viewing googlesheet of plan for client or internal". Null until generated. */
   internalSheetUrl: string | null;
-  /** A pasted reference link to whoever's actual execution tracking sheet (user request, 10 Sep — "option of attaching execution sheet after plan creation"). Never fetched/parsed, just stored. */
+  /** The execution tracking sheet (user request, 10 Sep). Since 23 Sep it is read on attach / Refresh links: rows with a Posted Link become SUBMITTED links for the page's owner on the plan's campaign. */
   executionSheetUrl: string | null;
+  /** When the execution sheet was last read into links. Null until the plan is approved and the sheet has been read once. */
+  executionSheetFetchedAt?: string | null;
+  /** Sheet rows that didn't become links, with why (page not on the plan, no post link yet, more posts than booked…). */
+  executionSheetPending?: ExecutionSheetPendingEntry[];
+  /** Only on the PUT /plans/:id response: the link saved but the sheet couldn't be read right now (not shared, wrong columns). */
+  executionSheetSyncError?: string;
+  /** "Upload plan" (user request, 22 Sep): the Google Sheet this plan was built from — Refresh re-fetches it. Null for wizard-built plans. */
+  sourceSheetUrl?: string | null;
+  sourceSheetFetchedAt?: string | null;
+  /** Sheet rows that couldn't become items yet (page not in Inventory / no cost) or a budget the pages exceed — what the card lists as missing. */
+  sourceSheetPending?: SheetPendingEntry[];
   /** Set once, on approval — the real Campaign created from this plan's pages (user request, 10 Sep — "on his marking all pages mentioned in the plan will get the campaign visible"). Null until approved. */
   campaignId: string | null;
   /** Attached invoice PDF (user request, 14 Sep — "option of attaching invoice document in pdf format as well"). Null until one is uploaded. */
   invoiceAttachment?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
   createdBy?: { id: string; name: string | null };
+}
+
+export interface ExecutionSheetPendingEntry {
+  rowNumber: number;
+  pageHandle: string | null;
+  pageName: string | null;
+  postUrl: string | null;
+  reason: string;
+}
+
+export type SheetPendingEntry =
+  | { kind: "page"; handle: string; pageUrl?: string | null; category: string | null; followers: number | null; format: string | null; cost: number | null; clientCost: number | null; postsPerProfile: number; reason: string }
+  | { kind: "budget"; sheetBudget: number; reason: string };
+
+export interface ParsedPlanSheetPayload {
+  fields: { name?: string; clientName?: string; clientContact?: string; clientCompany?: string; clientGstNumber?: string; clientAddress?: string; notes?: string; budget?: number; gstPercent?: number };
+  rows: { handle: string; pageUrl?: string; category?: string; followers?: number; format?: string; cost?: number; clientCost?: number; postsPerProfile?: number }[];
 }
 
 export interface Notification {
@@ -519,8 +661,29 @@ export interface Notification {
 
 // ── Auth ────────────────────────────────────────────────────────────
 export const auth = {
-  login: (phoneNumber: string, password: string) =>
-    request<AuthResponse>("/auth/login", { method: "POST", body: { phoneNumber, password } }),
+  // credentials: "include" — sends/accepts the trusted-device cookie
+  // ("skip OTP for 7 days", 23 Sep). Login must send whatever cookie this
+  // browser already has; verify-otp is what sets a fresh one.
+  login: (identifier: { phoneNumber: string } | { email: string }, password: string) =>
+    request<LoginResult>("/auth/login", { method: "POST", body: { ...identifier, password }, credentials: "include" }),
+  // remember defaults true (the checkbox next to the code entry starts
+  // checked) — unchecking it still signs in, just without a trusted-device
+  // cookie, so the next login asks for OTP again.
+  verifyLoginOtp: (challengeToken: string, code: string, remember = true) =>
+    request<AuthResponse>("/auth/login/verify-otp", { method: "POST", body: { challengeToken, code, remember }, credentials: "include" }),
+  resendLoginOtp: (challengeToken: string) =>
+    request<void>("/auth/login/resend-otp", { method: "POST", body: { challengeToken } }),
+  // Also the "resend" for email setup — the server rate-limits repeats.
+  startEmailVerification: (identity: EmailSetupIdentity, email: string) =>
+    request<{ emailHint: string }>("/auth/email/start", {
+      method: "POST",
+      ...("token" in identity ? { token: identity.token, body: { email } } : { body: { email, challengeToken: identity.challengeToken } }),
+    }),
+  confirmEmailVerification: (identity: EmailSetupIdentity, code: string) =>
+    request<AuthResponse>("/auth/email/confirm", {
+      method: "POST",
+      ...("token" in identity ? { token: identity.token, body: { code } } : { body: { code, challengeToken: identity.challengeToken } }),
+    }),
   refresh: (refreshToken: string) =>
     request<AuthResponse>("/auth/refresh", { method: "POST", body: { refreshToken } }),
   logout: (refreshToken: string) =>
@@ -551,6 +714,10 @@ export const billing = {
     request<BillingProfile>("/billing-profiles", { method: "POST", token, body }),
   setApproval: (token: string, id: string, approvalStatus: BillingProfile["approvalStatus"]) =>
     request<BillingProfile>(`/billing-profiles/${id}/approval`, { method: "PUT", token, body: { approvalStatus } }),
+  // Edit details (22 Sep) — owner, or Admin / finance.manage for anyone; an
+  // owner's edit sends the profile back to "pending" server-side.
+  update: (token: string, id: string, body: Partial<Pick<BillingProfile, "pan" | "name" | "gstin" | "msme" | "bankAccountNumber" | "ifscCode">>) =>
+    request<BillingProfile>(`/billing-profiles/${id}`, { method: "PUT", token, body }),
 };
 
 // ── Assets ──────────────────────────────────────────────────────────
@@ -593,6 +760,8 @@ export const assets = {
   // Step 2: create exactly the rows the admin confirmed.
   import: (token: string, rows: ImportAssetRow[]) =>
     request<ImportResult>("/assets/import", { method: "POST", token, body: { rows } }),
+  // The five-column sheet the importer reads (22 Sep): Page Name, Page Link, Followers, Reel Rate, Story Rate.
+  downloadImportTemplate: (token: string) => downloadBinary(`${API_URL}/assets/import/template.xlsx`, token, "import-pages-template.xlsx"),
 };
 
 export interface PageOwner {
@@ -608,6 +777,8 @@ export interface ImportPreviewRow {
   rowNumber: number;
   rawHandle: string;
   handle: string | null;
+  /** The sheet's "Page Name" column — saved as the page's display name. */
+  pageName?: string | null;
   category: string | null;
   followers: number | null;
   rateCards: { format: string; amount: number }[];
@@ -640,6 +811,7 @@ export interface ImportAssetRow {
   handle: string;
   ownerId: string;
   category?: string | null;
+  pageName?: string | null;
   followers?: number | null;
   rateCards?: { format: string; amount: number }[];
 }
@@ -713,16 +885,28 @@ export const campaigns = {
   // phase, not a brand-new campaign; campaignId can be any phase's id.
   createPhase: (token: string, campaignId: string, title?: string) =>
     request<Campaign>(`/campaigns/${campaignId}/phases`, { method: "POST", token, body: { title } }),
+  // Admin only (22 Sep): deletes a phase (not Phase 1) and its extra posts; 409 PHASE_HAS_POSTS while anything was submitted/invoiced on it.
+  deletePhase: (token: string, phaseId: string) => request<{ deleted: number; rootId: string }>(`/campaigns/${phaseId}/phase`, { method: "DELETE", token }),
 };
 
 // ── Links ───────────────────────────────────────────────────────────
 export const links = {
   list: (
     token: string,
-    params: { status?: string; assetId?: string; campaignId?: string; from?: string; to?: string; page?: number; pageSize?: number } = {}
+    params: {
+      status?: string;
+      assetId?: string;
+      campaignId?: string;
+      from?: string;
+      to?: string;
+      page?: number;
+      pageSize?: number;
+      unbilled?: boolean;
+    } = {}
   ) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set("status", params.status);
+    if (params.unbilled) qs.set("unbilled", "true");
     if (params.assetId) qs.set("assetId", params.assetId);
     if (params.campaignId) qs.set("campaignId", params.campaignId);
     if (params.from) qs.set("from", params.from);
@@ -780,6 +964,24 @@ export const screenshots = {
       token,
       body: { publicId },
     }),
+};
+
+// ── Receivables: client invoices (23 Sep) ────────────────────────────
+export const clientInvoices = {
+  list: (token: string, params: { status?: ClientInvoice["status"]; campaignId?: string; search?: string; hasAttachment?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.campaignId) qs.set("campaignId", params.campaignId);
+    if (params.search) qs.set("search", params.search);
+    if (params.hasAttachment) qs.set("hasAttachment", "true");
+    const q = qs.toString();
+    return request<{ items: ClientInvoice[]; total: number }>(`/invoices/client${q ? `?${q}` : ""}`, { token });
+  },
+  markPaid: (token: string, id: string, body: { paidAmount?: number; remarks?: string } = {}) =>
+    request<ClientInvoice>(`/invoices/client/${id}/mark-paid`, { method: "POST", token, body }),
+  cancel: (token: string, id: string, remarks: string) => request<ClientInvoice>(`/invoices/client/${id}/cancel`, { method: "POST", token, body: { remarks } }),
+  downloadPdf: (token: string, id: string, invoiceNumber?: string | null) =>
+    downloadBinary(`${API_URL}/invoices/client/${id}/pdf`, token, `${(invoiceNumber ?? id).replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf`),
 };
 
 // ── Invoices ────────────────────────────────────────────────────────
@@ -877,6 +1079,9 @@ export const admin = {
   updateUserRole: (token: string, userId: string, role: Role) =>
     request<User>(`/admin/users/${userId}/role`, { method: "PUT", token, body: { role } }),
   jobRuns: (token: string) => request<JobRun[]>("/admin/job-runs", { token }),
+  invoiceNumbering: (token: string) => request<InvoiceNumbering>("/admin/invoice-numbering", { token }),
+  updateInvoiceNumbering: (token: string, body: { prefix?: string; nextNumber?: number }) =>
+    request<InvoiceNumbering>("/admin/invoice-numbering", { method: "PUT", token, body }),
   // Manual trigger for the daily finance export (newTask.md #2) — same job
   // the cron runs, reported back synchronously so it's actually testable.
   runFinanceExportNow: (token: string) =>
@@ -918,7 +1123,7 @@ export interface PlanFields {
   clientAddress?: string;
   notes?: string;
   budget?: number;
-  isGstPlan?: boolean;
+  gstPercent?: number | null;
   items?: PlanItemInput[];
   overrideFollowers?: number | null;
   overridePosts?: number | null;
@@ -951,12 +1156,50 @@ async function downloadBinary(url: string, token: string, filename: string) {
   URL.revokeObjectURL(objectUrl);
 }
 
+/** One billing identity from earlier plans (server: plans/service.js's
+ *  listSavedClients). Detail fields are all null for a name that has never
+ *  been invoiced; one clientName can appear more than once (one brand,
+ *  several GST registrations). */
+export interface SavedClient {
+  clientName: string;
+  clientCompany: string | null;
+  clientGstNumber: string | null;
+  clientAddress: string | null;
+  clientPhone: string | null;
+}
+
 export interface ClientInvoiceDetails {
   clientCompany: string;
-  clientGstNumber?: string;
+  clientGstNumber: string;
   clientAddress: string;
   clientPhone?: string;
+  /** The Proforma Invoice's one "Description of goods/service" line. */
+  invoiceDescription: string;
+  /** Blank = the company's default HSN/SAC. */
+  hsnSac?: string;
+  /** Admin/Finance only — a typed number instead of the counter's next one. */
+  clientInvoiceNumber?: string;
 }
+
+/** Proforma Invoice numbering: `suggestion` is prefix + the zero-padded next number. */
+export interface InvoiceNumbering {
+  prefix: string;
+  nextNumber: number;
+  suggestion: string;
+}
+
+// The connected Google account behind per-plan sheets (22 Sep — its refresh
+// token can expire/be revoked, which every sheet action then reports as
+// GOOGLE_RECONNECT_REQUIRED). /authorize is a browser GET carrying the access
+// token as a query param (an OAuth redirect can't take a header), opened in a
+// new tab — never fetched.
+export const integrations = {
+  googleStatus: (token: string) => request<{ configured: boolean; connected: boolean; healthy: boolean }>("/integrations/google/status", { token }),
+  googleAuthorizeUrl: (token: string) => `${API_URL}/integrations/google/authorize?token=${encodeURIComponent(token)}`,
+};
+/** The error codes a "Reconnect Google" action fixes. */
+export const GOOGLE_RECONNECT_CODES = new Set(["GOOGLE_RECONNECT_REQUIRED", "GOOGLE_NOT_CONNECTED"]);
+export const needsGoogleReconnect = (err: unknown) => err instanceof ApiError && GOOGLE_RECONNECT_CODES.has(err.code);
 
 export const plans = {
   list: (token: string) => request<Plan[]>("/plans", { token }),
@@ -989,7 +1232,15 @@ export const plans = {
   // Server enforces who can call which: Admin on any plan, Plan Maker only
   // on their own.
   approve: (token: string, id: string) => request<Plan>(`/plans/${id}/approve`, { method: "POST", token }),
+  // Plan B, C… (23 Sep) — a sibling with the same client details and an
+  // empty budget/page selection; the server picks the next letter.
+  createVariant: (token: string, id: string) => request<Plan>(`/plans/${id}/variant`, { method: "POST", token, body: {} }),
   reject: (token: string, id: string) => request<Plan>(`/plans/${id}/reject`, { method: "POST", token }),
+  // Execution sheet → links (23 Sep): re-read the attached sheet and attach
+  // every posted link it names to the plan's campaign. Also happens on its
+  // own when the link is first saved on an approved plan.
+  syncExecutionSheet: (token: string, id: string) =>
+    request<{ plan: Plan; summary: { attached: number; alreadyLinked: number; pending: number; rows: number } }>(`/plans/${id}/execution-sheet/sync`, { method: "POST", token }),
   // Same pattern as campaigns.importSheetUrl — fetches a pasted Google
   // Sheet link server-side, returns its CSV text to parse client-side.
   // Client invoice (user request, 13 Sep — "on clicking generate invoice,
@@ -997,10 +1248,14 @@ export const plans = {
   // the popup posts the details, the plan comes back with a
   // clientInvoiceNumber, then the PDF is fetched with the auth header and
   // handed to the browser as a download (same pattern as invoices.downloadPdf).
+  invoiceNumbering: (token: string) => request<InvoiceNumbering & { defaultHsnSac: string; companyStateCode: string }>("/plans/client-invoice-numbering", { token }),
+  // Saved clients (21 Sep) — billing identities from the caller's earlier
+  // plans, for the wizard's Client name and the invoice popup's Company dropdowns.
+  clients: (token: string) => request<SavedClient[]>("/plans/clients", { token }),
   generateClientInvoice: (token: string, id: string, body: ClientInvoiceDetails) =>
     request<Plan>(`/plans/${id}/client-invoice`, { method: "POST", token, body }),
   downloadClientInvoicePdf: (token: string, id: string, invoiceNumber?: string | null) =>
-    downloadBinary(`${API_URL}/plans/${id}/client-invoice.pdf`, token, `${invoiceNumber ?? id}.pdf`),
+    downloadBinary(`${API_URL}/plans/${id}/client-invoice.pdf`, token, `${(invoiceNumber ?? id).replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf`),
   // Attached invoice PDF (user request, 14 Sep) — same signed direct-to-
   // Cloudinary two-step as invoices.requestAttachmentUpload/confirmAttachment.
   requestInvoiceAttachmentUpload: (token: string, id: string) =>
@@ -1014,6 +1269,18 @@ export const plans = {
   importSheetUrl: (token: string, url: string) => request<{ csv: string }>("/plans/import-sheet-url", { method: "POST", token, body: { url } }),
   importSheetPages: (token: string, id: string, rows: { handle: string; category?: string; followers?: number; format?: string; cost?: number; postsPerProfile?: number }[]) =>
     request<SheetImportResult>(`/plans/${id}/import-sheet-pages`, { method: "POST", token, body: { rows } }),
+  // "Upload plan" from a whole-plan sheet (user request, 22 Sep). The CSV
+  // comes from importSheetUrl above and is parsed client-side
+  // (lib/parseAssignmentSheet.ts parsePlanSheet); createFromSheet makes the
+  // plan, syncFromSheet is the card's Refresh (same stored link), and
+  // addPendingPage is the one-click Add to inventory for a pending row.
+  importSheetTabs: (token: string, url: string) =>
+    request<{ tabs: { gid: string; title: string | null; csv: string }[] }>("/plans/import-sheet-tabs", { method: "POST", token, body: { url } }),
+  createFromSheet: (token: string, body: ParsedPlanSheetPayload & { sourceSheetUrl: string; fields: ParsedPlanSheetPayload["fields"] & { name: string; clientName: string } }) =>
+    request<Plan>("/plans/from-sheet", { method: "POST", token, body }),
+  syncFromSheet: (token: string, id: string, body: ParsedPlanSheetPayload) => request<Plan>(`/plans/${id}/sheet-sync`, { method: "POST", token, body }),
+  addPendingPage: (token: string, id: string, body: { handle: string; ownerId?: string }) =>
+    request<Plan>(`/plans/${id}/sheet-pending/add`, { method: "POST", token, body }),
   // The plan's deliverable (user request, 10 Sep — "plan will be of google
   // sheet, not in pdf, it'll generate google sheet and will provide link"),
   // superseding the PDF downloads below as the primary Build-step action.
@@ -1043,4 +1310,18 @@ export const plans = {
       token,
       `${name ?? "plan-group"}${variant === "internal" ? "-internal" : ""}.pdf`
     ),
+};
+
+// Mirrors server's lib/permissions.js ROLE_DEFAULTS — used by the Add user
+// form to pre-check a Finance/Planner account's own baseline sections in the
+// access editor, and to decide whether a create request actually deviates
+// from that baseline (only then is `permissions` sent at all).
+export const ROLE_DEFAULT_PERMISSIONS: Record<Role, Permissions> = {
+  ADMIN: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true])) as Permissions,
+  FINANCE: Object.fromEntries(
+    PERMISSION_KEYS.map((k) => [k, (["finance.view", "finance.edit", "finance.approve", "finance.pay", "campaigns.view", "inventory.view", "links.view"] as PermissionKey[]).includes(k)])
+  ) as Permissions,
+  PLAN_MAKER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, k === "inventory.view"])) as Permissions,
+  CREATOR: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
+  TEAM_MEMBER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
 };

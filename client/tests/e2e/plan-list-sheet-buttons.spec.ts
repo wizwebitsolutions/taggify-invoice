@@ -15,6 +15,7 @@ function plan(overrides: Record<string, unknown> = {}) {
     clientName: "Acme",
     clientContact: null,
     budget: null,
+    gstPercent: null,
     isGstPlan: false,
     status: "DRAFT",
     approvedBy: null,
@@ -41,7 +42,7 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
     await mockApi(page);
     await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [plan()] }));
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     await expect(page.getByRole("button", { name: "PDF" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Client sheet" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Internal sheet" })).toBeVisible();
@@ -57,7 +58,7 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
       return route.fulfill({ json: { spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit?gid=1#gid=1" } });
     });
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     await page.getByRole("button", { name: "Client sheet" }).click();
     await expect.poll(() => generateCalled).toBe(true);
   });
@@ -72,11 +73,51 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
       return route.fulfill({ json: { spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit?gid=1#gid=1" } });
     });
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     await expect(page.getByRole("button", { name: "Client sheet ↗" })).toBeVisible();
     const [popup] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: "Client sheet ↗" }).click()]);
     expect(popup.url()).toContain("docs.google.com/spreadsheets/d/sheet-1");
     await popup.close();
     expect(generateCalled).toBe(false);
+  });
+
+  // 22 Sep — an expired Google refresh token surfaced as a raw 500
+  // "Something went wrong" on every ungenerated plan.
+  test("an expired Google connection shows the real reason and, for an Admin, a Reconnect Google button that opens the consent flow", async ({ page, context }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [plan(), plan({ id: "plan-2", name: "Other plan" })] }));
+    await page.route(`${API_URL}/plans/plan-1/sheet`, (route) =>
+      route.fulfill({ status: 503, json: { error: { code: "GOOGLE_RECONNECT_REQUIRED", message: "The connected Google account's access has expired or been revoked — an admin needs to reconnect it (Plans → Reconnect Google)." } } })
+    );
+    await context.route(`${API_URL}/integrations/google/authorize**`, (route) => route.fulfill({ contentType: "text/html", body: "<title>consent</title>" }));
+
+    await page.goto("/plans?maker=all");
+    // The generate path opens a blank tab first (popup-blocker-safe); it just stays blank on failure.
+    const [blank] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: "Client sheet" }).first().click()]);
+    await blank.close();
+    // Only on the card that was clicked, not every card.
+    await expect(page.getByTestId("google-reconnect-notice")).toHaveCount(1);
+    const notice = page.getByTestId("google-reconnect-notice");
+    await expect(notice).toContainText("access has expired or been revoked");
+    await expect(notice).not.toContainText("Something went wrong");
+
+    const [consent] = await Promise.all([page.waitForEvent("popup"), notice.getByRole("button", { name: /Reconnect Google/ }).click()]);
+    expect(consent.url()).toContain("/integrations/google/authorize?token=test-access-token");
+    await consent.close();
+  });
+
+  test("a non-admin is told to ask an admin instead of getting the Reconnect button", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await mockApi(page);
+    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [plan({ createdBy: { id: "test-user-1", name: "Test User" } })] }));
+    await page.route(`${API_URL}/plans/plan-1/sheet`, (route) => route.fulfill({ status: 503, json: { error: { code: "GOOGLE_RECONNECT_REQUIRED", message: "Google access expired." } } }));
+
+    await page.goto("/plans?maker=all");
+    const [blank] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: "Client sheet" }).click()]);
+    await blank.close();
+    const notice = page.getByTestId("google-reconnect-notice");
+    await expect(notice).toContainText("Ask an admin to reconnect");
+    await expect(notice.getByRole("button", { name: /Reconnect Google/ })).toHaveCount(0);
   });
 });

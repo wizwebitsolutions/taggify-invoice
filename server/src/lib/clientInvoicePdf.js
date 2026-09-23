@@ -1,4 +1,5 @@
 import { COMPANY } from "./companyDetails.js";
+import { gstSplitFor } from "./gstin.js";
 import { buildTaxDocumentPdf, cap, dateStr } from "./taxDocumentPdf.js";
 
 /**
@@ -12,7 +13,7 @@ import { buildTaxDocumentPdf, cap, dateStr } from "./taxDocumentPdf.js";
  *    client-facing rate). When Step 3 overrode the client-facing cost the
  *    lines wouldn't add up to it, so the invoice shows one consolidated
  *    "campaign services" line for the overridden subtotal instead.
- *  - Totals: the plan's `overview` — subtotal, 18% GST if a GST plan, total.
+ *  - Totals: the plan's `overview` — subtotal, GST at the plan's gstPercent if set, total.
  *  - "Bank Account Details": Taggify's own (COMPANY.bank) — where the
  *    client pays.
  *
@@ -25,8 +26,14 @@ export function buildClientInvoicePdf(plan) {
 }
 
 export function clientInvoiceToDocument(plan) {
-  const isGst = Boolean(plan.isGstPlan);
-  const rows = plan.itemised
+  const gstPercent = plan.gstPercent != null ? Number(plan.gstPercent) : 0;
+  const isGst = gstPercent > 0;
+  // One consolidated line once the popup's description is on the plan (17
+  // Sep — "Description of goods/service ... filled by plan maker, admin");
+  // plans invoiced before that keep the per-page lines.
+  const rows = plan.invoiceDescription
+    ? [{ description: plan.invoiceDescription, quantity: 1, rate: plan.overview.subtotal, amount: plan.overview.subtotal }]
+    : plan.itemised
     ? plan.items.map((item) => {
         const handle = item.asset?.handle ? `@${item.asset.handle}` : "";
         const posts = item.postsPerProfile ?? 1;
@@ -41,9 +48,12 @@ export function clientInvoiceToDocument(plan) {
 
   const contactLine = plan.clientName && plan.clientName !== plan.clientCompany ? plan.clientName : "";
   return {
-    title: isGst ? "Tax Invoice" : "Invoice",
+    title: "Proforma Invoice",
+    hsnSac: plan.hsnSac || null,
     isGst,
-    gstRate: 18,
+    gstRate: gstPercent,
+    // Client in our state → CGST + SGST, anywhere else → IGST (lib/gstin.js).
+    taxSplit: gstSplitFor(plan.clientGstNumber),
     partyLabel: "Billed to (Client)",
     partyLines: [
       { text: plan.clientCompany || plan.clientName || "Client", bold: true },

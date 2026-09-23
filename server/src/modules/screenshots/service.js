@@ -2,6 +2,7 @@ import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { buildScreenshotKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
 import { markPendingScreenshotReview } from "../links/service.js";
+import { ALREADY_INVOICED } from "../links/statusTimeline.js";
 
 /**
  * Step 1: client asks for somewhere to upload. Server mints the public_id
@@ -12,6 +13,8 @@ import { markPendingScreenshotReview } from "../links/service.js";
 export async function requestUploadUrl(linkId) {
   const link = await prisma.link.findUnique({ where: { id: linkId } });
   if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  // Told before the upload, not after (the status move in step 2 would refuse anyway).
+  if (link.status === "INVOICED") throw ALREADY_INVOICED("upload a screenshot for it");
 
   const publicId = buildScreenshotKey(linkId);
   return getUploadParams(publicId);
@@ -25,6 +28,9 @@ export async function requestUploadUrl(linkId) {
 export async function confirmUpload(linkId, publicId) {
   const link = await prisma.link.findUnique({ where: { id: linkId } });
   if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  // The invoice may have been raised between step 1 and step 2 — checked
+  // again here, before the screenshot row is replaced / its approval reset.
+  if (link.status === "INVOICED") throw ALREADY_INVOICED("upload a screenshot for it");
   if (!publicId.startsWith(`screenshots/${linkId}/`)) {
     throw new ApiError(400, "KEY_MISMATCH", "Object key does not belong to this link");
   }

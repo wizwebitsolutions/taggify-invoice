@@ -17,11 +17,21 @@ const MAX_BYTES = 10 * 1024 * 1024;
  * components/invoices/invoice-attachment.tsx (upload-url → upload →
  * confirm); PDF-only is checked here on type/name and again server-side
  * on the file name (plans/schemas.js).
+ *
+ * `plan` only needs id/name/invoiceAttachment — narrowed (23 Sep) so the
+ * Payments tab's receivables rows (which carry a ClientInvoice's slimmer
+ * `plan` shape, not a full Plan) can reuse this control too.
  */
-export function PlanInvoiceAttachmentControl({ token, plan }: { token: string; plan: Plan }) {
+export function PlanInvoiceAttachmentControl({ token, plan }: { token: string; plan: Pick<Plan, "id" | "name" | "invoiceAttachment"> }) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["plans"] });
+  // Also invalidates client-invoices (23 Sep) — the Payments tab's
+  // receivables view renders this control on a ClientInvoice row, a
+  // separate cache entry from ["plans"], and needs to pick up the change too.
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
+    queryClient.invalidateQueries({ queryKey: ["client-invoices"] });
+  };
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {

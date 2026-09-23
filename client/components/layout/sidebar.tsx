@@ -4,7 +4,7 @@ import type { ComponentType } from "react";
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/ui/logo";
 import { useAuth } from "@/lib/auth-context";
-import type { Role, Permissions } from "@/lib/api-client";
+import { hasAccess, type Role, type Permissions, type PermissionKey } from "@/lib/api-client";
 import {
   GridIcon,
   CampaignIcon,
@@ -33,7 +33,15 @@ type NavItem = {
    *  anything merely *action*-gated (a page that still loads and just
    *  disables/errors on one button) — that's an acceptable error-toast
    *  fallback, not worth hiding the whole destination for. */
-  permissionKey?: keyof Permissions;
+  permissionKey?: PermissionKey;
+  /** Like `permissionKey`, but visible if ANY of these keys is held — for a
+   *  destination that bundles several independent approve actions (e.g.
+   *  Approvals: links.approve, inventory.approve, plans.approve,
+   *  finance.pay each open a different queue on that one page). */
+  permissionKeysAny?: PermissionKey[];
+  /** Roles the server lets through the keyed route *without* the key (its
+   *  own self-service users, e.g. PLAN_MAKER on /plans). */
+  bareRoles?: Role[];
 };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -42,8 +50,19 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { key: "dashboard", label: "Home", icon: GridIcon, href: "/dashboard" },
       // The decision queue (premium mockup 03) — one row per approval,
-      // list-left / detail-right. Admin-only: Finance approves nothing here.
-      { key: "approvals", label: "Approvals", icon: CheckCircleIcon, href: "/approvals", roles: ["ADMIN"] },
+      // list-left / detail-right. Bundles four independent approve actions
+      // (screenshots/insights, plans, pages, billing profiles); visible if
+      // ADMIN or any one of those keys is held (23 Sep) — a plain Finance
+      // account holds none of them by baseline, so this stays effectively
+      // Admin-only until one is explicitly granted.
+      {
+        key: "approvals",
+        label: "Approvals",
+        icon: CheckCircleIcon,
+        href: "/approvals",
+        roles: ["ADMIN"],
+        permissionKeysAny: ["links.approve", "inventory.approve", "plans.approve", "finance.pay"],
+      },
     ],
   },
   {
@@ -65,12 +84,14 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // gated the same way (Admin + Plan Maker) but now at the nav level
       // too, matching Campaigns' allowlist pattern above. permissionKey
       // lets a granted non-ADMIN/PLAN_MAKER role in too (15 Sep).
-      { key: "plans", label: "Plans", icon: AssetIcon, href: "/plans", roles: ["ADMIN", "PLAN_MAKER"], permissionKey: "plans.manage" },
+      { key: "plans", label: "Plans", icon: AssetIcon, href: "/plans", roles: ["ADMIN", "PLAN_MAKER"], permissionKey: "plans.view", bareRoles: ["PLAN_MAKER"] },
     ],
   },
   {
     label: "Finance",
-    items: [{ key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] }],
+    items: [
+      { key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] },
+    ],
   },
   {
     label: "Admin",
@@ -78,14 +99,15 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // ADMIN-only server-side (admin routes: requireRole("ADMIN")), and
       // the whole route is further gated on "users.manage" — a sub-admin
       // without it would land on a page that 403s on load.
-      { key: "users", label: "People", icon: TeamIcon, href: "/users", roles: ["ADMIN"], permissionKey: "users.manage" },
+      { key: "users", label: "People", icon: TeamIcon, href: "/users", roles: ["ADMIN"], permissionKey: "users.view" },
       // CREATOR-only — this is a creator managing their own team, not an
       // admin function despite living in this group (see team/page.tsx's
       // "Team management is available to Creator accounts" fallback and
       // users routes: GET/POST /users/me/team both requireRole("CREATOR")).
       { key: "team", label: "Team", icon: TeamIcon, href: "/team", roles: ["CREATOR"] },
-      // ADMIN-only server-side (admin routes: requireRole("ADMIN")).
-      { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs", roles: ["ADMIN"] },
+      // Gated on finance.edit server-side (23 Sep) — a plain Finance
+      // account holds it by baseline, matching the route.
+      { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs", roles: ["ADMIN"], permissionKey: "finance.edit" },
     ],
   },
 ];
@@ -97,15 +119,21 @@ type NavUser = { role?: Role; permissions?: Permissions } | null | undefined;
 
 function canSeeNavItem(item: NavItem, user: NavUser) {
   const roleAllowed = !item.roles || (!!user?.role && item.roles.includes(user.role));
-  if (roleAllowed) {
-    // Absent/undefined permissions (every role but a sub-admin) reads as
-    // "not restricted" — only an explicit `false` from an overlay hides it.
-    if (item.permissionKey && user?.permissions?.[item.permissionKey] === false) return false;
-    return true;
+  // A destination whose whole route is keyed: the key decides, whatever the
+  // role — a sub-admin denied it is hidden, a granted Finance/Planner sees
+  // it. Same answer the server's requireAccess() gives (hasAccess mirrors
+  // getEffectivePermissions, including legacy six-key sessions).
+  if (item.permissionKey) {
+    if (hasAccess(user, item.permissionKey)) return true;
+    // PLAN_MAKER is a bare role on /plans (own plans only) — its own role
+    // list still lets it in even without the key.
+    return roleAllowed && !!item.bareRoles?.includes(user?.role as Role);
   }
-  // Not one of this item's normal roles — but an explicit grant (15 Sep)
-  // opens it anyway, same as the server's requireAccess() would allow.
-  return !!item.permissionKey && user?.permissions?.[item.permissionKey] === true;
+  if (item.permissionKeysAny) {
+    if (item.permissionKeysAny.some((key) => hasAccess(user, key))) return true;
+    return roleAllowed;
+  }
+  return roleAllowed;
 }
 
 /** Same per-role/per-permission visibility as the sidebar, keyed by

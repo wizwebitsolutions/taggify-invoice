@@ -7,6 +7,10 @@ const mockPrisma = {
   linkStatusEvent: { create: vi.fn() },
   campaignAssignment: { findMany: vi.fn(), create: vi.fn(), createMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), count: vi.fn() },
   asset: { findMany: vi.fn(), findUnique: vi.fn() },
+  user: { findUnique: vi.fn() },
+  // createPhase/deletePhase run in a transaction (22 Sep); `tx` is the mock itself.
+  $transaction: vi.fn(async (fn) => fn(mockPrisma)),
+  $queryRaw: vi.fn(async () => []),
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 // campaigns/service.js imports links/service.js (for autoAttachLink) —
@@ -20,7 +24,7 @@ vi.mock("../notifications/service.js", () => ({ notify: vi.fn() }));
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-const { listCampaigns, createCampaign, resolveAssignment, listAssignments, googleSheetCsvExportUrl, fetchSheetCsv, getCampaignById, createPhase } =
+const { listCampaigns, createCampaign, resolveAssignment, listAssignments, googleSheetCsvExportUrl, fetchSheetCsv, fetchSheetTabs, getCampaignById, createPhase } =
   await import("./service.js");
 
 beforeEach(() => {
@@ -31,6 +35,16 @@ beforeEach(() => {
   mockPrisma.link.findFirst.mockResolvedValue(null);
   mockPrisma.campaignAssignment.findMany.mockResolvedValue([]);
   mockPrisma.campaignAssignment.count.mockResolvedValue(0);
+  mockPrisma.$transaction.mockImplementation(async (fn) => fn(mockPrisma));
+  // campaigns.view scoping (23 Sep, Step 3) is read fresh from the DB —
+  // derive a plausible role from this file's id fixtures (admin-*/fin-*/…)
+  // so existing calls with no requester (undefined — a no-op, see the
+  // `requester ?` guards in service.js) and the listAssignments fixtures
+  // below both work without every test stubbing this.
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    role: where.id?.startsWith("admin") ? "ADMIN" : where.id?.startsWith("fin") ? "FINANCE" : where.id?.startsWith("pm") ? "PLAN_MAKER" : "CREATOR",
+    permissions: null,
+  }));
 });
 
 const baseCampaign = {
@@ -171,7 +185,7 @@ describe("listCampaigns — phases (newTask.md, 8 Sep)", () => {
   it("rolls up spent/remainingBudget across phases on the root's card, using the root's cost cap", async () => {
     mockPrisma.campaign.findMany
       .mockResolvedValueOnce([{ ...baseCampaign, costCap: 10000 }])
-      .mockResolvedValueOnce([{ id: "c2", parentCampaignId: "c1" }]);
+      .mockResolvedValueOnce([{ id: "c2", parentCampaignId: "c1", phaseNumber: 2, postNumber: 1 }]);
     mockPrisma.link.findMany.mockResolvedValue([
       { campaignId: "c1", cost: 3000, status: "SCREENSHOT_APPROVED", postedAt: null, createdAt: new Date(), postSnapshots: [] },
       { campaignId: "c2", cost: 2000, status: "SCREENSHOT_APPROVED", postedAt: null, createdAt: new Date(), postSnapshots: [] },
@@ -198,7 +212,7 @@ describe("listCampaigns — phases (newTask.md, 8 Sep)", () => {
 describe("getCampaignById — single-campaign detail page (bugs.md #7)", () => {
   it("annotates the same way listCampaigns does, for just one campaign", async () => {
     mockPrisma.campaign.findUnique.mockResolvedValue({ ...baseCampaign, costCap: 10000 });
-    mockPrisma.campaign.findMany.mockResolvedValue([{ id: "c1", phaseNumber: 1, title: "Launch", createdAt: baseCampaign.createdAt }]);
+    mockPrisma.campaign.findMany.mockResolvedValue([{ id: "c1", phaseNumber: 1, postNumber: 1, parentCampaignId: null, title: "Launch", createdAt: baseCampaign.createdAt }]);
     mockPrisma.link.findMany.mockResolvedValue([
       { campaignId: "c1", cost: 3000, status: "SCREENSHOT_APPROVED", postedAt: new Date("2026-01-01"), createdAt: new Date("2026-01-01"), postSnapshots: [{ thumbnailUrl: "a.jpg", caption: "hi", likeCount: 15 }] },
     ]);
@@ -208,7 +222,7 @@ describe("getCampaignById — single-campaign detail page (bugs.md #7)", () => {
 
     expect(mockPrisma.campaign.findUnique).toHaveBeenCalledWith({ where: { id: "c1" } });
     expect(mockPrisma.link.findMany).toHaveBeenCalledWith({ where: { campaignId: { in: ["c1"] } }, select: expect.any(Object) });
-    expect(mockPrisma.campaignAssignment.count).toHaveBeenCalledWith({ where: { campaignId: "c1", status: "pending" } });
+    expect(mockPrisma.campaignAssignment.count).toHaveBeenCalledWith({ where: { campaignId: { in: ["c1"] }, status: "pending" } });
     expect(campaign.spent).toBe(3000);
     expect(campaign.remainingBudget).toBe(7000);
     expect(campaign.totalLikes).toBe(15);
@@ -232,8 +246,8 @@ describe("getCampaignById — phase budget rollup (newTask.md, 8 Sep)", () => {
       .mockResolvedValueOnce({ id: "c2", parentCampaignId: "c1", phaseNumber: 2, title: "Launch — Phase 2", costCap: null })
       .mockResolvedValueOnce({ id: "c1", parentCampaignId: null, phaseNumber: 1, title: "Launch", costCap: 10000 });
     mockPrisma.campaign.findMany.mockResolvedValue([
-      { id: "c1", phaseNumber: 1, title: "Launch", createdAt: baseCampaign.createdAt },
-      { id: "c2", phaseNumber: 2, title: "Launch — Phase 2", createdAt: baseCampaign.createdAt },
+      { id: "c1", phaseNumber: 1, postNumber: 1, parentCampaignId: null, title: "Launch", createdAt: baseCampaign.createdAt },
+      { id: "c2", phaseNumber: 2, postNumber: 1, parentCampaignId: "c1", title: "Launch — Phase 2", createdAt: baseCampaign.createdAt },
     ]);
     mockPrisma.link.findMany.mockResolvedValue([
       { campaignId: "c1", cost: 3000, status: "SCREENSHOT_APPROVED", postedAt: null, createdAt: new Date(), postSnapshots: [] },
@@ -257,8 +271,8 @@ describe("getCampaignById — phase budget rollup (newTask.md, 8 Sep)", () => {
       .mockResolvedValueOnce({ id: "c2", parentCampaignId: "c1", phaseNumber: 2, title: "Launch — Phase 2", costCap: null })
       .mockResolvedValueOnce({ id: "c1", parentCampaignId: null, phaseNumber: 1, title: "Launch", costCap: 20000 });
     mockPrisma.campaign.findMany.mockResolvedValue([
-      { id: "c1", phaseNumber: 1, title: "Launch", createdAt: baseCampaign.createdAt },
-      { id: "c2", phaseNumber: 2, title: "Launch — Phase 2", createdAt: baseCampaign.createdAt },
+      { id: "c1", phaseNumber: 1, postNumber: 1, parentCampaignId: null, title: "Launch", createdAt: baseCampaign.createdAt },
+      { id: "c2", phaseNumber: 2, postNumber: 1, parentCampaignId: "c1", title: "Launch — Phase 2", createdAt: baseCampaign.createdAt },
     ]);
     mockPrisma.link.findMany.mockResolvedValue([]);
 
@@ -287,6 +301,7 @@ describe("createPhase — adding a phase to a campaign (newTask.md, 8 Sep)", () 
         sheetLink: "https://sheet",
         parentCampaignId: "c1",
         phaseNumber: 2,
+        postNumber: 1,
       },
     });
   });
@@ -563,10 +578,10 @@ describe("resolveAssignment — admin points a pending row at a page (newTask.md
 describe("listAssignments — visibility (newTask.md, 8 Sep: \"visible to all creators listed in that sheet\")", () => {
   it("Admin/Finance see every row on the campaign, unscoped", async () => {
     await listAssignments("c1", { id: "admin-1", role: "ADMIN" });
-    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "c1" } }));
+    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: { in: ["c1"] } } }));
 
     await listAssignments("c1", { id: "fin-1", role: "FINANCE" });
-    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "c1" } }));
+    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: { in: ["c1"] } } }));
   });
 
   it("a Creator sees only the row(s) matched to a page they own — not the whole sheet", async () => {
@@ -579,7 +594,24 @@ describe("listAssignments — visibility (newTask.md, 8 Sep: \"visible to all cr
 
   it("with no requester (unscoped internal call), returns the whole campaign's rows", async () => {
     await listAssignments("c1");
-    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "c1" } }));
+    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: { in: ["c1"] } } }));
+  });
+
+  it("restricting a FINANCE account's campaigns.view now actually narrows them to their own matched rows — it used to be a no-op (23 Sep, Step 3)", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      role: "FINANCE",
+      permissions: { "campaigns.view": false, "campaigns.edit": false },
+    });
+    await listAssignments("c1", { id: "fin-1", role: "FINANCE" });
+    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { campaignId: "c1", asset: { ownerId: "fin-1" } } })
+    );
+  });
+
+  it("granting campaigns.view to a role that doesn't normally hold it opens the full sheet", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "TEAM_MEMBER", permissions: { "campaigns.view": true } });
+    await listAssignments("c1", { id: "tm-1", role: "TEAM_MEMBER" });
+    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: { in: ["c1"] } } }));
   });
 });
 
@@ -657,5 +689,46 @@ describe("fetchSheetCsv — fetches a public sheet's CSV export (bugs.md #6)", (
     await expect(fetchSheetCsv("https://docs.google.com/spreadsheets/d/abc123/edit")).rejects.toMatchObject({
       code: "SHEET_FETCH_FAILED",
     });
+  });
+});
+
+describe("fetchSheetTabs — every tab of a sheet as CSV (plan upload, 22 Sep)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const csvResponse = (text) => ({ ok: true, headers: new Map([["content-type", "text/csv"]]), text: async () => text });
+
+  it("lists tabs from the HTML view's tab strip and fetches each one's CSV, in order", async () => {
+    mockFetch.mockImplementation(async (url) => {
+      if (url.endsWith("/htmlview")) {
+        // The shape /htmlview really serves (checked against Google's public sample sheet).
+        return {
+          ok: true,
+          text: async () =>
+            'var items = [];items.push({name: "Details \\x26 budget", pageUrl: "https:\\/\\/docs.google.com\\/spreadsheets\\/d\\/abc123\\/htmlview\\/sheet?headers\\x3dtrue&gid=0", gid: "0",initialSheet: ("0" == gid)});items.push({name: "Pages", pageUrl: "x", gid: "1554",initialSheet: false});',
+        };
+      }
+      return csvResponse(url.includes("gid=1554") ? "Handle\nghantaa" : "Plan name,Q1");
+    });
+
+    const tabs = await fetchSheetTabs("https://docs.google.com/spreadsheets/d/abc123/edit#gid=1554");
+
+    expect(tabs).toEqual([
+      { gid: "0", title: "Details & budget", csv: "Plan name,Q1" },
+      { gid: "1554", title: "Pages", csv: "Handle\nghantaa" },
+    ]);
+    expect(mockFetch).toHaveBeenCalledWith("https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=0");
+    expect(mockFetch).toHaveBeenCalledWith("https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=1554");
+  });
+
+  it("falls back to the link's own tab when the HTML view can't be read", async () => {
+    mockFetch.mockImplementation(async (url) => (url.endsWith("/htmlview") ? { ok: false } : csvResponse("Plan name,Q1")));
+
+    const tabs = await fetchSheetTabs("https://docs.google.com/spreadsheets/d/abc123/edit?gid=7");
+
+    expect(tabs).toEqual([{ gid: "7", title: null, csv: "Plan name,Q1" }]);
+  });
+
+  it("a tab that isn't link-shared surfaces the same SHEET_NOT_SHARED error", async () => {
+    mockFetch.mockImplementation(async (url) => (url.endsWith("/htmlview") ? { ok: false } : { ok: true, headers: new Map([["content-type", "text/html"]]), text: async () => "<html>" }));
+    await expect(fetchSheetTabs("https://docs.google.com/spreadsheets/d/abc123/edit")).rejects.toMatchObject({ code: "SHEET_NOT_SHARED" });
   });
 });

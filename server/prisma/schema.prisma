@@ -67,18 +67,26 @@ enum PaymentStatus {
 }
 
 model User {
-  id               String   @id @default(cuid())
-  phoneNumber      String   @unique
-  passwordHash     String
-  role             Role
-  name             String?
-  email            String?  @unique
-  secondaryPhone   String?
-  addressLine1     String?
-  addressLine2     String?
-  state            String?
-  pincode          String?
-  whatsappVerified Boolean  @default(false)
+  id                   String    @id @default(cuid())
+  phoneNumber          String    @unique
+  passwordHash         String
+  role                 Role
+  name                 String?
+  email                String?   @unique
+  // Email 2FA (21 Sep). `email` above doubles as the login identifier, but
+  // only once emailVerifiedAt is set — until then it's just an unverified
+  // profile field and the account still signs in by phone number.
+  // unverifiedLoginCount is how many phone+password logins this account has
+  // used without a verified email; past MAX_UNVERIFIED_LOGINS (auth/service.js)
+  // login stops issuing a session and forces the verify-email step instead.
+  emailVerifiedAt      DateTime?
+  unverifiedLoginCount Int       @default(0)
+  secondaryPhone       String?
+  addressLine1         String?
+  addressLine2         String?
+  state                String?
+  pincode              String?
+  whatsappVerified     Boolean   @default(false)
   // Sub-admin permission overlay (newTask.md, 8 Sep — "Admin can create
   // Sub-admins, each with a hand-picked selection of what they can
   // see/access"). Null = plain account, full role-default access. Set only
@@ -87,19 +95,21 @@ model User {
   // Role value (the less-invasive of the two migrations the note flagged;
   // see lib/permissions.js for key names/defaults and getEffectivePermissions()
   // for how an override merges with role defaults).
-  permissions      Json?
+  permissions          Json?
   // Which admin created this account, when it's a sub-admin — the audit
   // trail newTask.md's "suggested improvements" asked for (who gave X
   // visibility into Y). Null for every account not created via the
   // sub-admin flow (including the very first admin).
-  createdByAdminId String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdByAdminId     String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   createdByAdmin            User?                @relation("AdminCreatedSubAdmins", fields: [createdByAdminId], references: [id])
   createdSubAdmins          User[]               @relation("AdminCreatedSubAdmins")
   memberships               TeamMembership[]     @relation("MemberUser")
   refreshTokens             RefreshToken[]
+  trustedDevices            TrustedDevice[]
+  emailOtps                 EmailOtp[]
   assets                    Asset[]
   invoices                  Invoice[]
   raisedInvoices            Invoice[]            @relation("RaisedInvoices")
@@ -110,6 +120,7 @@ model User {
   costRevisions             LinkCostRevision[]
   plans                     Plan[]
   approvedPlans             Plan[]               @relation("PlanApprovals")
+  issuedClientInvoices      ClientInvoice[]      @relation("IssuedClientInvoices")
   permissionChangesMade     PermissionAuditLog[] @relation("PermissionChangeActor")
   permissionChangesReceived PermissionAuditLog[] @relation("PermissionChangeTarget")
 }
@@ -123,6 +134,11 @@ model PermissionAuditLog {
   id        String   @id @default(cuid())
   targetId  String
   actorId   String
+  // What changed (23 Sep): "permissions" (overlay edit / sub-admin creation),
+  // "role" (before/after = {role, permissions}), or "password_reset" (a
+  // takeover primitive — whoever reads the new password off the response is
+  // that user until they change it, so it's logged like an access change).
+  action    String   @default("permissions")
   before    Json?
   after     Json
   createdAt DateTime @default(now())
@@ -166,6 +182,31 @@ model TeamMembership {
   @@unique([userId, creatorId])
 }
 
+enum EmailOtpPurpose {
+  LOGIN
+  VERIFY_EMAIL
+}
+
+// One emailed 6-digit code (email 2FA, 21 Sep). Only a hash of the code is
+// stored. `email` is the address it was sent to — for VERIFY_EMAIL that's
+// the not-yet-verified address being claimed, which only lands on User.email
+// once the code is confirmed.
+model EmailOtp {
+  id         String          @id @default(cuid())
+  userId     String
+  purpose    EmailOtpPurpose
+  email      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int             @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime        @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+}
+
 model RefreshToken {
   id        String   @id @default(cuid())
   userId    String
@@ -179,38 +220,62 @@ model RefreshToken {
   @@index([userId])
 }
 
+// "Skip OTP for 7 days" (user decision, 23 Sep) — one row per browser that
+// has completed a real email-OTP verification. auth/service.js's login()
+// checks this before issuing a new OTP for a verified account; only its
+// hash is ever stored (same discipline as RefreshToken/EmailOtp), the raw
+// token lives solely in an httpOnly cookie the browser sends back. Password
+// is still checked in every branch before this is ever consulted — this
+// only ever shortens the *second* factor, never replaces the first.
+model TrustedDevice {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
 model Asset {
-  id             String   @id @default(cuid())
-  ownerId        String
-  platform       String   @default("instagram")
-  handle         String
-  followers      Int      @default(0)
-  fullName       String? // profile display name, synced from Apify
-  biography      String? // profile bio, synced from Apify
-  profilePicUrl  String? // Instagram CDN URL, synced from Apify — re-synced every 24h so it doesn't go stale
-  category       String? // free-form, e.g. "Meme page", "News page" — not a fixed enum, same convention as RateCard.format
-  approvalStatus String   @default("pending") // pending | approved | rejected
+  id                  String    @id @default(cuid())
+  ownerId             String
+  platform            String    @default("instagram")
+  handle              String
+  followers           Int       @default(0)
+  fullName            String? // profile display name, synced from Apify
+  biography           String? // profile bio, synced from Apify
+  profilePicUrl       String? // Instagram CDN URL, synced from Apify — re-synced every 24h so it doesn't go stale
+  // Our own copy of that picture in Cloudinary (22 Sep), re-uploaded after
+  // every scrape — served first by GET /assets/:id/profile-pic, since
+  // Instagram's CDN links expire and flake. See assets/service.js storeProfilePic.
+  profilePicStoredUrl String?
+  category            String? // free-form, e.g. "Meme page", "News page" — not a fixed enum, same convention as RateCard.format
+  approvalStatus      String    @default("pending") // pending | approved | rejected
   // Profile-level engagement from the same Apify profile scrape that syncs
   // followers (Inventory "Create page", 14 Sep — "on creation automatic
   // fetching of followers count, avg views"): averaged over the profile's
   // latest posts, so a page with no links submitted through the app yet
   // still shows real numbers. getAvgEngagement() prefers the app's own
   // per-link snapshots once there are any.
-  profileAvgViews    Int?
-  profileAvgLikes    Int?
-  profileAvgComments Int?
-  profileSampleSize  Int      @default(0)
+  profileAvgViews     Int?
+  profileAvgLikes     Int?
+  profileAvgComments  Int?
+  profileSampleSize   Int       @default(0)
   // When the last profile scrape succeeded / why the last one failed — lets
   // the Inventory row say "Fetching from Instagram…" right after creation,
   // or "Couldn't fetch (private / bad handle)" instead of a silent 0.
-  lastScrapedAt   DateTime?
-  lastScrapeError String?
+  lastScrapedAt       DateTime?
+  lastScrapeError     String?
   // Set the moment a profile scrape is queued (create / import / bulk
   // refresh), cleared when it finishes either way — the Inventory row's
   // "Fetching from Instagram…" state, without guessing from createdAt.
-  scrapeQueuedAt  DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  scrapeQueuedAt      DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   owner       User                 @relation(fields: [ownerId], references: [id])
   rateCards   RateCard[]
@@ -291,6 +356,12 @@ model Campaign {
   sheetLink        String? // reference URL (e.g. a Google Sheet) an admin attached when creating the campaign — kept as a plain link, not live-fetched; the actual page/creator list comes in via an uploaded file (see CampaignAssignment)
   parentCampaignId String?
   phaseNumber      Int       @default(1)
+  // Two kinds of child row (22 Sep): a real phase (postNumber 1, shown as a
+  // phase to everyone) and an extra post of a phase (postNumber 2+, same
+  // phaseNumber as the phase it belongs to — a page booked for 2 reels).
+  // Admins see an extra post as one more post of that phase; creators see
+  // every row as its own numbered phase (see lib/campaignPhases.js).
+  postNumber       Int       @default(1)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -330,6 +401,14 @@ model Link {
   // was auto-attached from a sheet row rather than submitted normally.
   campaignAssignment CampaignAssignment?
 
+  // A page can only ever have one Link for a given post URL (23 Sep — the
+  // actual guard behind links/service.js's autoAttachLink duplicate check,
+  // which was previously a read-then-write race: two overlapping calls,
+  // e.g. a double-clicked "Refresh links" on a plan's execution sheet,
+  // could both pass a plain findFirst before either insert landed and
+  // create two billable Links for one post). No existing rows violated
+  // this at the time it was added (checked before the migration).
+  @@unique([url, assetId])
   @@index([status])
   @@index([assetId])
   @@index([campaignId])
@@ -412,37 +491,37 @@ model AccountSnapshot {
 }
 
 model Invoice {
-  id            String        @id @default(cuid())
-  creatorId     String
-  invoiceNumber String        @unique
-  amount        Decimal       @db.Decimal(12, 2) // final billed total = subtotal + gstAmount
-  subtotal      Decimal       @db.Decimal(12, 2) // sum of the invoiced links' cost, pre-GST
-  isGstInvoice  Boolean       @default(false)
-  gstAmount     Decimal       @default(0) @db.Decimal(12, 2) // 18% of subtotal when isGstInvoice, else 0
-  status        InvoiceStatus @default(DRAFT)
-  paymentStatus PaymentStatus @default(PENDING)
-  gstStatus     GstStatus     @default(PENDING)
-  remarks       String? // e.g. rejection reason
-  dueDate       DateTime?
-  paidAt        DateTime?
-  // 12 Sep — invoices generated per creator from a campaign page (by Admin
-  // or the Plan Maker whose plan spawned the campaign). campaignId is what
-  // the campaign page lists "its" invoices by and what scopes a Plan
-  // Maker's invoice visibility; raisedById records who generated it (null
-  // for older rows). A creator-raised invoice also gets campaignId when
-  // every link on it belongs to one campaign.
-  campaignId    String?
-  raisedById    String?
+  id                     String        @id @default(cuid())
+  creatorId              String
+  invoiceNumber          String        @unique
+  amount                 Decimal       @db.Decimal(12, 2) // final billed total = subtotal + gstAmount
+  subtotal               Decimal       @db.Decimal(12, 2) // sum of the invoiced links' cost, pre-GST
+  isGstInvoice           Boolean       @default(false)
+  gstAmount              Decimal       @default(0) @db.Decimal(12, 2) // 18% of subtotal when isGstInvoice, else 0
+  status                 InvoiceStatus @default(DRAFT)
+  paymentStatus          PaymentStatus @default(PENDING)
+  gstStatus              GstStatus     @default(PENDING)
+  remarks                String? // e.g. rejection reason
+  dueDate                DateTime?
+  paidAt                 DateTime?
+  // campaignId is what the campaign page lists "its" invoices by and what
+  // scopes a Plan Maker's invoice visibility; it is set when every link on
+  // the invoice belongs to one campaign. raisedById records who generated
+  // it (null for older rows). Since 13 Sep only the creator raises their
+  // own invoices — the 12 Sep "generate from the campaign page" path (Admin
+  // / Plan Maker) was removed; the columns stay for the rows it produced.
+  campaignId             String?
+  raisedById             String?
   // 12 Sep — the creator's own invoice document (their GST invoice PDF/
   // image) attached to this record, so Finance has it next to the
   // system-generated one. Cloudinary public_id, like Screenshot; the
   // original file name is kept for display since public_ids carry none.
-  attachmentPublicId    String?
-  attachmentName        String?
+  attachmentPublicId     String?
+  attachmentName         String?
   attachmentUploadedById String?
-  attachmentUploadedAt  DateTime?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  attachmentUploadedAt   DateTime?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
 
   creator  User          @relation(fields: [creatorId], references: [id])
   campaign Campaign?     @relation(fields: [campaignId], references: [id])
@@ -519,9 +598,10 @@ model Plan {
   // extra NOTES bullet on the PDF alongside the two fixed ones.
   notes           String?
   budget          Decimal?   @db.Decimal(12, 2)
-  // Same convention as Invoice.isGstInvoice (newTask.md #4) — whether the
-  // PDF/overview adds 18% GST on top of the client subtotal.
-  isGstPlan       Boolean    @default(false)
+  // Client-facing GST % on this plan's invoice/overview (user request, 17
+  // Sep — replaces the old fixed-18%-or-nothing isGstPlan toggle, which
+  // could only ever add exactly 18% or nothing). Null/0 = no GST line.
+  gstPercent      Decimal?   @db.Decimal(5, 2)
   status          PlanStatus @default(DRAFT)
   approvedById    String?
   approvedAt      DateTime?
@@ -555,16 +635,35 @@ model Plan {
   // list) doesn't spin up a fresh spreadsheet tab pair every time;
   // "Regenerate" overwrites in place (see plans/service.js's
   // generatePlanSheet).
-  clientSheetUrl   String?
-  internalSheetUrl String?
-  // A pasted reference link (user request, 10 Sep — "there'll be option of
-  // attaching execution sheet after plan creation, execution sheet will be
-  // page name, links of their reel uploaded, date, page followers etc") —
-  // kept as a plain link, not live-fetched or parsed, same convention as
-  // Campaign.sheetLink. Whoever's actually posting fills this sheet in
-  // themselves, using the shape the sample template (see plans/service.js's
-  // getExecutionSheetTemplate) shows them.
-  executionSheetUrl String?
+  clientSheetUrl       String?
+  internalSheetUrl     String?
+  // The execution sheet (user request, 10 Sep — "execution sheet will be
+  // page name, links of their reel uploaded, date, page followers etc").
+  // Whoever's actually posting fills this sheet in themselves, using the
+  // shape the sample template (see plans/service.js's
+  // getExecutionSheetTemplate) shows them. Since 23 Sep (user decision:
+  // "parse → auto-create links") it is read, not just stored: on attach and
+  // on Refresh, every row naming a Posted Link becomes a SUBMITTED Link for
+  // that page's owner on the plan's campaign (see plans/service.js's
+  // syncExecutionSheet), so the creator's invoice is one click away. Rows
+  // that couldn't become links — page not in the plan, no post link, more
+  // posts than the plan booked — sit in executionSheetPending as
+  // [{ rowNumber, pageHandle, postUrl, reason }] for the card to list.
+  executionSheetUrl       String?
+  executionSheetFetchedAt DateTime?
+  executionSheetPending   Json?
+  // "Upload plan" (user request, 22 Sep — "plan maker can upload their own
+  // made excel sheet plan ... anything missing ... will be shown as missing
+  // ... refresh button of fetching updated sheet"): a plan built FROM a
+  // pasted Google Sheet rather than the wizard. The link is kept so Refresh
+  // re-fetches the same sheet (the user never re-attaches it); pending holds
+  // the sheet rows that couldn't become items yet — a handle not in
+  // Inventory, a page with no cost, a budget the pages exceed — as
+  // [{ kind: "page" | "budget", handle?, ..., reason }]. See plans/service.js's
+  // applySheetToPlan.
+  sourceSheetUrl       String?
+  sourceSheetFetchedAt DateTime?
+  sourceSheetPending   Json?
 
   // Client invoice (user request, 13 Sep — "on clicking generate invoice,
   // it'll ask for client details like gst, company address, phone number"):
@@ -576,6 +675,11 @@ model Plan {
   clientPhone         String?
   clientInvoiceNumber String?   @unique
   clientInvoiceAt     DateTime?
+  // Asked for in the same popup (user request, 17 Sep): the one line of
+  // "Description of goods/service" the Proforma Invoice bills, and the
+  // HSN/SAC code printed against it (blank = the company default).
+  invoiceDescription  String?
+  hsnSac              String?
 
   // Attached invoice document (user request, 14 Sep — "in plans for
   // admin, plan maker side, there'll be option of attaching invoice
@@ -601,8 +705,54 @@ model Plan {
   approvedBy User?      @relation("PlanApprovals", fields: [approvedById], references: [id])
   campaign   Campaign?  @relation(fields: [campaignId], references: [id])
   items      PlanItem[]
+  // The receivables ledger row for this plan's client invoice (23 Sep) —
+  // see ClientInvoice below.
+  clientInvoice ClientInvoice?
 
   @@index([pitchGroupId])
+}
+
+enum ClientInvoiceStatus {
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+// Receivables ledger (user decision, 23 Sep — "track + list in /invoices"):
+// one row per plan whose client invoice has been generated. The document
+// itself (number, GST, address, HSN…) still lives on the Plan columns above
+// and the PDF is still rendered from the plan on demand; this row is what
+// Finance sees and settles in the Receivables view of /invoices, without
+// needing plan access. Upserted by plans/service.js's generateClientInvoice
+// (a regenerate refreshes the totals, never the status/number), settled by
+// invoices/clientInvoices.js. Mirrors the payables side (Invoice) at the
+// coarse ISSUED → PAID / CANCELLED level — a client invoice is issued by us,
+// so there is no RAISED/APPROVED vetting stage.
+model ClientInvoice {
+  id            String              @id @default(cuid())
+  planId        String              @unique
+  // Copied from Plan.campaignId at issue time so the campaign/plan-maker
+  // views can join receivable ↔ payables without going through the plan.
+  campaignId    String?
+  invoiceNumber String              @unique
+  subtotal      Decimal             @db.Decimal(12, 2)
+  gstPercent    Decimal?            @db.Decimal(5, 2)
+  gstAmount     Decimal             @default(0) @db.Decimal(12, 2)
+  total         Decimal             @db.Decimal(12, 2)
+  status        ClientInvoiceStatus @default(ISSUED)
+  issuedAt      DateTime            @default(now())
+  issuedById    String?
+  paidAt        DateTime?
+  paidAmount    Decimal?            @db.Decimal(12, 2)
+  remarks       String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  plan     Plan  @relation(fields: [planId], references: [id])
+  issuedBy User? @relation("IssuedClientInvoices", fields: [issuedById], references: [id])
+
+  @@index([status])
+  @@index([campaignId])
 }
 
 model PlanItem {

@@ -207,3 +207,8 @@ Opened https://docs.google.com/spreadsheets/d/1Pm6H1djQxTPoaI5ria51-Sbk1C7ldbARO
   this sheet's category-grouped/aggregate-cost-with-GST shape, or keep
   per-item costing and only change how it's grouped/displayed?
 
+
+22 sept
+bugs:-
+
+1.creators are able to see team?, and top of it's written admin, why it's written md, also a user can see see their creator's pages or their team memeber they've added or can add

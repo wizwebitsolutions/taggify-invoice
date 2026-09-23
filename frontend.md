@@ -97,10 +97,10 @@ Rule for the whole build: **if a value or a piece of markup appears more than on
 
 | Screen | Backend routes it drives |
 |---|---|
-| Login | `POST /auth/login`, `POST /auth/refresh` |
-| Dashboard / My Works | `GET /links` (filters), `POST /links`, `GET /links/:id/timeline`, `POST /links/bulk-invoice` |
+| Login (+ OTP / forced email-verify steps), `/verify-email` | `POST /auth/login`, `/auth/login/verify-otp`, `/auth/login/resend-otp`, `/auth/email/start`, `/auth/email/confirm`, `POST /auth/refresh` |
+| Dashboard / My Works | `GET /links` (filters), `POST /links`, `GET /links/:id/timeline` |
 | Link detail panel (timeline) | `GET /links/:id/timeline`, `POST /links/:id/review-screenshot`, `POST /links/:id/approve-insights` |
-| Invoices | `GET /invoices`, `POST /invoices/:id/mark-paid`, `PUT /invoices/:id/gst-status` |
+| Invoices | `GET /invoices`, `POST /invoices/bulk` (creator raises), `POST /invoices/:id/approve`, `POST /invoices/:id/mark-paid`, `PUT /invoices/:id/gst-status`; Receivables view: `GET /invoices/client`, `POST /invoices/client/:id/mark-paid` |
 | Assets *(not yet mocked)* | `GET/POST /assets`, `PUT /assets/:id/rate-card` |
 | Campaigns *(not yet mocked)* | `GET/POST /campaigns` |
 | Team *(not yet mocked)* | `GET/POST /users/me/team` |

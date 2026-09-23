@@ -116,7 +116,7 @@ function renderPlan(doc, plan, { internal = false } = {}) {
     ["Expected Impressions", `${num(internal ? o.computedImpressions : o.expectedImpressions)} (est.)`],
     [internal ? "Internal Cost" : "Cost", money(subtotal)],
   ];
-  if (plan.isGstPlan) overviewRows.push(["GST (18%)", money(gstAmount)]);
+  if (plan.isGstPlan) overviewRows.push([`GST (${num(plan.gstPercent)}%)`, money(gstAmount)]);
   overviewRows.push([plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(total)]);
   if (internal && plan.budgetVariance != null) {
     overviewRows.push([plan.budgetVariance < 0 ? "Over Budget" : "Under Budget", money(Math.abs(plan.budgetVariance))]);
@@ -169,7 +169,7 @@ function renderPlan(doc, plan, { internal = false } = {}) {
       const asset = item.asset ?? {};
       const row = {
         sno: String(i + 1),
-        page: `@${asset.handle ?? "—"}`,
+        page: asset.handle ?? "—",
         followers: num(asset.followers ?? 0),
         format: cap(item.format),
         posts: num(item.postsPerProfile),

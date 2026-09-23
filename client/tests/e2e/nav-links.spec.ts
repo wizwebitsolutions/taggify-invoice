@@ -65,7 +65,7 @@ test.describe("desktop sidebar navigation", () => {
     // sidebar.tsx by giving NavItem an optional `roles` allowlist
     // (canSeeNavItem). Inventory itself is ALWAYS now (newTask.md, 8 Sep —
     // Plans within it, not the nav entry, is what stays admin-gated).
-    const ADMIN_ONLY = ["People", "Job runs"];
+    const PEOPLE_ONLY = ["People"];
     const CREATOR_ONLY = ["Team"];
     // Everyone gets Dashboard + Inventory; Campaigns/Invoices are their own
     // bucket (every role sees them since 12 Sep — Plan Maker included,
@@ -74,19 +74,23 @@ test.describe("desktop sidebar navigation", () => {
     const CAMPAIGNS_AND_INVOICES = ["Campaigns", "Invoices"];
     // Plans (newTask.md, 9 Sep — its own nav tab now) — Admin + Plan Maker.
     const PLANS = ["Plans"];
+    // Job runs is keyed on finance.edit (23 Sep, Step 3) — a plain Finance
+    // account holds it by baseline (it can already run the finance exports
+    // server-side), so it's no longer bare-Admin-only.
+    const JOB_RUNS = ["Job runs"];
 
     const CASES: { role: MockRole; visible: string[]; hidden: string[] }[] = [
-      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...ADMIN_ONLY, ...PLANS], hidden: CREATOR_ONLY },
-      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY], hidden: [...ADMIN_ONLY, ...PLANS] },
-      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY, ...PLANS] },
-      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...ADMIN_ONLY, ...CREATOR_ONLY, ...PLANS] },
+      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...PEOPLE_ONLY, ...PLANS, ...JOB_RUNS], hidden: CREATOR_ONLY },
+      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY], hidden: [...PEOPLE_ONLY, ...PLANS, ...JOB_RUNS] },
+      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...JOB_RUNS], hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...PLANS] },
+      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...PLANS, ...JOB_RUNS] },
       // 12 Sep — Plan Maker now sees Campaigns + Invoices too (their own
       // plans' campaigns only, scoped server-side) so they can generate
       // per-creator invoices from a campaign page.
       {
         role: "PLAN_MAKER",
         visible: [...ALWAYS, ...PLANS, ...CAMPAIGNS_AND_INVOICES],
-        hidden: [...ADMIN_ONLY, ...CREATOR_ONLY],
+        hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...JOB_RUNS],
       },
     ];
 

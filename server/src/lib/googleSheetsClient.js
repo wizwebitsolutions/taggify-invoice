@@ -157,10 +157,9 @@ export async function writeSheetTab({ accessToken, spreadsheetId, title, rows, v
     throw new Error(`Google Sheets API error clearing tab "${title}": ${clearRes.status} ${await clearRes.text()}`);
   }
 
-  // USER_ENTERED (rather than the default RAW) lets a cell like
-  // `=HYPERLINK("https://...","https://...")` (planSheet.js's Page Link
-  // column) actually evaluate into a clickable link instead of being
-  // written as literal formula text.
+  // RAW writes every cell as literal text/number; USER_ENTERED would let a
+  // cell starting with "=" evaluate as a formula. Plan sheets write plain
+  // text only (22 Sep), so callers leave this at the default.
   const updateRes = await fetch(
     `${SHEETS_API}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=${valueInputOption}`,
     { method: "PUT", headers: headers(accessToken), body: JSON.stringify({ values: rows }) }

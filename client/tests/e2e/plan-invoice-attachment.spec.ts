@@ -27,6 +27,7 @@ function plan(overrides: Record<string, unknown> = {}) {
     clientInvoiceAt: null,
     notes: null,
     budget: null,
+    gstPercent: null,
     isGstPlan: false,
     status: "DRAFT",
     approvedBy: null,
@@ -80,7 +81,7 @@ test.describe("Plans — attached invoice PDF on the plan card", () => {
       return route.fulfill({ status: 201, json: attached });
     });
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     const control = page.getByTestId("plan-invoice-attachment-plan-1");
     // Not gated on approval — this is a DRAFT plan with no campaign yet.
     await expect(control.getByRole("button", { name: "Attach invoice (PDF)" })).toBeVisible();
@@ -105,7 +106,7 @@ test.describe("Plans — attached invoice PDF on the plan card", () => {
       return route.fulfill({ status: 500, json: { message: "should not be called" } });
     });
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     const control = page.getByTestId("plan-invoice-attachment-plan-1");
     await control.getByLabel("Attach invoice PDF for Q1 Meme Push").setInputFiles({ name: "invoice.png", mimeType: "image/png", buffer: Buffer.from("png") });
 
@@ -136,7 +137,7 @@ test.describe("Plans — attached invoice PDF on the plan card", () => {
       return route.fulfill({ status: 204, body: "" });
     });
 
-    await page.goto("/plans");
+    await page.goto("/plans?maker=all");
     const control = page.getByTestId("plan-invoice-attachment-plan-1");
     await expect(control.getByRole("link", { name: "signed-invoice.pdf" })).toBeVisible();
     await expect(page.getByTestId("plan-invoice-attachment-plan-2")).toHaveCount(0);

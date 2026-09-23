@@ -1,8 +1,8 @@
 import { prisma } from "../../lib/prisma.js";
-import { invoiceRecord, linkRecord, financeSummary, INVOICE_COLUMNS, LINK_COLUMNS } from "../../lib/financeRecords.js";
+import { invoiceRecord, linkRecord, clientInvoiceRecord, financeSummary, INVOICE_COLUMNS, LINK_COLUMNS, CLIENT_INVOICE_COLUMNS } from "../../lib/financeRecords.js";
 import { getAccessToken, ensureSheetTabsExist, writeSheetTab } from "../../lib/googleSheetsClient.js";
 
-const TAB_NAMES = { invoices: "Invoices", links: "Links", summary: "Summary" };
+const TAB_NAMES = { invoices: "Invoices", links: "Links", clientInvoices: "Client invoices", summary: "Summary" };
 
 /**
  * newTask.md, 8 Sep — "finance data will be saved in google sheets each
@@ -29,7 +29,7 @@ export async function financeGoogleSheetExportJob() {
   // (Render, Railway, etc. all documented this way for the same reason).
   const privateKey = rawPrivateKey.replace(/\\n/g, "\n");
 
-  const [invoices, links] = await Promise.all([
+  const [invoices, links, clientInvoices] = await Promise.all([
     prisma.invoice.findMany({
       include: { creator: { select: { name: true, phoneNumber: true } } },
       orderBy: { createdAt: "desc" },
@@ -37,6 +37,10 @@ export async function financeGoogleSheetExportJob() {
     prisma.link.findMany({
       include: { campaign: true, asset: true, submittedBy: { select: { name: true } }, invoiceItem: true },
       orderBy: { createdAt: "desc" },
+    }),
+    prisma.clientInvoice.findMany({
+      include: { plan: { select: { name: true, clientName: true, clientCompany: true, campaign: { select: { title: true } } } } },
+      orderBy: { issuedAt: "desc" },
     }),
   ]);
 
@@ -48,12 +52,17 @@ export async function financeGoogleSheetExportJob() {
     const record = linkRecord(link);
     return LINK_COLUMNS.map(([key]) => record[key]);
   })];
-  const summaryRows = [["Metric", "Value"], ...financeSummary({ invoices, links }).map((r) => [r.metric, r.value])];
+  const clientInvoiceRows = [CLIENT_INVOICE_COLUMNS.map(([, header]) => header), ...clientInvoices.map((ci) => {
+    const record = clientInvoiceRecord(ci);
+    return CLIENT_INVOICE_COLUMNS.map(([key]) => record[key]);
+  })];
+  const summaryRows = [["Metric", "Value"], ...financeSummary({ invoices, links, clientInvoices }).map((r) => [r.metric, r.value])];
 
   const accessToken = await getAccessToken({ clientEmail, privateKey });
   await ensureSheetTabsExist({ accessToken, spreadsheetId, titles: Object.values(TAB_NAMES) });
   await writeSheetTab({ accessToken, spreadsheetId, title: TAB_NAMES.invoices, rows: invoiceRows });
   await writeSheetTab({ accessToken, spreadsheetId, title: TAB_NAMES.links, rows: linkRows });
+  await writeSheetTab({ accessToken, spreadsheetId, title: TAB_NAMES.clientInvoices, rows: clientInvoiceRows });
   await writeSheetTab({ accessToken, spreadsheetId, title: TAB_NAMES.summary, rows: summaryRows });
 
   return { spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit` };

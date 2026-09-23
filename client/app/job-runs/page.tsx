@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { ClockIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { admin as adminApi, ApiError } from "@/lib/api-client";
+import { admin as adminApi, ApiError, hasAccess } from "@/lib/api-client";
 import { initialsOf, roleLabel } from "@/lib/format";
 
 const JOB_STATUS_TONE: Record<string, "emerald" | "rose" | "blue"> = {
@@ -30,7 +30,10 @@ function JobRunsContent() {
   const { user, accessToken } = useAuth();
   const queryClient = useQueryClient();
   const token = accessToken!;
-  const isAdmin = user?.role === "ADMIN";
+  // finance.edit (23 Sep) — the server route is gated on this key, not bare
+  // ADMIN, since the daily finance export is a Finance responsibility too
+  // (a plain Finance account holds finance.edit by baseline).
+  const isAdmin = hasAccess(user, "finance.edit");
 
   const jobRunsQuery = useQuery({
     queryKey: ["job-runs"],
@@ -125,7 +128,7 @@ function JobRunsContent() {
 
         {!isAdmin ? (
           <div className="rounded-lg border border-border bg-surface p-8 text-center shadow-card">
-            <p className="max-w-[56ch] text-[0.875rem] text-text-muted">Job run history is available to Admin accounts.</p>
+            <p className="max-w-[56ch] text-[0.875rem] text-text-muted">Job run history is available to Admin accounts, or any account granted access to it.</p>
           </div>
         ) : jobRunsQuery.isLoading ? (
           <div className="rounded-lg border border-border bg-surface shadow-card">

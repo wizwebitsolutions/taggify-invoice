@@ -1,15 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
+import { ComboInput, type ComboSuggestion } from "@/components/ui/combo-input";
 import { Field, TextField, TextArea, PhoneField, FieldError, VALIDATORS } from "@/components/ui/form-field";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { CheckCircleIcon, DownloadIcon } from "@/components/icons";
-import { plans as plansApi, ApiError, type Plan } from "@/lib/api-client";
+import { plans as plansApi, ApiError, type Plan, type SavedClient } from "@/lib/api-client";
 import { money } from "@/lib/format";
+import { useAuth } from "@/lib/auth-context";
 
 /**
  * Plans page → "Generate invoice" (user request, 13 Sep — "on clicking
@@ -29,15 +31,80 @@ export function ClientInvoiceModal({ token, plan, onClose }: { token: string; pl
   const [address, setAddress] = useState(plan.clientAddress ?? "");
   // PhoneField holds the 10 national digits; the plan stores "+91XXXXXXXXXX".
   const [phone, setPhone] = useState(digitsOfPhone(plan.clientPhone));
+
+  // Saved clients (21 Sep — "if client name already exists ... it should
+  // fetch all details like gst, address ... dropdown of client name"). Only
+  // entries that actually carry billing details are worth offering here;
+  // this plan's own client sorts first.
+  const clientsQuery = useQuery({ queryKey: ["plans", "clients"], queryFn: () => plansApi.clients(token) });
+  const sameName = (c: SavedClient) => c.clientName.trim().toLowerCase() === plan.clientName.trim().toLowerCase();
+  const savedClients = (clientsQuery.data ?? [])
+    .filter((c) => c.clientCompany || c.clientGstNumber || c.clientAddress)
+    .sort((a, b) => Number(sameName(b)) - Number(sameName(a)));
+  const suggestions: ComboSuggestion[] = savedClients.map((c, i) => ({
+    key: String(i),
+    label: c.clientCompany ?? c.clientName,
+    hint: [c.clientCompany ? c.clientName : null, c.clientGstNumber, c.clientAddress].filter(Boolean).join(" · "),
+  }));
+  function fillFrom(c: SavedClient) {
+    setCompany(c.clientCompany ?? c.clientName);
+    setGst((c.clientGstNumber ?? "").toUpperCase());
+    setAddress(c.clientAddress ?? "");
+    setPhone(digitsOfPhone(c.clientPhone));
+  }
+  // A plan with nothing saved yet, for a client invoiced before: fill it in
+  // without being asked — once, and never over anything already typed.
+  // With several billing identities under that name (one brand, different
+  // GST registrations) there's no right guess, so it says so instead.
+  const planHasDetails = Boolean(plan.clientCompany || plan.clientGstNumber || plan.clientAddress);
+  const matches = planHasDetails ? [] : savedClients.filter(sameName);
+  const [autoFilledFrom, setAutoFilledFrom] = useState<string | null>(null);
+  const autoFillTried = useRef(false);
+  useEffect(() => {
+    if (autoFillTried.current || !clientsQuery.data) return;
+    autoFillTried.current = true;
+    if (matches.length !== 1 || company || gst || address || phone) return;
+    fillFrom(matches[0]);
+    setAutoFilledFrom(matches[0].clientCompany ?? matches[0].clientName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientsQuery.data]);
+
+  // 17 Sep — "description of goods, invoice no. to be set in last step when
+  // taking client details": the PI's one description line, its HSN/SAC, and
+  // the invoice number (the counter's next one, editable by Admin/Finance).
+  const { user } = useAuth();
+  const canSetNumber = user?.role === "ADMIN" || user?.role === "FINANCE";
+  const numberingQuery = useQuery({ queryKey: ["plans", "client-invoice-numbering"], queryFn: () => plansApi.invoiceNumbering(token) });
+  const [description, setDescription] = useState(plan.invoiceDescription ?? "");
+  // null = untouched, so the field follows the plan's number / the counter's
+  // suggestion / the company default HSN until the user actually types.
+  const [hsnInput, setHsnInput] = useState<string | null>(plan.hsnSac);
+  const [numberInput, setNumberInput] = useState<string | null>(null);
+  const hsn = hsnInput ?? numberingQuery.data?.defaultHsnSac ?? "";
+  const invoiceNumber = numberInput ?? plan.clientInvoiceNumber ?? numberingQuery.data?.suggestion ?? "";
   const [touched, setTouched] = useState(false);
   const [generated, setGenerated] = useState<Plan | null>(null);
 
-  const gstRequired = plan.isGstPlan;
+  // 21 Sep — "gst no. is mandatory", GST plan or not. Its first two digits
+  // (the state code) against ours decide what the PI charges: same state →
+  // CGST + SGST at half the rate each, any other → IGST (server: lib/gstin.js).
+  const gstin = gst.trim().toUpperCase();
+  const gstError = gstin ? VALIDATORS.gstin(gstin) : "GST number is required.";
+  const companyStateCode = numberingQuery.data?.companyStateCode;
+  const taxNote =
+    !plan.isGstPlan || !plan.gstPercent || gstError || !companyStateCode
+      ? null
+      : gstin.slice(0, 2) === companyStateCode
+      ? `Same state as Taggify — the invoice charges CGST ${plan.gstPercent / 2}% + SGST ${plan.gstPercent / 2}%.`
+      : `Different state from Taggify — the invoice charges IGST ${plan.gstPercent}%.`;
   const errors = {
     company: company.trim() ? null : "Company name is required.",
-    gst: gstRequired && !gst.trim() ? "This is a GST plan — the client's GST number goes on the invoice." : VALIDATORS.gstin(gst.trim().toUpperCase()),
+    gst: gstError,
     address: address.trim() ? null : "Billing address is required.",
     phone: phone.length > 0 && phone.length !== 10 ? "Enter a valid 10-digit mobile number." : null,
+    description: description.trim() ? null : "Description of goods/service is required.",
+    // Only validated for whoever may type it — for everyone else the server picks the number.
+    invoiceNumber: !canSetNumber ? null : !invoiceNumber.trim() ? "Invoice number is required." : /^[A-Za-z0-9/._-]+$/.test(invoiceNumber.trim()) ? null : "Use letters, digits and / . _ - only.",
   };
   const valid = Object.values(errors).every((e) => !e);
 
@@ -55,12 +122,23 @@ export function ClientInvoiceModal({ token, plan, onClose }: { token: string; pl
         clientGstNumber: gst.trim().toUpperCase(),
         clientAddress: address.trim(),
         clientPhone: phone ? `+91${phone}` : "",
+        invoiceDescription: description.trim(),
+        hsnSac: hsn.trim(),
+        // Only Admin/Finance send a number; everyone else gets the plan's
+        // own / the counter's next one server-side.
+        ...(canSetNumber ? { clientInvoiceNumber: invoiceNumber.trim() } : {}),
       }),
     onSuccess: (updated) => {
       setGenerated(updated);
       queryClient.invalidateQueries({ queryKey: ["plans"] });
+      queryClient.invalidateQueries({ queryKey: ["invoice-numbering"] });
+      // The Receivables view in /invoices lists this row (23 Sep).
+      queryClient.invalidateQueries({ queryKey: ["client-invoices"] });
       downloadMutation.mutate(updated.clientInvoiceNumber);
     },
+    // e.g. INVOICE_NUMBER_TAKEN — refetch so an untouched field moves on to
+    // the current suggestion instead of resending the stale one.
+    onError: () => queryClient.invalidateQueries({ queryKey: ["plans", "client-invoice-numbering"] }),
   });
 
   const submit = () => {
@@ -77,7 +155,7 @@ export function ClientInvoiceModal({ token, plan, onClose }: { token: string; pl
           <p className="text-[0.8125rem] text-text-muted">
             {generated
               ? `${generated.clientInvoiceNumber} · ${plan.name}`
-              : `${plan.name} · billed to ${plan.clientName} for ${money(plan.overview.total)}${plan.isGstPlan ? " incl. 18% GST" : ""}.`}
+              : `${plan.name} · billed to ${plan.clientName} for ${money(plan.overview.total)}${plan.isGstPlan ? ` incl. ${plan.gstPercent}% GST` : ""}.`}
           </p>
         </div>
 
@@ -110,13 +188,74 @@ export function ClientInvoiceModal({ token, plan, onClose }: { token: string; pl
             }}
             noValidate
           >
-            <Field label="Company name">
-              <TextField value={company} onChange={setCompany} placeholder="Acme Foods Pvt Ltd" autoFocus name="clientCompany" aria-invalid={touched && Boolean(errors.company)} />
-              {touched && <FieldError message={errors.company} />}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Invoice no.">
+                <TextField
+                  value={invoiceNumber}
+                  onChange={setNumberInput}
+                  name="clientInvoiceNumber"
+                  aria-label="Invoice number"
+                  maxLength={40}
+                  readOnly={!canSetNumber}
+                  aria-invalid={touched && Boolean(errors.invoiceNumber)}
+                />
+                {touched && <FieldError message={errors.invoiceNumber} />}
+                {!canSetNumber && <p className="text-[0.72rem] text-text-faint">Set by Admin / Finance.</p>}
+              </Field>
+              <Field label="HSN/SAC">
+                <TextField value={hsn} onChange={(v) => setHsnInput(v.replace(/\D/g, "").slice(0, 10))} name="hsnSac" aria-label="HSN/SAC" inputMode="numeric" placeholder="998397" />
+              </Field>
+            </div>
+            <Field label="Description of goods/service">
+              <TextArea
+                value={description}
+                onChange={setDescription}
+                name="invoiceDescription"
+                aria-label="Description of goods/service"
+                placeholder="e.g. Influencer marketing services — Instagram reels and stories"
+                maxLength={300}
+                rows={2}
+                aria-invalid={touched && Boolean(errors.description)}
+              />
+              {touched && <FieldError message={errors.description} />}
             </Field>
-            <Field label={gstRequired ? "GST number" : "GST number (optional)"}>
+            <Field label="Company name">
+              <ComboInput
+                value={company}
+                onChange={(v) => {
+                  setCompany(v);
+                  setAutoFilledFrom(null);
+                }}
+                onPick={(picked) => {
+                  fillFrom(savedClients[Number(picked.key)]);
+                  setAutoFilledFrom(null);
+                }}
+                suggestions={suggestions}
+                placeholder="Acme Foods Pvt Ltd"
+                autoFocus
+                name="clientCompany"
+                aria-label="Company name"
+                aria-invalid={touched && Boolean(errors.company)}
+              />
+              {touched && <FieldError message={errors.company} />}
+              {autoFilledFrom ? (
+                <p className="text-[0.72rem] text-text-faint" data-testid="client-invoice-autofill-note">
+                  Filled in from {autoFilledFrom}&apos;s last invoice — check the details, or edit anything that changed.
+                </p>
+              ) : matches.length > 1 && !company ? (
+                <p className="text-[0.72rem] text-text-faint" data-testid="client-invoice-autofill-note">
+                  {plan.clientName} has {matches.length} saved billing profiles — pick one from this field&apos;s list.
+                </p>
+              ) : null}
+            </Field>
+            <Field label="GST number">
               <TextField value={gst} onChange={(v) => setGst(v.toUpperCase())} placeholder="27ABCDE1234F1Z5" maxLength={15} name="clientGstNumber" aria-invalid={touched && Boolean(errors.gst)} />
               {touched && <FieldError message={errors.gst} />}
+              {taxNote && (
+                <p className="text-[0.72rem] text-text-faint" data-testid="client-invoice-tax-note">
+                  {taxNote}
+                </p>
+              )}
             </Field>
             <Field label="Company address">
               <TextArea value={address} onChange={setAddress} placeholder="Street, city, state, PIN" name="clientAddress" aria-invalid={touched && Boolean(errors.address)} />

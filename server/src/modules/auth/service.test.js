@@ -43,68 +43,55 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
       name: "Sub Admin",
       role: "ADMIN",
       whatsappVerified: false,
-      permissions: { "campaigns.manage": false },
+      permissions: { "campaigns.edit": false },
     });
 
     const result = await signup(
-      { phoneNumber: "+919999999999", name: "Sub Admin", role: "ADMIN", permissions: { "campaigns.manage": false } },
+      { phoneNumber: "+919999999999", name: "Sub Admin", role: "ADMIN", permissions: { "campaigns.edit": false } },
       actor
     );
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ permissions: { "campaigns.manage": false }, createdByAdminId: "actor-1" }) })
+      expect.objectContaining({ data: expect.objectContaining({ permissions: { "campaigns.edit": false }, createdByAdminId: "actor-1" }) })
     );
     expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith({
-      data: { targetId: "sub-1", actorId: "actor-1", before: null, after: { "campaigns.manage": false } },
+      data: { targetId: "sub-1", actorId: "actor-1", action: "permissions", before: null, after: { "campaigns.edit": false } },
     });
     // Effective permissions come back fully resolved — every other key
     // defaults true, only the overlaid one is false.
-    expect(result.user.permissions["campaigns.manage"]).toBe(false);
-    expect(result.user.permissions["inventory.manage"]).toBe(true);
+    expect(result.user.permissions["campaigns.edit"]).toBe(false);
+    expect(result.user.permissions["inventory.edit"]).toBe(true);
   });
 
-  it("clamps a restricted sub-admin's grant to their own permissions — can't hand out what they don't have", async () => {
-    // The acting admin is themselves restricted (no finance.manage) and
-    // tries to create a peer with finance.manage explicitly granted.
-    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "finance.manage": false } };
-    mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(restrictedActor);
-    mockPrisma.user.create.mockResolvedValue({
-      id: "sub-2",
-      phoneNumber: "+919999999998",
-      name: "Peer Admin",
-      role: "ADMIN",
-      whatsappVerified: false,
-      permissions: { "finance.manage": false },
-    });
-
-    const result = await signup(
-      { phoneNumber: "+919999999998", name: "Peer Admin", role: "ADMIN", permissions: { "finance.manage": true, "inventory.manage": true } },
-      restrictedActor
-    );
-
-    // finance.manage is forced false regardless of what was requested — the
-    // stored overlay only ever carries the `false` keys (minimal storage;
-    // "true" is the implicit default), so check the *effective* outcome.
-    expect(mockPrisma.user.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ permissions: { "finance.manage": false } }) })
-    );
-    expect(result.user.permissions["finance.manage"]).toBe(false);
-    expect(result.user.permissions["inventory.manage"]).toBe(true);
+  it("403s a restricted sub-admin or granted non-admin creating an ADMIN-role account at all (23 Sep)", async () => {
+    // The privilege-escalation path this guards: an ADMIN account carries
+    // bare, non-permission-keyed privileges (every plans/service.js
+    // `role === ADMIN` branch, job-runs, invoice numbering, …), so even a
+    // clamped overlay isn't enough — a users.edit holder could mint an
+    // admin, read its one-time password off this response and sign in as it.
+    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "campaigns.edit": false } };
+    const grantedPlanner = { id: "actor-2", role: "PLAN_MAKER", permissions: { "users.edit": true } };
+    for (const who of [restrictedActor, grantedPlanner]) {
+      mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(who);
+      const err = await signup({ phoneNumber: "+919999999997", name: "New Admin", role: "ADMIN" }, who).catch((e) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.statusCode).toBe(403);
+      expect(err.code).toBe("ADMIN_ACCOUNT_RESTRICTED");
+    }
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
   });
 
-  it("a restricted sub-admin can't create a fully unrestricted admin by simply not sending permissions", async () => {
-    // This is the actual privilege-escalation path this test guards
-    // against: omitting `permissions` used to mean "full admin", which
-    // would let a restricted sub-admin mint themselves an unrestricted
-    // peer account and read its one-time password from this response.
-    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "campaigns.manage": false } };
+  it("still lets a restricted sub-admin create non-admin accounts, clamped to their own keys", async () => {
+    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "campaigns.edit": false } };
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(restrictedActor);
-    mockPrisma.user.create.mockResolvedValue({ id: "sub-3", phoneNumber: "+919999999997", name: "New Admin", role: "ADMIN", whatsappVerified: false });
+    mockPrisma.user.create.mockResolvedValue({ id: "pm-3", phoneNumber: "+919999999997", name: "Planner", role: "PLAN_MAKER", whatsappVerified: false });
 
-    await signup({ phoneNumber: "+919999999997", name: "New Admin", role: "ADMIN" }, restrictedActor);
+    await signup({ phoneNumber: "+919999999997", name: "Planner", role: "PLAN_MAKER", permissions: { "campaigns.edit": true, "inventory.edit": true } }, restrictedActor);
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ permissions: expect.objectContaining({ "campaigns.manage": false }) }) })
+      // campaigns.edit is clamped away (the actor lacks it) but the view it
+      // implied stays — the actor does hold campaigns.view.
+      expect.objectContaining({ data: expect.objectContaining({ role: "PLAN_MAKER", permissions: { "campaigns.view": true, "inventory.edit": true } }) })
     );
   });
 
@@ -119,50 +106,69 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
     mockPrisma.user.create.mockResolvedValue({ id: "pm-1", phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", whatsappVerified: false });
 
-    await signup({ phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", permissions: { "plans.manage": false } }, actor);
+    await signup({ phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", permissions: { "plans.edit": false } }, actor);
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ permissions: undefined }) }));
     expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
   });
 
-  it("grants a non-ADMIN role one of the six sections (15 Sep — admin can give any user access permissions)", async () => {
+  it("grants a grantable non-ADMIN role one of the six sections (15 Sep — admin can give any user access permissions)", async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
     mockPrisma.user.create.mockResolvedValue({
       id: "tm-1",
       phoneNumber: "+918888888887",
       name: "Teammate",
-      role: "TEAM_MEMBER",
+      role: "PLAN_MAKER",
       whatsappVerified: false,
-      permissions: { "inventory.manage": true },
+      permissions: { "inventory.edit": true },
     });
 
     const result = await signup(
-      { phoneNumber: "+918888888887", name: "Teammate", role: "TEAM_MEMBER", permissions: { "inventory.manage": true } },
+      { phoneNumber: "+918888888887", name: "Teammate", role: "PLAN_MAKER", permissions: { "inventory.edit": true } },
       actor
     );
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ permissions: { "inventory.manage": true } }) })
+      expect.objectContaining({ data: expect.objectContaining({ permissions: { "inventory.edit": true } }) })
     );
     expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ after: { "inventory.manage": true } }) })
+      expect.objectContaining({ data: expect.objectContaining({ after: { "inventory.edit": true } }) })
     );
-    expect(result.user.permissions["inventory.manage"]).toBe(true);
-    expect(result.user.permissions["campaigns.manage"]).toBe(false);
+    expect(result.user.permissions["inventory.edit"]).toBe(true);
+    expect(result.user.permissions["campaigns.edit"]).toBe(false);
   });
 
   it("a restricted actor can't grant a non-ADMIN role a section they don't hold themselves", async () => {
-    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "inventory.manage": false } };
+    const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "inventory.edit": false } };
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(restrictedActor);
-    mockPrisma.user.create.mockResolvedValue({ id: "tm-1", phoneNumber: "+918888888886", name: "Teammate", role: "TEAM_MEMBER", whatsappVerified: false });
+    mockPrisma.user.create.mockResolvedValue({ id: "tm-1", phoneNumber: "+918888888886", name: "Teammate", role: "PLAN_MAKER", whatsappVerified: false });
 
     await signup(
-      { phoneNumber: "+918888888886", name: "Teammate", role: "TEAM_MEMBER", permissions: { "inventory.manage": true } },
+      { phoneNumber: "+918888888886", name: "Teammate", role: "PLAN_MAKER", permissions: { "inventory.edit": true } },
       restrictedActor
     );
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ permissions: undefined }) }));
     expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("400s a CREATOR or TEAM_MEMBER created with any permission key (23 Sep — those roles can't carry an overlay)", async () => {
+    for (const role of ["CREATOR", "TEAM_MEMBER"]) {
+      mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+      const err = await signup({ phoneNumber: "+918888888885", role, permissions: { "links.approve": true } }, actor).catch((e) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.code).toBe("ROLE_NOT_GRANTABLE");
+    }
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it("still creates a plain CREATOR when permissions is omitted or all-false", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
+    mockPrisma.user.create.mockResolvedValue({ id: "c-9", phoneNumber: "+918888888884", name: null, role: "CREATOR", whatsappVerified: false });
+
+    await signup({ phoneNumber: "+918888888884", role: "CREATOR", permissions: { "links.approve": false } }, actor);
+
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ role: "CREATOR", permissions: undefined }) }));
   });
 
   it("409s when the phone number is already registered", async () => {

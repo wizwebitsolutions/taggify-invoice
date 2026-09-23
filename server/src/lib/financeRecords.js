@@ -44,10 +44,32 @@ export function linkRecord(link) {
   };
 }
 
+/** Receivables (23 Sep): one row per client invoice minted on a plan. */
+export function clientInvoiceRecord(ci) {
+  return {
+    invoiceNumber: ci.invoiceNumber,
+    client: ci.plan?.clientCompany ?? ci.plan?.clientName ?? "",
+    plan: ci.plan?.name ?? "",
+    campaign: ci.plan?.campaign?.title ?? "",
+    subtotal: Number(ci.subtotal),
+    gstPercent: ci.gstPercent != null ? Number(ci.gstPercent) : "",
+    gstAmount: Number(ci.gstAmount),
+    total: Number(ci.total),
+    status: ci.status,
+    issuedAt: dateStr(ci.issuedAt),
+    paidAt: dateStr(ci.paidAt),
+    paidAmount: ci.paidAmount != null ? Number(ci.paidAmount) : "",
+  };
+}
+
 /** Ordered metric/value pairs — an array, not an object, since display order matters and there's no natural key to dedupe on. */
-export function financeSummary({ invoices, links }) {
+export function financeSummary({ invoices, links, clientInvoices = [] }) {
   const totalInvoiced = invoices.reduce((sum, i) => sum + Number(i.amount), 0);
   const totalPaid = invoices.filter((i) => i.status === "PAID").reduce((sum, i) => sum + Number(i.amount), 0);
+  // Receivables (23 Sep) — cancelled rows are closed, not owed.
+  const openReceivables = clientInvoices.filter((c) => c.status !== "CANCELLED");
+  const totalBilledToClients = openReceivables.reduce((sum, c) => sum + Number(c.total), 0);
+  const totalCollected = clientInvoices.filter((c) => c.status === "PAID").reduce((sum, c) => sum + Number(c.paidAmount ?? c.total), 0);
   return [
     { metric: "Generated", value: new Date().toISOString() },
     { metric: "Total invoices", value: invoices.length },
@@ -55,6 +77,10 @@ export function financeSummary({ invoices, links }) {
     { metric: "Total paid", value: totalPaid },
     { metric: "Total pending", value: totalInvoiced - totalPaid },
     { metric: "Total links (all statuses)", value: links.length },
+    { metric: "Client invoices", value: clientInvoices.length },
+    { metric: "Total billed to clients", value: totalBilledToClients },
+    { metric: "Total collected from clients", value: totalCollected },
+    { metric: "Total receivable (outstanding)", value: totalBilledToClients - totalCollected },
   ];
 }
 
@@ -75,6 +101,21 @@ export const INVOICE_COLUMNS = [
   ["dueDate", "Due Date"],
   ["paidAt", "Paid At"],
   ["createdAt", "Created At"],
+];
+
+export const CLIENT_INVOICE_COLUMNS = [
+  ["invoiceNumber", "Invoice #"],
+  ["client", "Client"],
+  ["plan", "Plan"],
+  ["campaign", "Campaign"],
+  ["subtotal", "Subtotal"],
+  ["gstPercent", "GST %"],
+  ["gstAmount", "GST Amount"],
+  ["total", "Total"],
+  ["status", "Status"],
+  ["issuedAt", "Issued At"],
+  ["paidAt", "Paid At"],
+  ["paidAmount", "Paid Amount"],
 ];
 
 export const LINK_COLUMNS = [

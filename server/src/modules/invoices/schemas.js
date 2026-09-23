@@ -28,6 +28,27 @@ export const confirmAttachmentSchema = z.object({
   fileName: z.string().min(1).max(200),
 });
 
+// Receivables (23 Sep) — see clientInvoices.js.
+export const listClientInvoicesQuerySchema = z.object({
+  status: z.enum(["ISSUED", "PAID", "CANCELLED"]).optional(),
+  campaignId: z.string().min(1).optional(),
+  search: z.string().max(60).optional(),
+  // Payments tab (tasks.md #5, 23 Sep) — only rows with the real invoice attached.
+  hasAttachment: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
+});
+
+export const markClientInvoicePaidSchema = z.object({
+  paidAmount: z.coerce.number().positive().optional(),
+  remarks: z.string().max(500).optional(),
+});
+
+export const cancelClientInvoiceSchema = z.object({
+  remarks: z.string().min(1).max(500),
+});
+
 export const listInvoicesQuerySchema = z.object({
   campaignId: z.string().min(1).optional(),
   status: z.enum(["DRAFT", "RAISED", "APPROVED", "REJECTED", "PAID"]).optional(),

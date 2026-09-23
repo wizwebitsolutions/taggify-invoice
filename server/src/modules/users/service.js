@@ -7,6 +7,7 @@ const PROFILE_SELECT = {
   name: true,
   role: true,
   email: true,
+  emailVerifiedAt: true,
   secondaryPhone: true,
   addressLine1: true,
   addressLine2: true,
@@ -24,6 +25,14 @@ export async function getProfile(userId) {
 
 export async function updateProfile(userId, data) {
   if (data.email) {
+    // Once verified, `email` is the login identifier + where OTPs go (email
+    // 2FA, 21 Sep) — a plain profile save must not be able to repoint it at
+    // an inbox nobody has proven they own.
+    const self = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, emailVerifiedAt: true } });
+    if (self?.emailVerifiedAt && data.email.trim().toLowerCase() !== self.email) {
+      throw new ApiError(409, "EMAIL_LOCKED", "Your verified sign-in email can't be changed from the profile");
+    }
+    data = { ...data, email: data.email.trim().toLowerCase() };
     const existing = await prisma.user.findUnique({ where: { email: data.email } });
     if (existing && existing.id !== userId) {
       throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "This email is already in use");

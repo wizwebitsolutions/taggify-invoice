@@ -8,8 +8,8 @@ import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
-import { Field, TextField, MoneyField, IntegerField, FieldError } from "@/components/ui/form-field";
-import { CategoryPicker } from "@/components/ui/category-picker";
+import { Field, TextField, MoneyField, IntegerField, FieldError, PhoneField } from "@/components/ui/form-field";
+import { ComboInput } from "@/components/ui/combo-input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Chip, Chips } from "@/components/ui/chips";
 import { Tag } from "@/components/ui/tag";
@@ -20,7 +20,7 @@ import { PlusIcon, AssetIcon, SearchIcon, CloseIcon, RefreshIcon, TeamIcon, Chev
 import { ImportPagesModal } from "@/components/inventory/import-pages-modal";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/lib/auth-context";
-import { assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, hasAccess, type Asset } from "@/lib/api-client";
+import { assets as assetsApi, auth as authApi, LINK_FORMATS as FORMATS, ApiError, hasAccess, type Asset } from "@/lib/api-client";
 import { money, count, roleLabel, initialsOf, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -49,13 +49,13 @@ function InventoryContent() {
   const token = accessToken!;
   // "Admin" in the loose sense of "can manage Inventory" — a plain ADMIN by
   // default, or (15 Sep) any other role explicitly granted inventory.manage.
-  const isAdmin = hasAccess(user, "inventory.manage");
+  const isAdmin = hasAccess(user, "inventory.edit");
   // A creator adds their own pages; whoever can manage Inventory (unless
   // their sub-admin overlay turns it off, or — 15 Sep — a non-admin role
   // was granted it) registers pages under any creator account, one at a
   // time or from a sheet (user request, 14 Sep).
   const canAddPage = user?.role === "CREATOR";
-  const canManagePlans = hasAccess(user, "plans.manage") || user?.role === "PLAN_MAKER";
+  const canManagePlans = hasAccess(user, "plans.edit") || user?.role === "PLAN_MAKER";
 
   function onCreatePlanFromSelection() {
     const ids = [...selectedAssetIds];
@@ -313,6 +313,7 @@ function PagesSection({
         <NewAssetModal
           token={token}
           isAdmin={isAdmin}
+          existingCategories={categories.filter((c) => c.label !== "All").map((c) => c.label)}
           onClose={() => setShowForm(false)}
           onCreated={() => {
             setShowForm(false);
@@ -515,7 +516,7 @@ function AssetRow({ asset, index, token, editable, selectable, selected, onToggl
         </TD>
         <TD right className="whitespace-nowrap">
           {reelRate ? (
-            <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex items-center gap-1.5" data-testid="rate-card-cell">
               <span className="text-[0.75rem] text-text-muted">Reel</span>
               <span className="font-semibold tabular-nums">{money(reelRate.amount)}</span>
             </span>
@@ -658,7 +659,20 @@ function normalizeHandleInput(raw: string): string | null {
   return value || null;
 }
 
-function NewAssetModal({ token, isAdmin, onClose, onCreated }: { token: string; isAdmin: boolean; onClose: () => void; onCreated: () => void }) {
+function NewAssetModal({
+  token,
+  isAdmin,
+  existingCategories,
+  onClose,
+  onCreated,
+}: {
+  token: string;
+  isAdmin: boolean;
+  /** Distinct categories already on some page in the DB (user request, 23 Sep — search, not a fixed list). */
+  existingCategories: string[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
   const [handle, setHandle] = useState("");
   const [category, setCategory] = useState("");
   const [ownerId, setOwnerId] = useState("");
@@ -669,6 +683,26 @@ function NewAssetModal({ token, isAdmin, onClose, onCreated }: { token: string; 
   // 14 Sep); a creator's page is always their own, so no picker for them.
   const ownersQuery = useQuery({ queryKey: ["assets", "owners"], queryFn: () => assetsApi.owners(token), enabled: isAdmin });
   const owners = ownersQuery.data ?? [];
+
+  // Create a new creator account right here (user request, 23 Sep — "option
+  // of creating new user") instead of a trip to the Users page first. Same
+  // signup call the Users page uses; the generated password is shown once
+  // and stays visible while this modal is open so it can be copied before
+  // the page itself is submitted.
+  const [showNewUser, setShowNewUser] = useState(false);
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserPhone, setNewUserPhone] = useState("");
+  const [newUserPhoneBlurred, setNewUserPhoneBlurred] = useState(false);
+  const newUserPhoneDigits = newUserPhone.replace(/\D/g, "");
+  const newUserPhoneValid = newUserPhoneDigits.length === 10;
+  const createUserMutation = useMutation({
+    mutationFn: () => authApi.signup(token, { phoneNumber: `+91${newUserPhoneDigits}`, name: newUserName || undefined, role: "CREATOR" }),
+    onSuccess: (result) => {
+      setOwnerId(result.user.id);
+      setShowNewUser(false);
+      ownersQuery.refetch();
+    },
+  });
 
   const cleanHandle = normalizeHandleInput(handle);
   const handleError = !handle.trim() ? "Enter the page's Instagram handle." : !cleanHandle ? "That doesn't look like an Instagram handle or profile link." : !HANDLE_PATTERN.test(cleanHandle) ? "Handles use letters, digits, dots and underscores only (up to 30 characters)." : null;
@@ -683,6 +717,7 @@ function NewAssetModal({ token, isAdmin, onClose, onCreated }: { token: string; 
     onSuccess: onCreated,
   });
   const ownerOptions = owners.map((o) => ({ value: o.id, label: o.name?.trim() || o.phoneNumber, hint: o.name?.trim() ? o.phoneNumber : undefined, keywords: o.email ?? undefined }));
+  const categorySuggestions = existingCategories.map((c) => ({ key: c, label: c }));
 
   return (
     <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
@@ -700,12 +735,58 @@ function NewAssetModal({ token, isAdmin, onClose, onCreated }: { token: string; 
         <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">{isAdmin ? "Create a page" : "Add a page"}</h2>
         {isAdmin && (
           <Field label="Account">
-            {ownersQuery.isError ? (
+            {createUserMutation.data && (
+              <div className="mb-1.5 flex flex-col gap-1 rounded-md border border-border-strong bg-surface-2 px-3 py-2 text-[0.75rem]">
+                <span className="text-text-muted">
+                  Created <strong className="text-text">{createUserMutation.data.user.phoneNumber}</strong> — share this password now, it won&apos;t be shown again:
+                </span>
+                <span className="font-mono text-[0.9375rem] font-semibold tracking-wide">{createUserMutation.data.generatedPassword}</span>
+              </div>
+            )}
+            {showNewUser ? (
+              <div className="flex flex-col gap-2.5 rounded-md border border-border-strong bg-surface-2 p-3">
+                <TextField value={newUserName} onChange={setNewUserName} placeholder="Name (optional)" aria-label="New user name" />
+                <PhoneField
+                  required
+                  value={newUserPhone}
+                  onChange={setNewUserPhone}
+                  onBlur={() => setNewUserPhoneBlurred(true)}
+                  placeholder="98765 43210"
+                  error={newUserPhoneBlurred && !newUserPhoneValid ? "Enter a valid 10-digit mobile number." : null}
+                />
+                {createUserMutation.isError && <ErrorNotice message={createUserMutation.error instanceof ApiError ? createUserMutation.error.message : "Couldn't create the account."} />}
+                <div className="flex gap-2">
+                  <Button type="button" size="sm" variant="ghost" className="flex-1" onClick={() => setShowNewUser(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="button" size="sm" className="flex-1" disabled={!newUserPhoneValid || createUserMutation.isPending} onClick={() => createUserMutation.mutate()}>
+                    {createUserMutation.isPending ? "Creating…" : "Create account"}
+                  </Button>
+                </div>
+              </div>
+            ) : ownersQuery.isError ? (
               <ErrorNotice message={ownersQuery.error instanceof ApiError ? ownersQuery.error.message : "Couldn't load creator accounts."} />
-            ) : !ownersQuery.isLoading && owners.length === 0 ? (
-              <p className="text-[0.8125rem] text-text-muted">No creator accounts yet — create one on the Users page first.</p>
             ) : (
-              <SearchableSelect value={ownerId} onChange={setOwnerId} options={ownerOptions} disabled={ownersQuery.isLoading} invalid={submitted && Boolean(ownerError)} placeholder={ownersQuery.isLoading ? "Loading accounts…" : "Search by name, phone or email…"} emptyText="No creator account matches." aria-label="Creator account" />
+              <div className="flex items-center gap-2">
+                {!ownersQuery.isLoading && owners.length === 0 ? (
+                  <p className="flex-1 text-[0.8125rem] text-text-muted">No creator accounts yet.</p>
+                ) : (
+                  <SearchableSelect
+                    className="flex-1"
+                    value={ownerId}
+                    onChange={setOwnerId}
+                    options={ownerOptions}
+                    disabled={ownersQuery.isLoading}
+                    invalid={submitted && Boolean(ownerError)}
+                    placeholder={ownersQuery.isLoading ? "Loading accounts…" : "Search by name, phone or email…"}
+                    emptyText="No creator account matches."
+                    aria-label="Creator account"
+                  />
+                )}
+                <Button type="button" size="sm" variant="secondary" onClick={() => setShowNewUser(true)}>
+                  + New user
+                </Button>
+              </div>
             )}
             {submitted && <FieldError message={ownerError} />}
           </Field>
@@ -716,7 +797,7 @@ function NewAssetModal({ token, isAdmin, onClose, onCreated }: { token: string; 
           {!handleError && cleanHandle && cleanHandle !== handle.trim() && <p className="text-[0.75rem] text-text-muted">Will be saved as @{cleanHandle}</p>}
         </Field>
         <Field label="Category (optional)">
-          <CategoryPicker value={category} onChange={setCategory} />
+          <ComboInput aria-label="Category" value={category} onChange={setCategory} suggestions={categorySuggestions} placeholder="Search or type a new category…" />
         </Field>
         {isAdmin && (
           <div className="grid grid-cols-2 gap-3">

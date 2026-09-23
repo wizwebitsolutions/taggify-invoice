@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Steps } from "@/components/ui/steps";
 import { Button } from "@/components/ui/button";
+import { ComboInput } from "@/components/ui/combo-input";
 import { Field, TextField, TextArea, MoneyField, IntegerField } from "@/components/ui/form-field";
 import { PageHeader } from "@/components/ui/page-header";
 import { Chip, Chips } from "@/components/ui/chips";
@@ -13,27 +14,25 @@ import { Note } from "@/components/ui/note";
 import { Card, CardHeader, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
 import { ProgressBar } from "@/components/ui/panel";
 import { ErrorNotice, EmptyState, TableSkeleton } from "@/components/ui/table-parts";
-import { CloseIcon, SearchIcon, ArrowRightIcon, DownloadIcon } from "@/components/icons";
+import { CloseIcon, SearchIcon, ArrowRightIcon, DownloadIcon, PlusIcon } from "@/components/icons";
+import { GoogleAwareError } from "@/components/integrations/google-reconnect-notice";
 import { plans as plansApi, assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Plan, type Asset, type PlanItemInput } from "@/lib/api-client";
 import { parsePlanPageSheet } from "@/lib/parseAssignmentSheet";
 import { money, count, compactNumber } from "@/lib/format";
 import { formatIndian } from "@/components/ui/form-field";
 
 /**
- * Plan wizard — a full page, not a popup, in four steps (reshaped per the
- * user request of 14 Sep):
- *   1. Client & brief   — name, client, contact, a mandatory brief. No GST
- *                         toggle, no budget here.
- *   2. Budget & pages   — the budget first, then pages by category / search /
- *                         manual pick / sheet import, posts per page, with a
- *                         hard cap: the client-facing total can't pass the
- *                         budget (server enforces it too: PLAN_OVER_BUDGET).
- *   3. Pricing          — impressions, our internal cost (read-only) and an
- *                         editable client price per page. No margin %.
- *   4. Preview & sheet  — the client view + generate the client/internal
- *                         Google Sheets. Client details, the overview
- *                         overrides, the execution sheet and "Plan B" are gone
- *                         from here.
+ * Plan wizard — a full page, not a popup, in four steps (reshaped 14 Sep,
+ * revised 23 Sep):
+ *   1. Client & brief   — name, client, contact and a mandatory brief.
+ *   2. Budget & pages   — the internal budget first, then pages by category /
+ *                         search / manual pick / sheet import, posts per page,
+ *                         with a hard cap on our cost (server: PLAN_OVER_BUDGET).
+ *   3. Pricing          — internal cost per page (read-only), the overall client
+ *                         total + impressions, GST %, and budget vs our cost.
+ *   4. Preview & sheet  — the client view, the client/internal Google Sheets
+ *                         (one tab pair per plan in the group), and "Add another
+ *                         plan" (Plan B, C…: same client, new budget + pages).
  * Pages and pricing share one draft item list held here; each "Next" persists.
  */
 type StepIndex = 1 | 2 | 3 | 4;
@@ -88,6 +87,11 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
   // single page"). "" = no override, show the computed value.
   const [overrideCost, setOverrideCost] = useState<string>(initialPlan?.overrideCost != null ? String(Math.round(Number(initialPlan.overrideCost))) : "");
   const [overrideImpressions, setOverrideImpressions] = useState<string>(initialPlan?.overrideImpressions != null ? String(initialPlan.overrideImpressions) : "");
+  // GST % — moved here from Step 1 (user request, 23 Sep: "gst input will
+  // be filled on pricing section") since it's a pricing number, shown and
+  // edited alongside the total cost it taxes. Still saved through the same
+  // Step 2/3 "Next" mutation below; IntegerField caps it at 100.
+  const [gstPercent, setGstPercent] = useState<string>(initialPlan?.gstPercent != null ? String(initialPlan.gstPercent) : "");
   const [seededInitial, setSeededInitial] = useState(false);
   useEffect(() => {
     if (seededInitial || initialPlan || initialAssetIds.length === 0 || allAssets.length === 0) return;
@@ -98,6 +102,17 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
   function savedPlan(updated: Plan) {
     setPlan(updated);
     setDirty(true);
+  }
+  // "Add another plan" (23 Sep): the new sibling keeps the client details,
+  // so the wizard skips Step 1 and only budget + pages are filled again.
+  function startVariant(variant: Plan) {
+    savedPlan(variant);
+    setItems([]);
+    setBudget("");
+    setOverrideCost("");
+    setOverrideImpressions("");
+    setGstPercent(variant.gstPercent != null ? String(variant.gstPercent) : "");
+    setStep(2);
   }
   function close() {
     if (dirty) onSaved();
@@ -111,6 +126,7 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
         budget: Number(budget),
         overrideCost: overrideCost ? Number(overrideCost) : null,
         overrideImpressions: overrideImpressions ? Number(overrideImpressions) : null,
+        gstPercent: gstPercent.trim() ? Number(gstPercent) : null,
       }),
     onSuccess: (saved) => {
       savedPlan(saved);
@@ -129,7 +145,7 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
   return (
     <div className="flex flex-col gap-5" data-testid="plan-wizard">
       <PageHeader
-        title={plan ? plan.name : "New plan"}
+        title={plan ? (plan.pitchGroupId ? `${plan.name} · ${plan.variantLabel}` : plan.name) : "New plan"}
         subtitle={`Step ${step} of 4 · ${STEP_HINT[step]}`}
         tags={plan?.status && plan.status !== "DRAFT" ? <Tag tone={plan.status === "APPROVED" ? "ok" : plan.status === "REJECTED" ? "bad" : "wait"}>{plan.status === "PENDING_APPROVAL" ? "Pending approval" : plan.status[0] + plan.status.slice(1).toLowerCase()}</Tag> : undefined}
         actions={
@@ -188,6 +204,8 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
           setOverrideCost={setOverrideCost}
           overrideImpressions={overrideImpressions}
           setOverrideImpressions={setOverrideImpressions}
+          gstPercent={gstPercent}
+          setGstPercent={setGstPercent}
           onBack={() => setStep(2)}
           saving={saveItems.isPending}
           error={saveItems.isError ? saveItems.error : null}
@@ -195,7 +213,7 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
         />
       )}
 
-      {step === 4 && plan && <SendStep token={token} plan={plan} onSaved={savedPlan} onBack={() => setStep(3)} onDone={close} />}
+      {step === 4 && plan && <SendStep token={token} plan={plan} onSaved={savedPlan} onAddVariant={startVariant} onBack={() => setStep(3)} onDone={close} />}
     </div>
   );
 }
@@ -237,6 +255,18 @@ function BudgetLeft({ budget, quoted }: { budget: number | null; quoted: number 
 function BasicsStep({ token, plan, onSaved }: { token: string; plan: Plan | null; onSaved: (plan: Plan) => void }) {
   const [name, setName] = useState(plan?.name ?? "");
   const [clientName, setClientName] = useState(plan?.clientName ?? "");
+  // Saved clients (21 Sep) — suggesting earlier names keeps a repeat client
+  // spelled the same way, which is what lets the "Generate invoice" popup
+  // find and fill in their GST/address later. One suggestion per name here,
+  // however many billing profiles sit under it.
+  const clientsQuery = useQuery({ queryKey: ["plans", "clients"], queryFn: () => plansApi.clients(token) });
+  const savedClients = clientsQuery.data ?? [];
+  const nameSuggestions = [...new Map(savedClients.map((c) => [c.clientName.toLowerCase(), c])).values()].map((c) => ({
+    key: c.clientName.toLowerCase(),
+    label: c.clientName,
+    hint: savedClients.some((o) => o.clientName.toLowerCase() === c.clientName.toLowerCase() && (o.clientGstNumber || o.clientCompany)) ? "Billing details saved" : undefined,
+  }));
+  const knownProfiles = savedClients.filter((c) => c.clientName.toLowerCase() === clientName.trim().toLowerCase() && (c.clientGstNumber || c.clientCompany || c.clientAddress));
   const [clientContact, setClientContact] = useState(plan?.clientContact ?? "");
   const [notes, setNotes] = useState(plan?.notes ?? "");
 
@@ -265,7 +295,14 @@ function BasicsStep({ token, plan, onSaved }: { token: string; plan: Plan | null
                 <TextField required aria-label="Plan name" value={name} onChange={setName} placeholder="e.g. Nykaa Summer pitch" />
               </Field>
               <Field label="Client name">
-                <TextField required aria-label="Client name" value={clientName} onChange={setClientName} placeholder="e.g. Nykaa" />
+                <ComboInput required aria-label="Client name" value={clientName} onChange={setClientName} suggestions={nameSuggestions} placeholder="e.g. Nykaa" />
+                {knownProfiles.length > 0 && (
+                  <p className="text-[0.72rem] text-text-faint" data-testid="plan-known-client-note">
+                    {knownProfiles.length === 1
+                      ? `Saved client — ${[knownProfiles[0].clientCompany, knownProfiles[0].clientGstNumber].filter(Boolean).join(" · ")}. These details fill in automatically when you generate the invoice.`
+                      : `Saved client with ${knownProfiles.length} billing profiles — you'll pick one when you generate the invoice.`}
+                  </p>
+                )}
               </Field>
             </div>
             <Field label="Client contact (optional)">
@@ -278,7 +315,7 @@ function BasicsStep({ token, plan, onSaved }: { token: string; plan: Plan | null
           </div>
         </Card>
         <Note tone="info" className="self-start">
-          The budget is set on the next step, and company, GST number and billing address are asked for when the client invoice is generated.
+          The budget is set on the next step. The client's own GST number, company and billing address are asked for when the client invoice is generated.
         </Note>
       </div>
       {mutation.isError && <ErrorNotice message={mutation.error instanceof ApiError ? mutation.error.message : "Couldn't save this plan."} />}
@@ -454,7 +491,10 @@ function PagesStep({
           <Card className="p-[18px]" data-testid="budget-card">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div className="sm:w-[260px]">
-                <Field label="Client budget">
+                {/* Was "Client budget" — always was our own internal cost
+                    cap (it bounds `subtotal`, not the client-facing quote),
+                    relabeled 23 Sep to say so plainly. */}
+                <Field label="Internal budget">
                   <MoneyField aria-label="Budget" value={budget} onChange={setBudget} placeholder="4,50,000" />
                 </Field>
               </div>
@@ -636,6 +676,8 @@ function PriceStep({
   setOverrideCost,
   overrideImpressions,
   setOverrideImpressions,
+  gstPercent,
+  setGstPercent,
   onBack,
   onNext,
   saving,
@@ -653,6 +695,9 @@ function PriceStep({
   setOverrideCost: (v: string) => void;
   overrideImpressions: string;
   setOverrideImpressions: (v: string) => void;
+  /** GST % (user request, 23 Sep — moved here from Step 1, the pricing step it actually taxes). "" = no GST line. */
+  gstPercent: string;
+  setGstPercent: (v: string) => void;
   onBack: () => void;
   onNext: () => void;
   saving: boolean;
@@ -662,6 +707,11 @@ function PriceStep({
   // caps the pages (Step 2). Nothing here blocks Next.
   const belowComputed = Boolean(overrideCost) && quoted < computedQuoted;
   const markup = quoted - subtotal;
+  // Mirrors the server's gstOn (plans/service.js) — rounded to paise so this
+  // preview matches what the saved plan's overview will actually show.
+  const gstPercentNum = gstPercent.trim() ? Number(gstPercent) : null;
+  const gstAmount = gstPercentNum ? Math.round(quoted * (gstPercentNum / 100) * 100) / 100 : 0;
+  const totalWithGst = quoted + gstAmount;
   const computedViews = items.reduce((s, i) => s + (assetById.get(i.assetId)?.engagement.avgViews ?? 0) * itemPosts(i), 0);
   const expectedViews = overrideImpressions ? Number(overrideImpressions) : computedViews;
   const cpm = expectedViews > 0 ? (quoted / expectedViews) * 1000 : null;
@@ -719,7 +769,6 @@ function PriceStep({
         <div className="flex flex-col gap-4">
           <Card className="flex flex-col gap-2.5 p-[18px]" data-testid="price-totals">
             <b className="text-[0.875rem]">Client side</b>
-            <Row label="Budget" value={budget != null ? money(budget) : "—"} />
             <EditableRow label="Total cost" hint={`computed ${money(computedQuoted)}`}>
               <MoneyField compact value={overrideCost} onChange={setOverrideCost} placeholder={formatIndian(String(Math.round(computedQuoted)))} aria-label="Total cost to client" className="ml-auto w-36" />
             </EditableRow>
@@ -733,8 +782,19 @@ function PriceStep({
               </p>
             )}
             <Row label="Quoted to client" value={money(quoted)} bold />
+            <EditableRow label="GST %" hint="Optional — applied to the quoted total above">
+              <IntegerField value={gstPercent} onChange={setGstPercent} max={100} placeholder="e.g. 18" aria-label="GST percent" className="ml-auto h-8 w-20 text-right" />
+            </EditableRow>
+            {gstPercentNum != null && (
+              <>
+                <Row label={`GST (${gstPercentNum}%)`} value={money(gstAmount)} />
+                <Row label="Total incl. GST" value={money(totalWithGst)} bold />
+              </>
+            )}
             <div className="my-0.5 h-px bg-border" />
             <b className="text-[0.875rem]">Internal</b>
+            {/* Moved off "Client side" (23 Sep) — it always was our own cap, not something the client sees. */}
+            <Row label="Budget" value={budget != null ? money(budget) : "—"} />
             <Row label="Our cost" value={money(subtotal)} />
             <Row label={markup >= 0 ? "Margin" : "Loss"} value={money(Math.abs(markup))} tone={markup > 0 ? "ok" : markup < 0 ? "bad" : undefined} />
             <BudgetLeft budget={budget} quoted={subtotal} />
@@ -779,7 +839,22 @@ function Row({ label, value, bold, tone }: { label: string; value: string; bold?
 }
 
 /* ── Step 4 · Preview & sheet ─────────────────────────────────────────── */
-function SendStep({ token, plan, onSaved, onBack, onDone }: { token: string; plan: Plan; onSaved: (plan: Plan) => void; onBack: () => void; onDone: () => void }) {
+function SendStep({
+  token,
+  plan,
+  onSaved,
+  onAddVariant,
+  onBack,
+  onDone,
+}: {
+  token: string;
+  plan: Plan;
+  onSaved: (plan: Plan) => void;
+  onAddVariant: (variant: Plan) => void;
+  onBack: () => void;
+  onDone: () => void;
+}) {
+  const variantMutation = useMutation({ mutationFn: () => plansApi.createVariant(token, plan.id), onSuccess: onAddVariant });
   const generateMutation = useMutation({
     mutationFn: async (variant: "client" | "internal") => {
       await plansApi.generateSheet(token, plan.id, variant);
@@ -803,7 +878,7 @@ function SendStep({ token, plan, onSaved, onBack, onDone }: { token: string; pla
                   ["Total Posts", String(plan.overview.totalPosts)],
                   ["Expected Impressions", `${count(plan.overview.expectedImpressions)} (est.)`],
                   ["Cost", money(plan.overview.subtotal)],
-                  ...(plan.isGstPlan ? [["GST (18%)", money(plan.overview.gstAmount)]] : []),
+                  ...(plan.isGstPlan ? [[`GST (${plan.gstPercent}%)`, money(plan.overview.gstAmount)]] : []),
                   [plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(plan.overview.total)],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between py-1.5 text-[0.8125rem]">
@@ -851,7 +926,7 @@ function SendStep({ token, plan, onSaved, onBack, onDone }: { token: string; pla
               {money(plan.overview.total)} · {plan.items.length} pages
             </p>
           </div>
-          {generateMutation.isError && <ErrorNotice message={generateMutation.error instanceof ApiError ? generateMutation.error.message : "Couldn't generate the sheet."} />}
+          {generateMutation.isError && <GoogleAwareError error={generateMutation.error} fallback="Couldn't generate the sheet." />}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5 rounded-[10px] border border-ink bg-surface-2 p-3">
               <p className="text-[0.72rem] font-semibold">Client sheet</p>
@@ -877,6 +952,17 @@ function SendStep({ token, plan, onSaved, onBack, onDone }: { token: string; pla
             </div>
           </div>
           <p className="text-[0.75rem] text-text-muted">Company, GST number and address are collected when the client invoice is generated from the plan card.</p>
+          <div className="flex flex-col gap-2 border-t border-border pt-4" data-testid="add-variant">
+            <p className="text-[0.8125rem] font-semibold">Another option for this client?</p>
+            <p className="text-[0.75rem] text-text-muted">
+              Starts Plan B, C… with the same client details — only the budget and pages are picked again. Each plan gets its own Overview + Pages tabs in the client and internal sheets.
+            </p>
+            {variantMutation.isError && <ErrorNotice message={variantMutation.error instanceof ApiError ? variantMutation.error.message : "Couldn't start another plan."} />}
+            <Button type="button" variant="secondary" size="sm" onClick={() => variantMutation.mutate()} disabled={variantMutation.isPending}>
+              <PlusIcon className="h-3.5 w-3.5" />
+              {variantMutation.isPending ? "Starting…" : "Add another plan"}
+            </Button>
+          </div>
         </Card>
       </div>
       <FooterBar onBack={onBack} meta={`${plan.items.length} pages · ${money(plan.overview.total)}`}>

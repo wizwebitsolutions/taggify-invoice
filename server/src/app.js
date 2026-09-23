@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import morgan from "morgan";
 
@@ -31,7 +32,13 @@ const CLIENT_DIST = path.join(__dirname, "../../client/out");
 
 const app = express();
 
-app.use(cors());
+// credentials: true + a reflected (non-"*") origin is required for the
+// browser to send/accept the trusted-device cookie (23 Sep — "skip OTP for
+// 7 days"). Production is same-origin already (client/out is served by
+// this same service — see render.yaml), so this only changes local dev,
+// where the client (:3000) and API (:4000) are same-site but cross-origin.
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
 app.use(morgan(process.env.NODE_ENV === "development" ? "dev" : "combined"));
 

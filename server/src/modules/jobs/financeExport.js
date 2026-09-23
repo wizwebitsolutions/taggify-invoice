@@ -25,7 +25,7 @@ export async function financeExportJob() {
   const branch = process.env.GITHUB_FINANCE_BRANCH || "finance-data";
   const path = process.env.GITHUB_FINANCE_PATH || "finance-exports/finance-data.xlsx";
 
-  const [invoices, links] = await Promise.all([
+  const [invoices, links, clientInvoices] = await Promise.all([
     prisma.invoice.findMany({
       include: { creator: { select: { name: true, phoneNumber: true } } },
       orderBy: { createdAt: "desc" },
@@ -34,9 +34,13 @@ export async function financeExportJob() {
       include: { campaign: true, asset: true, submittedBy: { select: { name: true } }, invoiceItem: true },
       orderBy: { createdAt: "desc" },
     }),
+    prisma.clientInvoice.findMany({
+      include: { plan: { select: { name: true, clientName: true, clientCompany: true, campaign: { select: { title: true } } } } },
+      orderBy: { issuedAt: "desc" },
+    }),
   ]);
 
-  const buffer = await buildFinanceWorkbook({ invoices, links });
+  const buffer = await buildFinanceWorkbook({ invoices, links, clientInvoices });
   const today = new Date().toISOString().slice(0, 10);
 
   await ensureBranchExists({ token, owner, repo, branch });

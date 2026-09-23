@@ -2,6 +2,8 @@ import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { autoAttachLink } from "../links/service.js";
 import { campaignVisibilityWhere, canPlanMakerAccessCampaign, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
+import { byPhaseThenPost, creatorPhaseNumberIn, creatorPhaseTitle, creatorRowsOf, groupsByRoot, phaseRowIds } from "../../lib/campaignPhases.js";
+import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 
 const MAX_SHEET_BYTES = 5 * 1024 * 1024; // 5MB — plenty for a pages/work list, small enough to hold in memory
 
@@ -97,7 +99,7 @@ export async function listCampaigns({ search } = {}, requester) {
   if (roots.length === 0) return roots;
 
   const rootIds = roots.map((c) => c.id);
-  const phases = await prisma.campaign.findMany({ where: { parentCampaignId: { in: rootIds } }, select: { id: true, parentCampaignId: true } });
+  const phases = await prisma.campaign.findMany({ where: { parentCampaignId: { in: rootIds } }, select: { id: true, parentCampaignId: true, phaseNumber: true, postNumber: true } });
   const groupIdsByRoot = new Map(rootIds.map((id) => [id, [id]]));
   // Defensive: a phase whose parentCampaignId doesn't match anything in
   // this batch (shouldn't happen — the query above filters on rootIds —
@@ -124,9 +126,23 @@ export async function listCampaigns({ search } = {}, requester) {
     pendingByCampaign.set(a.campaignId, (pendingByCampaign.get(a.campaignId) ?? 0) + 1);
   }
 
-  return roots.map((root) => {
+  // Real phases only (22 Sep) — a page's extra posts don't make a campaign "2 phases".
+  const realPhaseCount = new Map(rootIds.map((id) => [id, 1]));
+  for (const p of phases) if (p.postNumber === 1) realPhaseCount.set(p.parentCampaignId, (realPhaseCount.get(p.parentCampaignId) ?? 1) + 1);
+
+  // Phase 1's extra posts belong on the card's own numbers too — to an admin
+  // they're just more posts of phase 1.
+  const phaseOneExtras = new Map(rootIds.map((id) => [id, []]));
+  for (const p of phases) if (p.phaseNumber === 1 && p.postNumber > 1) phaseOneExtras.get(p.parentCampaignId)?.push(p.id);
+
+  const annotatedRoots = roots.map((root) => {
     const groupIds = groupIdsByRoot.get(root.id);
-    const annotated = annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0);
+    const phaseOneIds = [root.id, ...(phaseOneExtras.get(root.id) ?? [])];
+    const annotated = annotateCampaign(
+      root,
+      phaseOneIds.flatMap((id) => linksByCampaign.get(id) ?? []),
+      phaseOneIds.reduce((n, id) => n + (pendingByCampaign.get(id) ?? 0), 0)
+    );
     if (groupIds.length <= 1) return { ...annotated, phaseCount: 1 };
 
     const groupLinks = groupIds.flatMap((id) => linksByCampaign.get(id) ?? []);
@@ -135,9 +151,53 @@ export async function listCampaigns({ search } = {}, requester) {
       ...annotated,
       spent: groupSpent,
       remainingBudget: root.costCap != null ? Number(root.costCap) - groupSpent : null,
-      phaseCount: groupIds.length,
+      phaseCount: realPhaseCount.get(root.id) ?? 1,
     };
   });
+
+  // Fresh from the DB (23 Sep, Step 3) — restricting or granting
+  // campaigns.view now actually changes the shape of what comes back.
+  const effective = requester ? await loadEffectivePermissions(requester.id) : null;
+  if (!requester || effective["campaigns.view"] || requester.role === "PLAN_MAKER") return annotatedRoots;
+  return withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampaign, pendingByCampaign });
+}
+
+/**
+ * Creators / team members (22 Sep — "it will show phase 2 of that campaign
+ * to creator"): after each campaign, one entry per later row of its group
+ * that one of their own pages is booked on — extra posts and real phases
+ * alike — titled with the running count ("X — Phase 3"). This list is what
+ * the creator's Upload links dropdown offers, so a second reel can actually
+ * be submitted against its own row.
+ */
+async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampaign, pendingByCampaign }) {
+  const rootIds = annotatedRoots.map((r) => r.id);
+  const groups = await groupsByRoot(rootIds);
+  const childIds = [...groups.values()].flat().filter((r) => r.parentCampaignId).map((r) => r.id);
+  const mine = new Set(
+    childIds.length === 0
+      ? []
+      : (await prisma.campaignAssignment.findMany({ where: { campaignId: { in: childIds }, asset: { ownerId: requester.id } }, select: { campaignId: true } })).map((a) => a.campaignId)
+  );
+  const children = childIds.length === 0 ? [] : await prisma.campaign.findMany({ where: { id: { in: [...mine] } } });
+  const childById = new Map(children.map((c) => [c.id, c]));
+
+  const out = [];
+  for (const root of annotatedRoots) {
+    const group = groups.get(root.id) ?? [];
+    // To the creator, Phase 1 is just the root row — its extra posts are their own entries below.
+    out.push({ ...annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), phaseCount: root.phaseCount, creatorPhaseNumber: 1 });
+    // Numbered over this creator's own rows only (root + what they're booked on).
+    const theirs = creatorRowsOf(group, mine);
+    for (const row of [...theirs].sort(byPhaseThenPost)) {
+      const child = childById.get(row.id);
+      if (!child) continue;
+      const n = creatorPhaseNumberIn(theirs, row.id);
+      const annotated = annotateCampaign({ ...child, title: creatorPhaseTitle(root.title, n), phaseNumber: n }, linksByCampaign.get(child.id) ?? [], pendingByCampaign.get(child.id) ?? 0);
+      out.push({ ...annotated, costCap: root.costCap, creatorPhaseNumber: n, phaseCount: 1 });
+    }
+  }
+  return out;
 }
 
 /**
@@ -163,21 +223,49 @@ export async function getCampaignById(id, requester) {
   const rootId = campaign.parentCampaignId ?? campaign.id;
   const root = campaign.parentCampaignId ? (await prisma.campaign.findUnique({ where: { id: rootId } })) ?? campaign : campaign;
 
-  const [pendingAssignmentCount, group] = await Promise.all([
-    prisma.campaignAssignment.count({ where: { campaignId: id, status: "pending" } }),
-    prisma.campaign.findMany({
-      where: { OR: [{ id: root.id }, { parentCampaignId: root.id }] },
-      orderBy: { phaseNumber: "asc" },
-      select: { id: true, phaseNumber: true, title: true, createdAt: true },
-    }),
-  ]);
-
-  const groupIds = group.map((c) => c.id);
+  const fullGroup = await prisma.campaign.findMany({
+    where: { OR: [{ id: root.id }, { parentCampaignId: root.id }] },
+    select: { id: true, phaseNumber: true, postNumber: true, title: true, createdAt: true, parentCampaignId: true },
+  });
+  fullGroup.sort(byPhaseThenPost);
+  const groupIds = fullGroup.map((c) => c.id);
   const groupLinks = await prisma.link.findMany({ where: { campaignId: { in: groupIds } }, select: LINK_SELECT_FOR_CAMPAIGN });
-  const ownLinks = groupLinks.filter((l) => l.campaignId === id);
+
+  // Fresh from the DB (23 Sep, Step 3) — same campaigns.view check as listCampaigns.
+  const effective = requester ? await loadEffectivePermissions(requester.id) : null;
+  // Creators (22 Sep): every row they're booked on is its own numbered
+  // phase, one running count over just those rows (root + theirs).
+  if (requester && !(effective["campaigns.view"] || requester.role === "PLAN_MAKER")) {
+    const mine = new Set(
+      (await prisma.campaignAssignment.findMany({ where: { campaignId: { in: groupIds }, asset: { ownerId: requester.id } }, select: { campaignId: true } })).map((a) => a.campaignId)
+    );
+    const visible = creatorRowsOf(fullGroup, new Set([...mine, id]));
+    const phases = visible.map((r) => ({ id: r.id, phaseNumber: creatorPhaseNumberIn(visible, r.id), title: creatorPhaseTitle(root.title, creatorPhaseNumberIn(visible, r.id)), createdAt: r.createdAt }));
+    const n = creatorPhaseNumberIn(visible, id);
+    const pending = await prisma.campaignAssignment.count({ where: { campaignId: id, status: "pending" } });
+    const annotated = annotateCampaign({ ...campaign, title: creatorPhaseTitle(root.title, n), phaseNumber: n }, groupLinks.filter((l) => l.campaignId === id), pending);
+    return { ...annotated, creatorPhaseNumber: n, costCap: root.costCap, phases: phases.length > 1 ? phases : phases.slice(0, 1) };
+  }
+
+  // Admin / Finance / Plan Maker: a phase's extra posts are part of that
+  // phase (a page booked for 2 reels), not phases of their own — so only
+  // real phases are listed, and this phase's numbers include its extra posts.
+  // An extra post isn't a page of its own to an admin (dashboards link to a
+  // link's campaignId, which can be one): answer with the phase it belongs
+  // to, so the page, its tabs, invoices and Edit all act on the real phase.
+  if ((campaign.postNumber ?? 1) > 1) {
+    const phaseRow = fullGroup.find((r) => r.phaseNumber === campaign.phaseNumber && (r.postNumber ?? 1) === 1);
+    if (phaseRow && phaseRow.id !== id) return getCampaignById(phaseRow.id, requester);
+  }
+
+  const thisPhase = campaign.phaseNumber ?? 1;
+  const thisPhaseIds = fullGroup.filter((r) => (r.phaseNumber ?? 1) === thisPhase).map((r) => r.id);
+  const group = fullGroup.filter((r) => r.postNumber === 1).map(({ id: rid, phaseNumber, title, createdAt }) => ({ id: rid, phaseNumber, title, createdAt }));
+  const pendingAssignmentCount = await prisma.campaignAssignment.count({ where: { campaignId: { in: thisPhaseIds }, status: "pending" } });
+  const ownLinks = groupLinks.filter((l) => thisPhaseIds.includes(l.campaignId));
 
   const annotated = annotateCampaign(campaign, ownLinks, pendingAssignmentCount);
-  if (group.length <= 1) return { ...annotated, phases: group };
+  if (fullGroup.length <= 1) return { ...annotated, phases: group };
 
   const groupSpent = computeSpent(groupLinks);
 
@@ -210,28 +298,104 @@ export async function getCampaignById(id, requester) {
  * own copy at its original null, silently hiding the whole Budget panel
  * even though the group's remainingBudget was computed correctly).
  */
-export async function createPhase(campaignId, { title } = {}) {
+export async function createPhase(campaignId, { title } = {}, requester) {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign) throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
+  // Plan Maker may add a phase to their own plans' campaigns (22 Sep —
+  // "admin/plan maker can add phase 2"); 404 elsewhere, same as reading it.
+  if (requester?.role === "PLAN_MAKER" && !(await canPlanMakerAccessCampaign(requester.id, campaignId))) {
+    throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
+  }
 
   const rootId = campaign.parentCampaignId ?? campaign.id;
   const root = campaign.parentCampaignId ? await prisma.campaign.findUnique({ where: { id: rootId } }) : campaign;
   if (!root) throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
 
-  const existingPhases = await prisma.campaign.findMany({
-    where: { OR: [{ id: root.id }, { parentCampaignId: root.id }] },
-    select: { phaseNumber: true },
-  });
-  const nextPhaseNumber = Math.max(...existingPhases.map((c) => c.phaseNumber)) + 1;
+  return prisma.$transaction(async (tx) => {
+    await lockCampaignGroup(tx, root.id);
+    const existingPhases = await tx.campaign.findMany({
+      where: { OR: [{ id: root.id }, { parentCampaignId: root.id }] },
+      select: { phaseNumber: true },
+    });
+    const nextPhaseNumber = Math.max(...existingPhases.map((c) => c.phaseNumber)) + 1;
 
-  return prisma.campaign.create({
-    data: {
-      brandName: root.brandName,
-      title: title || `${root.title} — Phase ${nextPhaseNumber}`,
-      sheetLink: root.sheetLink,
-      parentCampaignId: root.id,
-      phaseNumber: nextPhaseNumber,
-    },
+    // A real phase starts with Phase 1's pages, one post each (22 Sep), so
+    // every creator on the deal sees the new phase straight away. Only
+    // placed pages are copied — an unresolved sheet row stays in Phase 1 —
+    // and never a submitted post (no postUrl / linkId).
+    const phaseOnePages = await tx.campaignAssignment.findMany({
+      where: { campaignId: root.id, status: "matched", assetId: { not: null } },
+      select: { assetId: true, pageHandle: true, creatorPhone: true, format: true, cost: true },
+    });
+    const seen = new Set();
+    const pages = phaseOnePages.filter((a) => !seen.has(a.assetId) && seen.add(a.assetId));
+
+    return tx.campaign.create({
+      data: {
+        brandName: root.brandName,
+        title: title || `${root.title} — Phase ${nextPhaseNumber}`,
+        sheetLink: root.sheetLink,
+        parentCampaignId: root.id,
+        phaseNumber: nextPhaseNumber,
+        postNumber: 1,
+        ...(pages.length > 0 ? { assignments: { create: pages.map((a) => ({ ...a, status: "matched" })) } } : {}),
+      },
+    });
+  });
+}
+
+/**
+ * Row lock on a campaign's root for the rest of the transaction — phase
+ * numbers are computed from the group (no unique constraint), so adding and
+ * deleting phases on one campaign have to take turns.
+ */
+async function lockCampaignGroup(tx, rootId) {
+  await tx.$queryRaw`SELECT "id" FROM "Campaign" WHERE "id" = ${rootId} FOR UPDATE`;
+}
+
+/**
+ * Deletes a real phase (22 Sep — "admin should have option of deleting
+ * phase of campaign"), together with its extra posts. Phase 1 is the
+ * campaign itself and can't be deleted this way. Refused while anything was
+ * submitted or invoiced against it — money is never silently removed; the
+ * admin clears those first. Later phases move up a number (and their
+ * "— Phase N" titles with them), so the numbering stays gap-free.
+ */
+export async function deletePhase(phaseId) {
+  const phase = await prisma.campaign.findUnique({ where: { id: phaseId } });
+  if (!phase) throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Phase not found");
+  if (!phase.parentCampaignId || phase.phaseNumber === 1) {
+    throw new ApiError(400, "CANNOT_DELETE_FIRST_PHASE", "Phase 1 is the campaign itself — it can't be deleted as a phase.");
+  }
+  const rootId = phase.parentCampaignId;
+
+  return prisma.$transaction(async (tx) => {
+    // Serialised with every other add/delete on this campaign, and re-read
+    // inside the lock: a second, concurrent delete of the same phase must
+    // not go on to delete whichever phase got renumbered into its place.
+    await lockCampaignGroup(tx, rootId);
+    const current = await tx.campaign.findUnique({ where: { id: phaseId }, select: { id: true, phaseNumber: true } });
+    if (!current) throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "That phase was already deleted");
+    phase.phaseNumber = current.phaseNumber;
+    const rows = await tx.campaign.findMany({ where: { parentCampaignId: rootId, phaseNumber: phase.phaseNumber }, select: { id: true } });
+    const ids = rows.map((r) => r.id);
+    const [links, invoices] = await Promise.all([tx.link.count({ where: { campaignId: { in: ids } } }), tx.invoice.count({ where: { campaignId: { in: ids } } })]);
+    if (links > 0 || invoices > 0) {
+      const parts = [links > 0 ? `${links} submitted post${links === 1 ? "" : "s"}` : null, invoices > 0 ? `${invoices} invoice${invoices === 1 ? "" : "s"}` : null].filter(Boolean);
+      throw new ApiError(409, "PHASE_HAS_POSTS", `Phase ${phase.phaseNumber} has ${parts.join(" and ")} — remove ${links + invoices === 1 ? "it" : "them"} before deleting the phase.`);
+    }
+
+    await tx.campaign.deleteMany({ where: { id: { in: ids } } });
+
+    const root = await tx.campaign.findUnique({ where: { id: rootId }, select: { title: true } });
+    const later = await tx.campaign.findMany({ where: { parentCampaignId: rootId, phaseNumber: { gt: phase.phaseNumber } }, select: { id: true, phaseNumber: true, postNumber: true, title: true } });
+    for (const row of later) {
+      const newNumber = row.phaseNumber - 1;
+      // Only an auto-named phase row is renamed; an extra post carries the root title, and a custom title is left alone.
+      const autoTitle = row.postNumber === 1 && row.title === `${root.title} — Phase ${row.phaseNumber}`;
+      await tx.campaign.update({ where: { id: row.id }, data: { phaseNumber: newNumber, ...(autoTitle ? { title: `${root.title} — Phase ${newNumber}` } : {}) } });
+    }
+    return { deleted: ids.length, rootId };
   });
 }
 
@@ -336,23 +500,37 @@ export async function updateCampaign(id, data) {
  * already use for a non-privileged role).
  */
 export async function listAssignments(campaignId, requester) {
-  const where = { campaignId };
+  // Fresh from the DB (23 Sep, Step 3) — restricting or granting
+  // campaigns.view now actually narrows this to the requester's own rows,
+  // the real data the "not the whole sheet's worth of other creators'
+  // phone numbers" comment above is about.
+  const effective = requester ? await loadEffectivePermissions(requester.id) : null;
+  const privileged = !requester || effective["campaigns.view"] || requester.role === "PLAN_MAKER";
+  // An admin's phase covers its extra posts too (22 Sep) — a page booked for
+  // 2 reels is one page with post 1 and post 2, not a second phase. A
+  // creator asks for their own numbered row, so theirs isn't widened.
+  const where = { campaignId: privileged ? { in: await phaseRowIds(campaignId) } : campaignId };
   // Plan Maker sees every row of their own plans' campaigns (they need
   // "which pages are still pending" to know what can't be invoiced yet);
   // any other non-privileged role sees only their own matched row(s).
   if (requester?.role === "PLAN_MAKER") {
     where.campaign = planMakerCampaignWhere(requester.id);
-  } else if (requester && !["ADMIN", "FINANCE"].includes(requester.role)) {
+  } else if (!privileged) {
     where.asset = { ownerId: requester.id };
   }
-  return prisma.campaignAssignment.findMany({
+  const rows = await prisma.campaignAssignment.findMany({
     where,
     include: {
       asset: { select: { id: true, handle: true, category: true, approvalStatus: true } },
       link: { select: { id: true, status: true } },
+      campaign: { select: { postNumber: true } },
     },
     orderBy: [{ status: "asc" }, { createdAt: "asc" }],
   });
+  return rows
+    .map(({ campaign, ...row }) => ({ ...row, postNumber: campaign?.postNumber ?? 1 }))
+    // Same order as before (status, then created), with a page's post 2 after its post 1.
+    .sort((a, b) => a.status.localeCompare(b.status) || a.postNumber - b.postNumber || new Date(a.createdAt) - new Date(b.createdAt));
 }
 
 /**
@@ -438,3 +616,41 @@ export async function fetchSheetCsv(sheetUrl) {
   }
   return text;
 }
+
+/**
+ * Every tab of a link-shared sheet, in tab order, as CSV (user request, 22
+ * Sep — the uploaded plan sheet has "2 tabs in sheet, 1 for detail of
+ * client budget, another tab will be of pages"). The CSV export only ever
+ * serves one tab (by gid), and there's no public API listing tabs, so the
+ * gids come from the sheet's read-only HTML view (/htmlview), which lists
+ * its tabs in an inline script as `items.push({name: "…", …, gid: "0"})`
+ * (checked against Google's public sample sheet, 22 Sep). If that page
+ * can't be read (or lists nothing), it's treated as a single tab at the
+ * link's own gid — the one-tab layout still works. Capped at 5 tabs.
+ */
+export async function fetchSheetTabs(sheetUrl) {
+  const exportUrl = googleSheetCsvExportUrl(sheetUrl);
+  const id = exportUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)[1];
+  const linkGid = exportUrl.match(/gid=(\d+)/)[1];
+  let tabs = [];
+  try {
+    const res = await fetch(`https://docs.google.com/spreadsheets/d/${id}/htmlview`);
+    const html = res.ok ? await res.text() : "";
+    tabs = [...html.matchAll(/items\.push\(\{name:\s*"((?:[^"\\]|\\.)*)"[^}]*?gid:\s*"(-?\d+)"/g)].map((m) => ({ gid: m[2], title: decodeJsString(m[1]) }));
+  } catch {
+    tabs = [];
+  }
+  if (tabs.length === 0) tabs = [{ gid: linkGid, title: null }];
+  return Promise.all(
+    tabs.slice(0, 5).map(async (tab) => ({ ...tab, csv: await fetchSheetCsv(`https://docs.google.com/spreadsheets/d/${id}/edit?gid=${tab.gid}`) }))
+  );
+}
+
+// The names are JS string literals ("Details \x26 budget", "\"quoted\"").
+const decodeJsString = (s) => {
+  try {
+    return JSON.parse(`"${s.replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => `\\u00${h}`)}"`);
+  } catch {
+    return s;
+  }
+};

@@ -46,7 +46,7 @@ export type LinkStatus =
 export type InvoiceStatus = "DRAFT" | "RAISED" | "APPROVED" | "REJECTED" | "PAID";
 export type GstStatus = "PENDING" | "SCHEDULED" | "COMPLETED";
 export type PaymentStatus = "PENDING" | "COMPLETED" | "CANCELLED";
-export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | PaymentStatus | "OVERDUE";
+export type PillStatus = LinkStatus | InvoiceStatus | GstStatus | PaymentStatus | "OVERDUE" | "ISSUED";
 
 // Exported so charts (admin dashboard) can color a status bar/segment with
 // exactly the same tone a pill for that status would use — one source of
@@ -76,6 +76,8 @@ export const STATUS_CONFIG: Record<PillStatus, { label: string; tone: Tone; live
   COMPLETED: { label: "Completed", tone: "emerald" },
   CANCELLED: { label: "Cancelled", tone: "rose" },
   OVERDUE: { label: "Overdue", tone: "rose", live: true },
+  // Receivables (23 Sep): a client invoice issued and awaiting payment.
+  ISSUED: { label: "Issued", tone: "blue", live: true },
 };
 
 export interface StatusPillProps {

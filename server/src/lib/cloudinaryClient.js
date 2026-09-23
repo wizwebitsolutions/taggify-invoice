@@ -29,6 +29,7 @@ export function buildPlanInvoiceAttachmentKey(planId) {
   return `plan-invoice-attachments/${planId}/${randomUUID()}`;
 }
 
+
 /**
  * Returns a short-lived signed upload payload so the client uploads the
  * binary directly to Cloudinary — the API server never touches the file bytes.
@@ -65,6 +66,28 @@ export async function objectExists(publicId) {
     if (err?.http_code === 404 || err?.error?.http_code === 404) return false;
     throw err;
   }
+}
+
+/**
+ * A page's Instagram profile picture, stored so it outlives Instagram's
+ * expiring CDN links (user request, 22 Sep — "pages profile pic should be
+ * stored"). One fixed public_id per page, overwritten on every re-scrape,
+ * so a page never accumulates old pictures. Returns the delivery URL.
+ */
+export function uploadProfilePic(assetId, buffer) {
+  if (!process.env.CLOUDINARY_CLOUD_NAME) return Promise.reject(new Error("Cloudinary isn't configured"));
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      // secure_url is versioned, so a re-upload is picked up without a CDN invalidation.
+      { public_id: `profile-pics/${assetId}`, overwrite: true, resource_type: "image" },
+      (err, result) => (err ? reject(err) : resolve(result.secure_url))
+    );
+    stream.end(buffer);
+  });
+}
+
+export function isCloudinaryConfigured() {
+  return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
 }
 
 export function publicUrlFor(publicId) {

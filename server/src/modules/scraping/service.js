@@ -83,9 +83,11 @@ export async function applyProfileMetrics(assetId, metrics) {
     where: { id: assetId },
     data: {
       followers: metrics.followers,
-      fullName: metrics.fullName,
+      // Only replaced when Instagram actually returned one — an imported
+      // page keeps its sheet "Page Name" / last known picture otherwise.
+      ...(metrics.fullName ? { fullName: metrics.fullName } : {}),
       biography: metrics.biography,
-      profilePicUrl: metrics.profilePicUrl,
+      ...(metrics.profilePicUrl ? { profilePicUrl: metrics.profilePicUrl } : {}),
       // Profile-level engagement (Inventory "Create page", 14 Sep) — see
       // apifyClient.js's averageLatestPosts. Only overwritten when the
       // scrape actually saw posts, so a transient empty latestPosts doesn't

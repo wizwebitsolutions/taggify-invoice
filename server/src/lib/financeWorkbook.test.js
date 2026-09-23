@@ -51,14 +51,37 @@ describe("buildFinanceWorkbook — daily finance export (newTask.md #2)", () => 
     },
   ];
 
-  it("produces a real workbook with Invoices, Links, and Summary sheets containing the right data", async () => {
-    const buffer = await buildFinanceWorkbook({ invoices, links });
+  const clientInvoices = [
+    {
+      invoiceNumber: "PI-0001",
+      plan: { name: "Q1 Push", clientName: "Rohit", clientCompany: "Acme Foods Pvt Ltd", campaign: { title: "Q1 Push" } },
+      subtotal: 10000,
+      gstPercent: 18,
+      gstAmount: 1800,
+      total: 11800,
+      status: "ISSUED",
+      issuedAt: new Date("2026-09-20"),
+      paidAt: null,
+      paidAmount: null,
+    },
+  ];
+
+  it("produces a real workbook with Invoices, Links, Client invoices, and Summary sheets containing the right data", async () => {
+    const buffer = await buildFinanceWorkbook({ invoices, links, clientInvoices });
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
 
     const sheetNames = workbook.worksheets.map((s) => s.name);
-    expect(sheetNames).toEqual(["Invoices", "Links", "Summary"]);
+    expect(sheetNames).toEqual(["Invoices", "Links", "Client invoices", "Summary"]);
+
+    // Receivables (23 Sep): Invoice #, Client, Plan, Campaign, Subtotal, GST %, GST Amount, Total, Status, ...
+    const clientSheet = workbook.getWorksheet("Client invoices");
+    expect(clientSheet.rowCount).toBe(2);
+    expect(clientSheet.getRow(2).getCell(1).value).toBe("PI-0001");
+    expect(clientSheet.getRow(2).getCell(2).value).toBe("Acme Foods Pvt Ltd");
+    expect(clientSheet.getRow(2).getCell(8).value).toBe(11800);
+    expect(clientSheet.getRow(2).getCell(9).value).toBe("ISSUED");
 
     // Column *keys* (used to build the sheet) don't survive a real
     // load-from-bytes round trip — only position does, since that's all an

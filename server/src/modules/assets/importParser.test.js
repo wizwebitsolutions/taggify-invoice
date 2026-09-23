@@ -71,7 +71,7 @@ describe("parseImportSheet — CSV", () => {
       { format: "story", amount: 4000 },
     ]);
     expect(parsed.rows[1]).toMatchObject({ handle: "small.page", ownerRef: "Rahul", followers: 10_000, rateCards: [] });
-    expect(parsed.rows[2]).toMatchObject({ handle: null, problem: "Missing handle." });
+    expect(parsed.rows[2]).toMatchObject({ handle: null, problem: "Missing page link." });
     expect(parsed.rows[3].problem).toMatch(/isn't a valid Instagram handle/);
   });
 
@@ -90,8 +90,92 @@ describe("parseImportSheet — CSV", () => {
 
   it("rejects an empty file, a sheet with no handle column, and a header with no rows", async () => {
     await expect(parseImportSheet(Buffer.alloc(0), "pages.csv")).rejects.toBeInstanceOf(ImportParseError);
-    await expect(parseImportSheet(Buffer.from("name,phone\nx,y"), "pages.csv")).rejects.toThrow(/page-handle column/);
+    await expect(parseImportSheet(Buffer.from("name,phone\nx,y"), "pages.csv")).rejects.toThrow(/"Page Link" column/);
     await expect(parseImportSheet(Buffer.from("handle,owner\n"), "pages.csv")).rejects.toThrow(/No pages found/);
+  });
+});
+
+// Template columns (user request, 22 Sep): Page Name, Page Link, Followers,
+// Reel Rate, Story Rate — the page is identified by its link.
+describe("parseImportSheet — Page Name / Page Link template", () => {
+  const TEMPLATE_HEADER = "Page Name,Page Link,Followers,Reel Rate,Story Rate";
+
+  it("takes the handle from the link, keeps the name as pageName, and reads followers + both rates", async () => {
+    const csv = [TEMPLATE_HEADER, "Laughter Colours,https://www.instagram.com/laughtercolours/?hl=en,4.3M,18000,6000"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "template.csv");
+    expect(parsed.rows[0]).toMatchObject({ handle: "laughtercolours", pageName: "Laughter Colours", followers: 4_300_000, problem: null });
+    expect(parsed.rows[0].rateCards).toEqual([
+      { format: "reel", amount: 18000 },
+      { format: "story", amount: 6000 },
+    ]);
+    // No owner column in the template — the account is chosen in the popup.
+    expect(parsed.hasOwnerColumn).toBe(false);
+  });
+
+  it("the Page Name is never mistaken for the handle", async () => {
+    const parsed = await parseImportSheet(Buffer.from([TEMPLATE_HEADER, "Some Page,https://instagram.com/real.handle,,,"].join("\n")), "t.csv");
+    expect(parsed.rows[0].handle).toBe("real.handle");
+  });
+
+  it("a broken or non-Instagram link, or a missing one, is flagged on its row", async () => {
+    const csv = [TEMPLATE_HEADER, "Blog,https://example.com/blog,,,", "No link,,,,"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "t.csv");
+    expect(parsed.rows[0]).toMatchObject({ handle: null, problem: "Link broken or not an Instagram profile link." });
+    expect(parsed.rows[1]).toMatchObject({ handle: null, problem: "Missing page link." });
+  });
+
+  it("a link column wins when a sheet also has an old handle column", async () => {
+    const parsed = await parseImportSheet(Buffer.from("handle,page link\nold.name,https://instagram.com/from.link\n"), "t.csv");
+    expect(parsed.rows[0].handle).toBe("from.link");
+  });
+
+  it("post / reel / explore links name no page; stories and _u links name the page; m.instagram.com works", async () => {
+    const csv = [
+      "Page Link",
+      "https://www.instagram.com/p/C1abc/",
+      "https://www.instagram.com/reel/C1abc/",
+      "https://www.instagram.com/explore/tags/x/",
+      "https://www.instagram.com/stories/story.page/123/",
+      "https://instagram.com/_u/app.page",
+      "https://m.instagram.com/mobile.page/",
+    ].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "t.csv");
+    expect(parsed.rows.map((r) => r.handle)).toEqual([null, null, null, "story.page", "app.page", "mobile.page"]);
+    expect(parsed.rows[0].problem).toBe("Link broken or not an Instagram profile link.");
+  });
+
+  it("a row whose link isn't an Instagram profile falls back to its handle cell (old handle + website sheets)", async () => {
+    const parsed = await parseImportSheet(Buffer.from("handle,link\nold.page,https://oldsite.example.com\n"), "t.csv");
+    expect(parsed.rows[0]).toMatchObject({ handle: "old.page", problem: null });
+  });
+
+  it("a pre-template sheet whose only page column is headed 'Page Name' still reads it as the handle", async () => {
+    const parsed = await parseImportSheet(Buffer.from("Page Name,Owner Phone\nlegacy.page,+919000000001\n"), "t.csv");
+    expect(parsed.rows[0]).toMatchObject({ handle: "legacy.page", pageName: null, ownerRef: "+919000000001" });
+  });
+
+  it("a bare 'Name' column (usually the owner's name in older sheets) isn't taken as the page name", async () => {
+    const parsed = await parseImportSheet(Buffer.from("handle,name\nsome.page,Priya Sharma\n"), "t.csv");
+    expect(parsed.rows[0].pageName).toBeNull();
+  });
+
+  it("older handle-only sheets still import unchanged, with pageName null", async () => {
+    const parsed = await parseImportSheet(Buffer.from("handle,owner phone\nsome.page,+919000000001\n"), "t.csv");
+    expect(parsed.rows[0]).toMatchObject({ handle: "some.page", pageName: null, ownerRef: "+919000000001" });
+  });
+
+  it("the downloadable template itself parses back to its two example pages", async () => {
+    const { buildImportPagesTemplate, IMPORT_TEMPLATE_HEADERS } = await import("../../lib/importPagesTemplate.js");
+    const parsed = await parseImportSheet(await buildImportPagesTemplate(), "import-pages-template.xlsx");
+    expect(IMPORT_TEMPLATE_HEADERS).toEqual(["Page Name", "Page Link", "Followers", "Reel Rate", "Story Rate"]);
+    expect(parsed.rows.map((r) => [r.pageName, r.handle, r.problem])).toEqual([
+      ["Example Page One", "example.page.one.replace.me", null],
+      ["Example Page Two", "example.page.two.replace.me", null],
+    ]);
+    expect(parsed.rows[0].rateCards).toEqual([
+      { format: "reel", amount: 18000 },
+      { format: "story", amount: 6000 },
+    ]);
   });
 
   it("caps the number of rows per import", async () => {

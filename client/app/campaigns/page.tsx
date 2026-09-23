@@ -66,12 +66,14 @@ function CampaignsContent() {
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
   const items = campaignsQuery.data ?? [];
   // A plain ADMIN by default, or (15 Sep) any other role explicitly granted campaigns.manage.
-  const canCreate = hasAccess(user, "campaigns.manage");
+  const canCreate = hasAccess(user, "campaigns.edit");
   const canUploadLinks = user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
 
   // Only phase-1 rows are listed; a later phase's posts/spend already roll
-  // up into its parent server-side (annotateCampaign).
-  const roots = useMemo(() => items.filter((c) => !c.parentCampaignId), [items]);
+  // up into its parent server-side (annotateCampaign). Except a creator's own
+  // numbered phase entries (22 Sep) — each is a campaign to them, with its
+  // own Upload links, so those rows (creatorPhaseNumber set) stay.
+  const roots = useMemo(() => items.filter((c) => !c.parentCampaignId || c.creatorPhaseNumber != null), [items]);
   const counts = useMemo(
     () => ({
       live: roots.filter(isLive).length,
@@ -294,7 +296,8 @@ function CampaignRow({ campaign: c, index, canCreate, canUploadLinks, onOpen, on
           </Cell2>
         </div>
       </TD>
-      <TD className="hidden md:table-cell">{(c.phaseCount ?? 1) > 1 ? `${c.phaseCount} phases` : "Phase 1"}</TD>
+      {/* A creator's list has one entry per phase they're booked on (22 Sep), each numbered in their own running count. */}
+      <TD className="hidden md:table-cell">{c.creatorPhaseNumber != null ? `Phase ${c.creatorPhaseNumber}` : (c.phaseCount ?? 1) > 1 ? `${c.phaseCount} phases` : "Phase 1"}</TD>
       <TD className="hidden tabular-nums sm:table-cell">{c.postCount ?? 0}</TD>
       <TD className="hidden tabular-nums lg:table-cell">{c.totalLikes ? compactNumber(c.totalLikes) : "0"}</TD>
       <TD>

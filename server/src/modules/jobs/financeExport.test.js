@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockPrisma = {
   invoice: { findMany: vi.fn() },
   link: { findMany: vi.fn() },
+  clientInvoice: { findMany: vi.fn() },
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
@@ -32,6 +33,7 @@ beforeEach(() => {
 
   mockPrisma.invoice.findMany.mockResolvedValue([]);
   mockPrisma.link.findMany.mockResolvedValue([]);
+  mockPrisma.clientInvoice.findMany.mockResolvedValue([]);
   mockBuildWorkbook.mockResolvedValue(Buffer.from("fake-xlsx"));
   mockEnsureBranch.mockResolvedValue(undefined);
   mockUpsertFile.mockResolvedValue({ commitSha: "abc", htmlUrl: "https://github.com/x" });

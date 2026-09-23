@@ -20,7 +20,7 @@ describe("requireAccess — section guard grantable to any role (15 Sep)", () =>
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("inventory.manage", "CREATOR")(req, res, next);
+    await requireAccess("inventory.edit", "CREATOR")(req, res, next);
 
     expect(next).toHaveBeenCalledWith();
     expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
@@ -32,53 +32,53 @@ describe("requireAccess — section guard grantable to any role (15 Sep)", () =>
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("campaigns.manage")(req, res, next);
+    await requireAccess("campaigns.edit")(req, res, next);
 
     expect(next).toHaveBeenCalledWith();
   });
 
   it("403s a sub-admin whose overlay turns the key off", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ role: "ADMIN", permissions: { "campaigns.manage": false } });
+    mockPrisma.user.findUnique.mockResolvedValue({ role: "ADMIN", permissions: { "campaigns.edit": false } });
     const req = { user: { id: "sub-1", role: "ADMIN" } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("campaigns.manage")(req, res, next);
+    await requireAccess("campaigns.edit")(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it("403s a non-bare role with no grant — a plain TEAM_MEMBER can't reach an inventory.manage-gated route", async () => {
+  it("403s a non-bare role with no grant — a plain TEAM_MEMBER can't reach an inventory.edit-gated route", async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ role: "TEAM_MEMBER", permissions: null });
     const req = { user: { id: "tm-1", role: "TEAM_MEMBER" } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("inventory.manage", "CREATOR")(req, res, next);
+    await requireAccess("inventory.edit", "CREATOR")(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it("passes a granted non-admin role through — the actual feature: admin gave this TEAM_MEMBER inventory.manage", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ role: "TEAM_MEMBER", permissions: { "inventory.manage": true } });
+  it("passes a granted non-admin role through — the actual feature: admin gave this TEAM_MEMBER inventory.edit", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ role: "TEAM_MEMBER", permissions: { "inventory.edit": true } });
     const req = { user: { id: "tm-1", role: "TEAM_MEMBER" } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("inventory.manage", "CREATOR")(req, res, next);
+    await requireAccess("inventory.edit", "CREATOR")(req, res, next);
 
     expect(next).toHaveBeenCalledWith();
   });
 
   it("reads permissions fresh from the DB rather than trusting req.user — an edit takes effect immediately", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ role: "FINANCE", permissions: { "finance.manage": true } });
+    mockPrisma.user.findUnique.mockResolvedValue({ role: "FINANCE", permissions: { "finance.pay": true } });
     const req = { user: { id: "fin-1", role: "FINANCE" } };
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("finance.manage", "ADMIN")(req, res, next);
+    await requireAccess("finance.pay", "ADMIN")(req, res, next);
 
     expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { id: "fin-1" }, select: { role: true, permissions: true } });
     expect(next).toHaveBeenCalledWith();
@@ -90,7 +90,7 @@ describe("requireAccess — section guard grantable to any role (15 Sep)", () =>
     const res = mockRes();
     const next = vi.fn();
 
-    await requireAccess("users.manage")(req, res, next);
+    await requireAccess("users.edit")(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();

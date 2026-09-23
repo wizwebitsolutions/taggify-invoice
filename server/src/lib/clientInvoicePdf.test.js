@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { buildClientInvoicePdf, clientInvoiceToDocument } from "./clientInvoicePdf.js";
+import { taxHeads } from "./taxDocumentPdf.js";
+import { gstSplitFor } from "./gstin.js";
+import { clientInvoiceSchema } from "../modules/plans/schemas.js";
 
 /**
  * Smoke tests, same convention as invoicePdf.test.js: renders a valid PDF
@@ -20,7 +23,7 @@ const base = {
   clientInvoiceAt: new Date("2026-09-13"),
   notes: null,
   createdAt: new Date("2026-09-01"),
-  isGstPlan: true,
+  gstPercent: 18,
   itemised: true,
   overview: { totalFollowers: 100000, totalPosts: 3, expectedImpressions: 0, subtotal: 15000, gstAmount: 2700, total: 17700 },
   items: [
@@ -32,7 +35,7 @@ const base = {
 describe("clientInvoiceToDocument — Taggify → client mapping", () => {
   it("bills the client, one line per page × posts, paid into Taggify's account", () => {
     const d = clientInvoiceToDocument(base);
-    expect(d.title).toBe("Tax Invoice");
+    expect(d.title).toBe("Proforma Invoice");
     expect(d.partyLabel).toBe("Billed to (Client)");
     expect(d.partyLines.map((l) => l.text)).toEqual(["Acme Foods Pvt Ltd", "Rohit Sharma", "Phone: 9876543210", "12 MG Road, Pune 411001", "GSTIN/UIN: 27ABCDE1234F1Z5"]);
     expect(d.rows).toEqual([
@@ -51,15 +54,66 @@ describe("clientInvoiceToDocument — Taggify → client mapping", () => {
     expect(d.rows).toEqual([{ description: "Campaign services — Q1 Meme Push", quantity: 1, rate: 12000, amount: 12000 }]);
   });
 
+  it("the popup's description replaces the per-page lines with one line for the whole subtotal, and carries the typed HSN/SAC", () => {
+    const d = clientInvoiceToDocument({ ...base, invoiceDescription: "Influencer marketing services for Q1 campaign", hsnSac: "998361" });
+    expect(d.rows).toEqual([{ description: "Influencer marketing services for Q1 campaign", quantity: 1, rate: 15000, amount: 15000 }]);
+    expect(d.hsnSac).toBe("998361");
+    expect(clientInvoiceToDocument(base).hsnSac).toBeNull(); // blank -> the PDF falls back to the company default
+  });
+
   it("a non-GST plan drops the GST line and the empty GSTIN placeholder", () => {
-    const d = clientInvoiceToDocument({ ...base, isGstPlan: false, clientGstNumber: null, overview: { ...base.overview, gstAmount: 0, total: 15000 } });
-    expect(d.title).toBe("Invoice");
+    const d = clientInvoiceToDocument({ ...base, gstPercent: null, clientGstNumber: null, overview: { ...base.overview, gstAmount: 0, total: 15000 } });
     expect(d.isGst).toBe(false);
     expect(d.partyLines.map((l) => l.text).filter(Boolean)).not.toContain("GSTIN/UIN: —");
   });
 });
 
+// 21 Sep — "compare by gst no. of client and our gst": Taggify's GSTIN is
+// Haryana (06…), so an 06 client is intra-state and anyone else inter-state.
+describe("CGST + SGST vs IGST, from the client's GSTIN state code", () => {
+  it("a client in another state is charged IGST at the full rate", () => {
+    const d = clientInvoiceToDocument(base); // 27 — Maharashtra
+    expect(d.taxSplit).toBe("IGST");
+    expect(taxHeads(d)).toEqual([{ label: "IGST", rate: 18, amount: 2700 }]);
+  });
+
+  it("a client in Taggify's own state is charged CGST + SGST, half the rate each", () => {
+    const d = clientInvoiceToDocument({ ...base, clientGstNumber: "06ABCDE1234F1Z5" });
+    expect(d.taxSplit).toBe("CGST_SGST");
+    expect(taxHeads(d)).toEqual([
+      { label: "CGST", rate: 9, amount: 1350 },
+      { label: "SGST", rate: 9, amount: 1350 },
+    ]);
+  });
+
+  it("an odd-paisa GST amount still splits into two heads that add back exactly", () => {
+    const heads = taxHeads({ taxSplit: "CGST_SGST", gstRate: 5, gstAmount: 100.25 });
+    expect(heads.map((h) => h.rate)).toEqual([2.5, 2.5]);
+    expect(Math.round((heads[0].amount + heads[1].amount) * 100)).toBe(10025);
+  });
+
+  it("no / unreadable GSTIN, or a document that never set a split (creator invoices), stays IGST", () => {
+    expect(gstSplitFor(null)).toBe("IGST");
+    expect(gstSplitFor("GST123")).toBe("IGST");
+    expect(gstSplitFor(" 06abcde1234f1z5 ")).toBe("CGST_SGST");
+    expect(taxHeads({ gstRate: 18, gstAmount: 180 })).toEqual([{ label: "IGST", rate: 18, amount: 180 }]);
+  });
+
+  it("the client invoice schema rejects a missing or malformed GSTIN and upper-cases a valid one", () => {
+    const body = { clientCompany: "Acme", clientAddress: "Pune", invoiceDescription: "Services" };
+    expect(clientInvoiceSchema.safeParse(body).success).toBe(false);
+    expect(clientInvoiceSchema.safeParse({ ...body, clientGstNumber: "" }).success).toBe(false);
+    expect(clientInvoiceSchema.safeParse({ ...body, clientGstNumber: "GST123" }).success).toBe(false);
+    expect(clientInvoiceSchema.parse({ ...body, clientGstNumber: "27abcde1234f1z5" }).clientGstNumber).toBe("27ABCDE1234F1Z5");
+  });
+});
+
 describe("buildClientInvoicePdf — renders a valid PDF", () => {
+  it("intra-state GST plan (CGST + SGST summary columns)", async () => {
+    const pdf = await buildClientInvoicePdf({ ...base, clientGstNumber: "06ABCDE1234F1Z5" });
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
   it("GST plan, itemised", async () => {
     const pdf = await buildClientInvoicePdf(base);
     expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
@@ -67,7 +121,12 @@ describe("buildClientInvoicePdf — renders a valid PDF", () => {
   });
 
   it("non-GST plan with no phone/company and an overridden cost", async () => {
-    const pdf = await buildClientInvoicePdf({ ...base, isGstPlan: false, clientCompany: null, clientPhone: null, clientGstNumber: null, itemised: false });
+    const pdf = await buildClientInvoicePdf({ ...base, gstPercent: null, clientCompany: null, clientPhone: null, clientGstNumber: null, itemised: false });
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("a long description wraps instead of throwing", async () => {
+    const pdf = await buildClientInvoicePdf({ ...base, invoiceDescription: "Influencer marketing and content amplification services across meme, news and entertainment pages for the Q1 launch campaign. ".repeat(2).trim() });
     expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
   });
 

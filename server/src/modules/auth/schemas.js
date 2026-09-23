@@ -12,9 +12,33 @@ export const signupSchema = z.object({
   permissions: z.object(permissionsShape).strict().optional(),
 });
 
-export const loginSchema = z.object({
-  phoneNumber: z.string().min(8).max(15),
-  password: z.string().min(1),
+// Exactly one identifier: phone number (account with no verified email
+// yet) or email (after verification) — see auth/service.js's login.
+export const loginSchema = z
+  .object({
+    phoneNumber: z.string().min(8).max(15).optional(),
+    email: z.string().email().max(254).optional(),
+    password: z.string().min(1),
+  })
+  .refine((v) => Boolean(v.phoneNumber) !== Boolean(v.email), { message: "Provide either phoneNumber or email" });
+
+const otpCode = z.string().regex(/^\d{6}$/, "Enter the 6-digit code");
+
+// remember: the "Remember this device for 7 days" checkbox (23 Sep) —
+// defaults true so an older client that never sends it keeps the original
+// always-remember behavior.
+export const verifyLoginOtpSchema = z.object({ challengeToken: z.string().min(1), code: otpCode, remember: z.boolean().default(true) });
+export const resendLoginOtpSchema = z.object({ challengeToken: z.string().min(1) });
+
+// challengeToken is only sent by a locked-out login; an in-app caller
+// authenticates with its bearer token instead (see routes.js).
+export const startEmailVerificationSchema = z.object({
+  email: z.string().email().max(254),
+  challengeToken: z.string().min(1).optional(),
+});
+export const confirmEmailVerificationSchema = z.object({
+  code: otpCode,
+  challengeToken: z.string().min(1).optional(),
 });
 
 export const refreshSchema = z.object({

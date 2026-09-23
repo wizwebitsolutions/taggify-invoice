@@ -191,10 +191,10 @@ export async function seedSampleData(prisma, { admin }) {
 
   // ---- Plans: one per approval state, built from the pages above ----
   const planSeeds = [
-    { id: "sample-plan-nykaa", name: "Nykaa Summer pitch", clientName: "Nykaa", clientCompany: "Nykaa E-Retail Pvt. Ltd.", budget: 450000, isGstPlan: true, status: "PENDING_APPROVAL", pages: ["meme.mafia", "trend.hub", "daily.dose", "style.diaries", "laugh.lab"], margin: 0.2 },
-    { id: "sample-plan-cred", name: "Cred Pay launch", clientName: "Cred", clientCompany: "Dreamplug Technologies", budget: 300000, isGstPlan: false, status: "DRAFT", pages: ["paisa.talk", "news.now", "daily.dose"], margin: 0.25 },
-    { id: "sample-plan-myntra", name: "Myntra EORS memes", clientName: "Myntra", clientCompany: "Myntra Designs Pvt. Ltd.", budget: 200000, isGstPlan: true, status: "REJECTED", pages: ["meme.mafia", "laugh.lab"], margin: 0.15, notes: "Client wants only meme pages, no news." },
-    { id: "sample-plan-boat", name: "Boat Nirvana wave 2", clientName: "Boat", clientCompany: "Imagine Marketing Ltd.", budget: 180000, isGstPlan: false, status: "APPROVED", pages: ["news.now", "foodie.gram"], margin: 0.2 },
+    { id: "sample-plan-nykaa", name: "Nykaa Summer pitch", clientName: "Nykaa", clientCompany: "Nykaa E-Retail Pvt. Ltd.", budget: 450000, gstPercent: 18, status: "PENDING_APPROVAL", pages: ["meme.mafia", "trend.hub", "daily.dose", "style.diaries", "laugh.lab"], margin: 0.2 },
+    { id: "sample-plan-cred", name: "Cred Pay launch", clientName: "Cred", clientCompany: "Dreamplug Technologies", budget: 300000, gstPercent: null, status: "DRAFT", pages: ["paisa.talk", "news.now", "daily.dose"], margin: 0.25 },
+    { id: "sample-plan-myntra", name: "Myntra EORS memes", clientName: "Myntra", clientCompany: "Myntra Designs Pvt. Ltd.", budget: 200000, gstPercent: 18, status: "REJECTED", pages: ["meme.mafia", "laugh.lab"], margin: 0.15, notes: "Client wants only meme pages, no news." },
+    { id: "sample-plan-boat", name: "Boat Nirvana wave 2", clientName: "Boat", clientCompany: "Imagine Marketing Ltd.", budget: 180000, gstPercent: null, status: "APPROVED", pages: ["news.now", "foodie.gram"], margin: 0.2 },
   ];
   for (const p of planSeeds) {
     if (await prisma.plan.findUnique({ where: { id: p.id } })) continue;
@@ -209,7 +209,7 @@ export async function seedSampleData(prisma, { admin }) {
         clientAddress: "Bengaluru, Karnataka",
         notes: p.notes ?? null,
         budget: p.budget,
-        isGstPlan: p.isGstPlan,
+        gstPercent: p.gstPercent,
         status: p.status,
         createdById: planner.id,
         approvedById: approved ? admin.id : null,

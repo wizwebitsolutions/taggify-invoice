@@ -18,6 +18,7 @@ const {
   saveRefreshToken,
   isGoogleDriveConnected,
   getUserAccessToken,
+  isGoogleConnectionHealthy,
 } = await import("./googleOAuthClient.js");
 
 beforeEach(() => {
@@ -65,8 +66,18 @@ describe("buildAuthorizeUrl", () => {
 
 describe("verifyState", () => {
   it("delegates to jwt.verify with the access secret", () => {
+    jwt.verify.mockReturnValueOnce({ purpose: "google-oauth" });
     verifyState("some-state");
     expect(jwt.verify).toHaveBeenCalledWith("some-state", "test-secret");
+  });
+
+  // Access tokens and login challenge tokens (email 2FA, 21 Sep) are signed
+  // with the same secret — a valid signature alone isn't a valid state.
+  it("rejects a correctly-signed token that isn't an OAuth state", () => {
+    jwt.verify.mockReturnValueOnce({ sub: "u1", typ: "challenge", purpose: "login-otp" });
+    expect(() => verifyState("a-challenge-token")).toThrow();
+    jwt.verify.mockReturnValueOnce({ sub: "u1", role: "CREATOR" });
+    expect(() => verifyState("an-access-token")).toThrow();
   });
 });
 
@@ -124,10 +135,30 @@ describe("getUserAccessToken", () => {
     expect(token).toBe("fresh-token");
   });
 
-  it("throws a readable error when the refresh exchange fails", async () => {
+  // 22 Sep — a revoked/expired refresh token used to surface as a raw 500
+  // "Something went wrong" on every sheet generation.
+  it("a revoked/expired refresh token (invalid_grant) is a 503 GOOGLE_RECONNECT_REQUIRED naming the fix, not a 500", async () => {
+    mockAppSettingFindUnique.mockResolvedValueOnce({ key: "googleOAuthRefreshToken", value: "rt-123" });
+    mockFetch.mockResolvedValueOnce(jsonResponse({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, false, 400));
+
+    await expect(getUserAccessToken()).rejects.toMatchObject({ statusCode: 503, code: "GOOGLE_RECONNECT_REQUIRED", message: expect.stringMatching(/reconnect/i) });
+    expect(mockAppSettingUpsert).not.toHaveBeenCalled();
+  });
+
+  it("any other refresh failure is a 502 with a readable message", async () => {
+    mockAppSettingFindUnique.mockResolvedValueOnce({ key: "googleOAuthRefreshToken", value: "rt-123" });
+    mockFetch.mockResolvedValueOnce(jsonResponse({ error: "server_error" }, false, 500));
+
+    await expect(getUserAccessToken()).rejects.toMatchObject({ statusCode: 502, code: "GOOGLE_TOKEN_REFRESH_FAILED" });
+  });
+
+  it("isGoogleConnectionHealthy is false for a dead token and true for a working one", async () => {
     mockAppSettingFindUnique.mockResolvedValueOnce({ key: "googleOAuthRefreshToken", value: "rt-123" });
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "invalid_grant" }, false, 400));
+    expect(await isGoogleConnectionHealthy()).toBe(false);
 
-    await expect(getUserAccessToken()).rejects.toThrow(/token refresh failed/);
+    mockAppSettingFindUnique.mockResolvedValueOnce({ key: "googleOAuthRefreshToken", value: "rt-123" });
+    mockFetch.mockResolvedValueOnce(jsonResponse({ access_token: "ok" }));
+    expect(await isGoogleConnectionHealthy()).toBe(true);
   });
 });

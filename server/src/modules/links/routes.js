@@ -33,7 +33,7 @@ router.post("/bulk", requireRole("CREATOR", "TEAM_MEMBER"), validateBody(bulkCre
   }
 });
 
-router.post("/bulk-import", requireAccess("links.review"), validateBody(bulkImportLinksSchema), async (req, res, next) => {
+router.post("/bulk-import", requireAccess("links.edit"), validateBody(bulkImportLinksSchema), async (req, res, next) => {
   try {
     res.status(201).json(await linksService.bulkImportLinks(req.user, req.body));
   } catch (err) {
@@ -57,7 +57,7 @@ router.get("/:id/timeline", async (req, res, next) => {
   }
 });
 
-router.post("/:id/review-screenshot", requireAccess("links.review"), validateBody(reviewScreenshotSchema), async (req, res, next) => {
+router.post("/:id/review-screenshot", requireAccess("links.approve"), validateBody(reviewScreenshotSchema), async (req, res, next) => {
   try {
     res.json(await linksService.reviewScreenshot(req.params.id, req.user, req.body));
   } catch (err) {
@@ -65,7 +65,7 @@ router.post("/:id/review-screenshot", requireAccess("links.review"), validateBod
   }
 });
 
-router.post("/:id/refresh-metrics", requireAccess("links.review"), async (req, res, next) => {
+router.post("/:id/refresh-metrics", requireAccess("links.edit"), async (req, res, next) => {
   try {
     res.json(await linksService.refreshMetricsNow(req.params.id, req.user));
   } catch (err) {
@@ -73,7 +73,7 @@ router.post("/:id/refresh-metrics", requireAccess("links.review"), async (req, r
   }
 });
 
-router.post("/:id/approve-insights", requireAccess("links.review"), async (req, res, next) => {
+router.post("/:id/approve-insights", requireAccess("links.approve"), async (req, res, next) => {
   try {
     res.json(await linksService.approveInsights(req.params.id, req.user));
   } catch (err) {
@@ -81,7 +81,7 @@ router.post("/:id/approve-insights", requireAccess("links.review"), async (req, 
   }
 });
 
-router.put("/:id/cost", requireAccess("links.review"), validateBody(reviseCostSchema), async (req, res, next) => {
+router.put("/:id/cost", requireAccess("links.edit"), validateBody(reviseCostSchema), async (req, res, next) => {
   try {
     res.json(await linksService.reviseLinkCost(req.params.id, req.user, req.body));
   } catch (err) {
@@ -89,7 +89,7 @@ router.put("/:id/cost", requireAccess("links.review"), validateBody(reviseCostSc
   }
 });
 
-router.post("/:id/mark-invalid", requireAccess("links.review"), validateBody(markInvalidSchema), async (req, res, next) => {
+router.post("/:id/mark-invalid", requireAccess("links.edit"), validateBody(markInvalidSchema), async (req, res, next) => {
   try {
     res.json(await linksService.markLinkInvalid(req.params.id, req.user, req.body));
   } catch (err) {
@@ -97,7 +97,7 @@ router.post("/:id/mark-invalid", requireAccess("links.review"), validateBody(mar
   }
 });
 
-router.get("/:id/cost-revisions", requireAccess("links.review"), async (req, res, next) => {
+router.get("/:id/cost-revisions", requireAccess("links.view"), async (req, res, next) => {
   try {
     res.json(await linksService.getLinkCostRevisions(req.params.id));
   } catch (err) {

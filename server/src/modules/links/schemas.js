@@ -26,6 +26,12 @@ export const listLinksQuerySchema = z.object({
   assetId: z.string().optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
+  // "Ready to invoice" lists (22 Sep): only links not already on an invoice,
+  // whatever their status says — status and InvoiceItem can drift apart.
+  unbilled: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });

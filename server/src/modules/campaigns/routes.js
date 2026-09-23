@@ -28,7 +28,7 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
-router.post("/", requireAccess("campaigns.manage"), validateBody(createCampaignSchema), async (req, res, next) => {
+router.post("/", requireAccess("campaigns.edit"), validateBody(createCampaignSchema), async (req, res, next) => {
   try {
     res.status(201).json(await campaignsService.createCampaign(req.body));
   } catch (err) {
@@ -36,7 +36,7 @@ router.post("/", requireAccess("campaigns.manage"), validateBody(createCampaignS
   }
 });
 
-router.put("/:id", requireAccess("campaigns.manage"), validateBody(updateCampaignSchema), async (req, res, next) => {
+router.put("/:id", requireAccess("campaigns.edit"), validateBody(updateCampaignSchema), async (req, res, next) => {
   try {
     res.json(await campaignsService.updateCampaign(req.params.id, req.body));
   } catch (err) {
@@ -47,9 +47,21 @@ router.put("/:id", requireAccess("campaigns.manage"), validateBody(updateCampaig
 // newTask.md, 8 Sep — more posts under the same brand deal become a new
 // phase, not a brand-new campaign; :id can be any phase's id, not just the
 // root's (see createPhase).
-router.post("/:id/phases", requireAccess("campaigns.manage"), validateBody(createPhaseSchema), async (req, res, next) => {
+// Plan Maker too (22 Sep — "admin/plan maker can add phase 2"), on their
+// own plans' campaigns only (createPhase checks).
+router.post("/:id/phases", requireAccess("campaigns.edit", "PLAN_MAKER"), validateBody(createPhaseSchema), async (req, res, next) => {
   try {
-    res.status(201).json(await campaignsService.createPhase(req.params.id, req.body));
+    res.status(201).json(await campaignsService.createPhase(req.params.id, req.body, req.user));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Deleting a phase is an admin action (22 Sep); :id is the phase itself.
+// Refused for Phase 1 and while posts/invoices exist (see deletePhase).
+router.delete("/:id/phase", requireAccess("campaigns.edit"), async (req, res, next) => {
+  try {
+    res.json(await campaignsService.deletePhase(req.params.id));
   } catch (err) {
     next(err);
   }
@@ -61,9 +73,9 @@ router.post("/:id/phases", requireAccess("campaigns.manage"), validateBody(creat
 // listAssignments itself scopes what comes back — full sheet for
 // Admin/Finance, only a CREATOR/TEAM_MEMBER's own matched row(s) for
 // everyone else, so this never hands a creator another creator's phone
-// number. requirePermission("campaigns.manage") only ever matters for the
+// number. requirePermission("campaigns.view") only ever matters for the
 // ADMIN branch (a sub-admin with that key off) — a no-op for every other role.
-router.get("/:id/assignments", requirePermission("campaigns.manage"), async (req, res, next) => {
+router.get("/:id/assignments", requirePermission("campaigns.view"), async (req, res, next) => {
   try {
     res.json(await campaignsService.listAssignments(req.params.id, req.user));
   } catch (err) {
@@ -74,7 +86,7 @@ router.get("/:id/assignments", requirePermission("campaigns.manage"), async (req
 // Admin points a pending row at a page (one they just created, or an existing one) — newTask.md #11.
 router.put(
   "/:id/assignments/:assignmentId",
-  requireAccess("campaigns.manage"),
+  requireAccess("campaigns.edit"),
   validateBody(resolveAssignmentSchema),
   async (req, res, next) => {
     try {
@@ -89,7 +101,7 @@ router.put(
 // re-uploading a CSV; used by both the New campaign assignment sheet and
 // the Import work sheet on the client, which parse the returned CSV text
 // exactly as they would a file upload.
-router.post("/import-sheet-url", requireAccess("campaigns.manage"), validateBody(importSheetUrlSchema), async (req, res, next) => {
+router.post("/import-sheet-url", requireAccess("campaigns.edit"), validateBody(importSheetUrlSchema), async (req, res, next) => {
   try {
     const csv = await campaignsService.fetchSheetCsv(req.body.url);
     res.json({ csv });

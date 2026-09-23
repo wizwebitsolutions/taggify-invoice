@@ -15,9 +15,14 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { CategoryTabs } from "@/components/ui/category-tabs";
 import { PlanWizard } from "@/components/plans/plan-wizard";
 import { ClientInvoiceModal } from "@/components/plans/client-invoice-modal";
+import { ExecutionSheetModal } from "@/components/plans/execution-sheet-modal";
 import { PlanInvoiceAttachmentControl } from "@/components/plans/plan-invoice-attachment";
-import { PlusIcon, AssetIcon, HeartIcon, EyeIcon, SearchIcon, CloseIcon, CheckCircleIcon, EditIcon, DownloadIcon } from "@/components/icons";
-import { TextField } from "@/components/ui/form-field";
+import { PlusIcon, AssetIcon, HeartIcon, EyeIcon, SearchIcon, CloseIcon, CheckCircleIcon, EditIcon, DownloadIcon, UploadIcon, RefreshIcon } from "@/components/icons";
+import { UploadPlanModal } from "@/components/plans/upload-plan-modal";
+import { GoogleAwareError } from "@/components/integrations/google-reconnect-notice";
+import { CompletePlanSteps } from "@/components/plans/complete-plan-steps";
+import { parsePlanSheet } from "@/lib/parseAssignmentSheet";
+import { planMissing } from "@/lib/plan-missing";
 import { useAuth } from "@/lib/auth-context";
 import { plans as plansApi, ApiError, hasAccess, type Plan } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
@@ -49,7 +54,12 @@ function PlansContent() {
   const token = accessToken!;
   // "Admin" in the loose sense of "acts on any plan" — a plain ADMIN by
   // default, or (15 Sep) any other role explicitly granted plans.manage.
-  const isAdmin = hasAccess(user, "plans.manage");
+  // isAdmin: acts on any plan (edit or approve) — mirrors
+  // plans/service.js's assertCanAccessPlan, which the server checks per
+  // route (plans.edit for edit/delete/invoice, plans.approve for
+  // approve/reject); the UI treats "can act on any plan" as one flag since
+  // both are ADMIN-only baselines today.
+  const isAdmin = hasAccess(user, "plans.edit") || hasAccess(user, "plans.approve");
   const canManagePlans = isAdmin || user?.role === "PLAN_MAKER";
 
   const [editingPlan, setEditingPlan] = useState<Plan | "new" | null>(null);
@@ -84,6 +94,11 @@ function PlansContent() {
     setPendingPlanAssetIds([]);
     setEditingPlan("new");
   }
+  // "Upload plan" (user request, 22 Sep) — a plan built from the user's own
+  // Google Sheet instead of the wizard; see UploadPlanModal. Once created,
+  // the missing-details steps open for it straight away.
+  const [uploading, setUploading] = useState(false);
+  const [completingPlanId, setCompletingPlanId] = useState<string | null>(null);
 
   return (
     <AppShell
@@ -92,10 +107,16 @@ function PlansContent() {
       searchPlaceholder="Search plans…"
       topbarActions={
         canManagePlans ? (
-          <Button size="default" onClick={openNewPlan}>
-            <PlusIcon className="h-[15px] w-[15px] text-accent-ink" />
-            New plan
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="default" variant="secondary" onClick={() => setUploading(true)}>
+              <UploadIcon className="h-[15px] w-[15px]" />
+              Upload plan
+            </Button>
+            <Button size="default" onClick={openNewPlan}>
+              <PlusIcon className="h-[15px] w-[15px] text-accent-ink" />
+              New plan
+            </Button>
+          </div>
         ) : undefined
       }
       fab={
@@ -132,11 +153,120 @@ function PlansContent() {
             editingPlan={editingPlan}
             setEditingPlan={setEditingPlan}
             initialAssetIds={pendingPlanAssetIds}
+            completingPlanId={completingPlanId}
+            setCompletingPlanId={setCompletingPlanId}
+            onUploadPlan={() => setUploading(true)}
           />
         )}
       </div>
       )}
+      {uploading && canManagePlans && (
+        <UploadPlanModal
+          token={token}
+          onClose={() => setUploading(false)}
+          onCreated={(plan) => {
+            setUploading(false);
+            queryClient.setQueryData<Plan[]>(["plans"], (prev) => [plan, ...(prev ?? []).filter((p) => p.id !== plan.id)]);
+            queryClient.invalidateQueries({ queryKey: ["plans"] });
+            if (planMissing(plan).steps.length > 0) setCompletingPlanId(plan.id);
+          }}
+        />
+      )}
     </AppShell>
+  );
+}
+
+type PlanSort = "newest" | "budget-desc" | "budget-asc";
+
+const ALL_MAKERS = "all";
+
+/** A plan's maker, keyed by id; plans with no recorded maker share one "unknown" bucket. */
+const makerKey = (p: Plan) => p.createdBy?.id ?? "unknown";
+
+interface PlanMaker {
+  id: string;
+  name: string;
+  total: number;
+  drafts: number;
+  approved: number;
+  lastUpdated: string;
+}
+
+function groupByMaker(plans: Plan[]): PlanMaker[] {
+  const byId = new Map<string, PlanMaker>();
+  for (const p of plans) {
+    const id = makerKey(p);
+    const m = byId.get(id) ?? { id, name: p.createdBy?.name?.trim() || "Unknown", total: 0, drafts: 0, approved: 0, lastUpdated: p.updatedAt };
+    m.total += 1;
+    if (p.status === "DRAFT") m.drafts += 1;
+    if (p.status === "APPROVED") m.approved += 1;
+    if (p.updatedAt > m.lastUpdated) m.lastUpdated = p.updatedAt;
+    byId.set(id, m);
+  }
+  return [...byId.values()].sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+}
+
+function PlanMakerList({ makers, totalPlans, loading, onOpen }: { makers: PlanMaker[]; totalPlans: number; loading: boolean; onOpen: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const visible = makers.filter((m) => m.name.toLowerCase().includes(query.trim().toLowerCase()));
+  if (loading) {
+    return (
+      <div className="rounded-lg border border-border bg-surface shadow-card">
+        <TableSkeleton />
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3" data-testid="plan-maker-list">
+      {makers.length > 0 && (
+        <div className="relative sm:w-64">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-faint" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search plan makers…"
+            aria-label="Search plan makers"
+            className="h-9 w-full rounded-full border border-border bg-surface pl-8 pr-3 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
+          />
+        </div>
+      )}
+      <div className="overflow-hidden rounded-lg border border-border bg-surface shadow-card">
+        {visible.length === 0 ? (
+          <EmptyState label={makers.length === 0 ? "No plans yet." : `No plan makers match "${query}".`} />
+        ) : (
+          <ul className="divide-y divide-border">
+            {!query.trim() && (
+              <li>
+                <button type="button" onClick={() => onOpen(ALL_MAKERS)} className="flex w-full items-center gap-3 bg-surface-2/40 px-4 py-3.5 text-left hover:bg-surface-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[0.9375rem] font-semibold">All plans</span>
+                    <span className="block text-[0.75rem] text-text-muted">
+                      {totalPlans} plan{totalPlans === 1 ? "" : "s"} across {makers.length} plan maker{makers.length === 1 ? "" : "s"} — search by POC, sort by budget
+                    </span>
+                  </span>
+                  <span aria-hidden className="text-text-faint">→</span>
+                </button>
+              </li>
+            )}
+            {visible.map((m) => (
+              <li key={m.id}>
+                <button type="button" onClick={() => onOpen(m.id)} aria-label={`Open ${m.name}'s plans`} className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-surface-2">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[0.75rem] font-semibold">{initialsOf(m.name)}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[0.9375rem] font-semibold">{m.name}</span>
+                    <span className="block text-[0.75rem] text-text-muted">
+                      {m.total} plan{m.total === 1 ? "" : "s"} · {m.drafts} draft · {m.approved} approved
+                    </span>
+                  </span>
+                  <span className="hidden text-[0.72rem] text-text-faint sm:block">Updated {new Date(m.lastUpdated).toLocaleDateString("en-IN", { dateStyle: "medium" })}</span>
+                  <span aria-hidden className="text-text-faint">→</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -153,17 +283,12 @@ const STATUS_TAB_LABEL: Record<Plan["status"], string> = {
 // "Details filled" checklist — every field a finished pitch should carry
 // before it's submitted. Purely a client-side completeness hint (nothing
 // here is enforced server-side); missing items are named so a half-filled
-// plan says exactly what's left, not just a bare percentage.
-function planCompleteness(plan: Plan) {
-  const checks: { label: string; done: boolean }[] = [
-    { label: "Client contact", done: Boolean(plan.clientContact) },
-    { label: "Budget", done: plan.budget != null },
-    { label: "Pages", done: plan.items.length > 0 },
-    { label: "Rates on every page", done: plan.items.length > 0 && plan.items.every((i) => Number(i.cost) > 0) },
-  ];
-  const done = checks.filter((c) => c.done).length;
-  return { percent: Math.round((done / checks.length) * 100), missing: checks.filter((c) => !c.done).map((c) => c.label) };
-}
+// plan says exactly what's left, not just a bare percentage. Shared with
+// the "Complete details" steps popup — lib/plan-missing.ts.
+const planCompleteness = (plan: Plan) => {
+  const m = planMissing(plan);
+  return { percent: m.percent, missing: m.labels, steps: m.steps };
+};
 
 function PlansSection({
   token,
@@ -172,6 +297,9 @@ function PlansSection({
   editingPlan,
   setEditingPlan,
   initialAssetIds,
+  completingPlanId,
+  setCompletingPlanId,
+  onUploadPlan,
 }: {
   token: string;
   currentUserId?: string;
@@ -180,6 +308,10 @@ function PlansSection({
   setEditingPlan: (v: Plan | "new" | null) => void;
   /** Pages picked on Inventory's Pages tab before "Create plan" was clicked — only meaningful for a brand-new plan. */
   initialAssetIds: string[];
+  /** The plan whose "Complete details" steps are open (user request, 22 Sep) — held by id so every save re-renders the steps with the fresh plan. */
+  completingPlanId: string | null;
+  setCompletingPlanId: (id: string | null) => void;
+  onUploadPlan: () => void;
 }) {
   const queryClient = useQueryClient();
   const [deletingPlan, setDeletingPlan] = useState<Plan | null>(null);
@@ -190,9 +322,31 @@ function PlansSection({
   // narrowing "what needs my attention right now" out of a growing list.
   const [statusFilter, setStatusFilter] = useState<"All" | Plan["status"]>("All");
   const [search, setSearch] = useState("");
+  // POC is matched by the search box (plan maker's name); budget is a sort,
+  // not a filter (user request, 23 Sep).
+  const [sortBy, setSortBy] = useState<PlanSort>("newest");
 
   const plansQuery = useQuery({ queryKey: ["plans"], queryFn: () => plansApi.list(token) });
-  const allItems = plansQuery.data ?? [];
+  const everyPlan = plansQuery.data ?? [];
+  // Admin sees plans grouped by who made them (user request, 23 Sep — "plans
+  // should show as a list of plan makers, on selecting it opens plans of the
+  // specific plan maker, to admin only"). A Plan Maker only ever gets their
+  // own plans from the server, so they skip straight to the plan grid.
+  // Held in the URL (?maker=<id> or ?maker=all) so Back / refresh keep the
+  // admin where they were.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const makerId = searchParams.get("maker");
+  function setMakerId(id: string | null) {
+    router.replace(id ? `/plans?maker=${encodeURIComponent(id)}` : "/plans", { scroll: false });
+  }
+  const makers = useMemo(() => groupByMaker(everyPlan), [everyPlan]);
+  const showMakerList = isAdmin && makerId == null;
+  const makerTitle = makerId === ALL_MAKERS ? "All plans" : makers.find((m) => m.id === makerId)?.name ?? "—";
+  const allItems = useMemo(
+    () => (isAdmin && makerId && makerId !== ALL_MAKERS ? everyPlan.filter((p) => makerKey(p) === makerId) : everyPlan),
+    [everyPlan, isAdmin, makerId]
+  );
 
   const statusTabs = useMemo(() => {
     const counts = new Map<Plan["status"], number>();
@@ -211,9 +365,19 @@ function PlansSection({
     let result = allItems;
     if (statusFilter !== "All") result = result.filter((p) => p.status === statusFilter);
     const q = search.trim().toLowerCase();
-    if (q) result = result.filter((p) => p.name.toLowerCase().includes(q) || p.clientName.toLowerCase().includes(q));
+    if (q) result = result.filter((p) => p.name.toLowerCase().includes(q) || p.clientName.toLowerCase().includes(q) || (p.createdBy?.name ?? "").toLowerCase().includes(q));
+    if (sortBy !== "newest") {
+      // Plans with no budget sort last either way.
+      const b = (p: Plan) => (p.budget != null ? Number(p.budget) : null);
+      result = [...result].sort((x, y) => {
+        const bx = b(x);
+        const by = b(y);
+        if (bx == null || by == null) return bx == null ? (by == null ? 0 : 1) : -1;
+        return sortBy === "budget-desc" ? by - bx : bx - by;
+      });
+    }
     return result;
-  }, [allItems, statusFilter, search]);
+  }, [allItems, statusFilter, search, sortBy]);
 
   // Google Sheet, not PDF (user request, 10 Sep — "remove secondary export
   // option only google sheet will be there ... list of plans ... option of
@@ -263,6 +427,34 @@ function PlansSection({
   });
   const workflowBusy = approveMutation.isPending || rejectMutation.isPending;
   const workflowError = approveMutation.error ?? rejectMutation.error;
+  // Refresh for an uploaded plan (user request, 22 Sep — "refresh button of
+  // fetching updated sheet"): re-fetch the SAME stored link, re-parse, and
+  // sync. Nothing is re-attached; the server keeps in-app values for cells
+  // the sheet leaves blank.
+  const refreshMutation = useMutation({
+    mutationFn: async (plan: Plan) => {
+      const { tabs } = await plansApi.importSheetTabs(token, plan.sourceSheetUrl!);
+      const parsed = await parsePlanSheet(tabs.map((t) => t.csv));
+      return plansApi.syncFromSheet(token, plan.id, { fields: parsed.fields, rows: parsed.rows });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
+  });
+  // Execution sheet → links (23 Sep). The server reads the sheet when the
+  // link is saved on an approved plan and on "Refresh links"; what it found
+  // is persisted on the plan (executionSheetFetchedAt / executionSheetPending),
+  // while this one-shot notice (how many attached / the read error) is per
+  // card, for the click that just happened.
+  const [execSheetNotice, setExecSheetNotice] = useState<Record<string, { summary?: { attached: number; alreadyLinked: number; pending: number }; error?: string }>>({});
+  const syncExecutionMutation = useMutation({
+    mutationFn: (plan: Plan) => plansApi.syncExecutionSheet(token, plan.id),
+    onSuccess: ({ summary }, plan) => {
+      setExecSheetNotice((n) => ({ ...n, [plan.id]: { summary } }));
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
+      queryClient.invalidateQueries({ queryKey: ["links"] });
+    },
+    onError: (err, plan) => setExecSheetNotice((n) => ({ ...n, [plan.id]: { error: err instanceof ApiError ? err.message : "Couldn't read the execution sheet." } })),
+  });
+  const completingPlan = completingPlanId ? allItems.find((p) => p.id === completingPlanId) ?? null : null;
 
   return (
     <>
@@ -270,6 +462,27 @@ function PlansSection({
         <ErrorNotice message={workflowError instanceof ApiError ? workflowError.message : "Couldn't update that plan's approval status."} />
       )}
 
+      {showMakerList ? (
+        <PlanMakerList makers={makers} totalPlans={everyPlan.length} loading={plansQuery.isLoading} onOpen={setMakerId} />
+      ) : (
+      <>
+      {isAdmin && (
+        <div className="flex items-center gap-2 text-[0.8125rem]" data-testid="plan-maker-header">
+          <button
+            type="button"
+            onClick={() => {
+              setMakerId(null);
+              setSearch("");
+              setStatusFilter("All");
+            }}
+            className="font-semibold text-text-muted hover:text-text"
+          >
+            ← All plan makers
+          </button>
+          <span className="text-text-faint">/</span>
+          <span className="font-semibold">{makerTitle}</span>
+        </div>
+      )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         {/* Search — by plan name or client name. Kept compact and
             fixed-width on larger screens so the status filter strip sits
@@ -279,8 +492,8 @@ function PlansSection({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search plans…"
-            aria-label="Search plans by name or client"
+            placeholder="Search plan, client or POC…"
+            aria-label="Search plans by name, client or plan maker"
             className="h-9 w-full rounded-full border border-border bg-surface pl-8 pr-8 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
           />
           {search && (
@@ -303,7 +516,18 @@ function PlansSection({
         <div className="min-w-0 flex-1">
           <CategoryTabs tabs={statusTabs} value={statusFilter} onChange={setStatusFilter} />
         </div>
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as PlanSort)}
+          aria-label="Sort plans"
+          className="h-9 shrink-0 rounded-full border border-border bg-surface px-3.5 text-[0.8125rem] text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
+        >
+          <option value="newest">Newest first</option>
+          <option value="budget-desc">Budget: high to low</option>
+          <option value="budget-asc">Budget: low to high</option>
+        </select>
       </div>
+
 
       {plansQuery.isLoading ? (
         <div className="rounded-lg border border-border bg-surface shadow-card">
@@ -333,12 +557,35 @@ function PlansSection({
               workflowBusy={workflowBusy}
               onOpenSheet={(variant) => openSheet(plan, variant)}
               sheetPending={sheetMutation.isPending}
-              sheetError={sheetMutation.isError ? sheetMutation.error : null}
-              onExecutionSheetSaved={() => queryClient.invalidateQueries({ queryKey: ["plans"] })}
+              // Only on the card that was clicked — the mutation is shared across cards.
+              sheetError={sheetMutation.isError && sheetMutation.variables?.plan.id === plan.id ? sheetMutation.error : null}
+              onExecutionSheetSaved={(updated) => {
+                setExecSheetNotice((n) => ({ ...n, [plan.id]: updated.executionSheetSyncError ? { error: updated.executionSheetSyncError } : {} }));
+                queryClient.invalidateQueries({ queryKey: ["plans"] });
+                queryClient.invalidateQueries({ queryKey: ["links"] });
+              }}
+              onSyncExecutionSheet={() => syncExecutionMutation.mutate(plan)}
+              syncExecutionPending={syncExecutionMutation.isPending && syncExecutionMutation.variables?.id === plan.id}
+              execSheetNotice={execSheetNotice[plan.id]}
+              onRefreshSheet={() => refreshMutation.mutate(plan)}
+              refreshPending={refreshMutation.isPending && refreshMutation.variables?.id === plan.id}
+              refreshError={refreshMutation.isError && refreshMutation.variables?.id === plan.id ? refreshMutation.error : null}
+              onCompleteDetails={() => setCompletingPlanId(plan.id)}
             />
           ))}
         </div>
       )}
+      </>
+      )}
+      {everyPlan.length === 0 && !plansQuery.isLoading && (
+        <p className="text-center text-[0.8125rem] text-text-muted">
+          Have a plan in a Google Sheet already?{" "}
+          <button type="button" onClick={onUploadPlan} className="font-semibold text-accent hover:underline">
+            Upload plan
+          </button>
+        </p>
+      )}
+      {completingPlan && <CompletePlanSteps key={completingPlan.id} token={token} plan={completingPlan} onClose={() => setCompletingPlanId(null)} />}
 
 
 
@@ -396,6 +643,13 @@ function PlanCard({
   sheetPending,
   sheetError,
   onExecutionSheetSaved,
+  onSyncExecutionSheet,
+  syncExecutionPending,
+  execSheetNotice,
+  onRefreshSheet,
+  refreshPending,
+  refreshError,
+  onCompleteDetails,
 }: {
   token: string;
   plan: Plan;
@@ -409,26 +663,25 @@ function PlanCard({
   onOpenSheet: (variant: "client" | "internal") => void;
   sheetPending: boolean;
   sheetError: unknown;
-  onExecutionSheetSaved: () => void;
+  onExecutionSheetSaved: (updated: Plan) => void;
+  onSyncExecutionSheet: () => void;
+  syncExecutionPending: boolean;
+  execSheetNotice?: { summary?: { attached: number; alreadyLinked: number; pending: number }; error?: string };
+  onRefreshSheet: () => void;
+  refreshPending: boolean;
+  refreshError: unknown;
+  onCompleteDetails: () => void;
 }) {
   const completeness = planCompleteness(plan);
-  const [executionSheetUrl, setExecutionSheetUrl] = useState(plan.executionSheetUrl ?? "");
-  // Two-step attach (user request, 11 Sep — "on clicking option of pasting
-  // link"): the card shows a plain "Attach" prompt by default; only clicking
-  // it (or "Change" once one's already attached) reveals the link input,
-  // rather than every card always showing an open text field.
+  // Two-step attach (user request, 11 Sep): the card shows a plain "Attach"
+  // prompt; clicking it (or "Change" once one's attached) opens the popup
+  // with the supported format, the template download and the link field
+  // (21 Sep — see ExecutionSheetModal).
   const [editingSheet, setEditingSheet] = useState(false);
   // Re-download of an already-generated client invoice (the popup is for
   // generating/reissuing; this is the quick path once the number exists).
   const downloadInvoiceMutation = useMutation({
     mutationFn: () => plansApi.downloadClientInvoicePdf(token, plan.id, plan.clientInvoiceNumber),
-  });
-  const saveExecutionSheetMutation = useMutation({
-    mutationFn: () => plansApi.update(token, plan.id, { executionSheetUrl: executionSheetUrl.trim() ? executionSheetUrl.trim() : null }),
-    onSuccess: () => {
-      setEditingSheet(false);
-      onExecutionSheetSaved();
-    },
   });
 
   return (
@@ -444,7 +697,24 @@ function PlanCard({
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">{plan.clientName}</p>
-            <p className="mt-0.5 line-clamp-2 text-[0.9375rem] font-semibold leading-snug">{plan.name}</p>
+            <p className="mt-0.5 line-clamp-2 text-[0.9375rem] font-semibold leading-snug">
+              {plan.name}
+              {plan.pitchGroupId && <span className="ml-1.5 text-[0.75rem] font-medium text-text-muted">· {plan.variantLabel}</span>}
+            </p>
+            {plan.createdBy?.name && <p className="mt-0.5 truncate text-[0.6875rem] text-text-faint">by {plan.createdBy.name}</p>}
+            {/* Uploaded from the user's own sheet (22 Sep) — the badge links
+                to that sheet; Refresh below re-reads it. */}
+            {plan.sourceSheetUrl && (
+              <a
+                href={plan.sourceSheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex items-center gap-1 rounded-full bg-blue-soft px-2 py-0.5 text-[0.6875rem] font-semibold text-blue hover:underline"
+                data-testid="plan-from-sheet-badge"
+              >
+                From sheet ↗
+              </a>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {/* DRAFT/APPROVED/REJECTED are valid pill statuses as-is;
@@ -538,6 +808,11 @@ function PlanCard({
               <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${completeness.percent}%` }} />
             </div>
             <p className="text-[0.6875rem] text-text-faint">Missing: {completeness.missing.join(", ")}</p>
+            {ownsPlan && completeness.steps.length > 0 && (
+              <button type="button" onClick={onCompleteDetails} className="w-fit text-[0.75rem] font-semibold text-accent hover:underline">
+                Complete details →
+              </button>
+            )}
           </div>
         ) : (
           <p className="flex items-center gap-1.5 rounded-md bg-accent-soft px-3 py-2 text-[0.6875rem] font-semibold text-accent">
@@ -609,67 +884,92 @@ function PlanCard({
             {plan.internalSheetUrl ? "Internal sheet ↗" : "Internal sheet"}
           </Button>
         </div>
-        {sheetError instanceof Error && (
-          <ErrorNotice message={sheetError instanceof ApiError ? sheetError.message : "Couldn't generate the sheet."} />
+        <GoogleAwareError error={sheetError} fallback="Couldn't generate the sheet." />
+        {/* Refresh from the uploaded sheet (22 Sep) — only while still a
+            draft (the server refuses afterwards) and only for whoever can
+            act on the plan. */}
+        {plan.sourceSheetUrl && ownsPlan && plan.status === "DRAFT" && (
+          <div className="flex flex-col gap-1.5">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={onRefreshSheet}
+              disabled={refreshPending}
+              title={plan.sourceSheetFetchedAt ? `Last fetched ${new Date(plan.sourceSheetFetchedAt).toLocaleString("en-IN")}. Re-reads the sheet: filled cells replace the plan's values, blank cells keep what's typed here.` : undefined}
+              data-testid="plan-refresh-sheet"
+            >
+              <RefreshIcon className={cn("h-3.5 w-3.5", refreshPending && "animate-spin")} />
+              {refreshPending ? "Refreshing…" : "Refresh from sheet"}
+            </Button>
+            {refreshError instanceof Error && <ErrorNotice message={refreshError instanceof ApiError ? refreshError.message : "Couldn't refresh from the sheet."} />}
+          </div>
         )}
 
         {/* Execution sheet attach (user request, 11 Sep — "execution sheet
             attachment option will [be] on plan card ... of 2 steps, on card
             showing attach execution sheet, on clicking option of pasting
-            link"): a plain prompt by default; clicking it reveals the link
-            input as a second step. Attached vs. not-attached read as two
+            link"): a plain prompt by default; clicking it opens the
+            ExecutionSheetModal popup as the second step. Attached vs. not-attached read as two
             visibly different states — a muted dashed prompt vs. a solid
             accent-tinted confirmation — not just differently-filled copies
             of the same box. */}
         <div className="border-t border-border pt-2.5">
-          {editingSheet ? (
-            <div className="flex flex-col gap-1.5">
-              <p className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Execution sheet link</p>
-              <div className="flex gap-1.5">
-                <div className="flex-1">
-                  <TextField
-                    type="url"
-                    aria-label={`${plan.name} execution sheet link`}
-                    value={executionSheetUrl}
-                    onChange={setExecutionSheetUrl}
-                    placeholder="https://docs.google.com/spreadsheets/…"
-                  />
-                </div>
-                <Button size="sm" onClick={() => saveExecutionSheetMutation.mutate()} disabled={saveExecutionSheetMutation.isPending}>
-                  {saveExecutionSheetMutation.isPending ? "Saving…" : "Save"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setExecutionSheetUrl(plan.executionSheetUrl ?? "");
-                    setEditingSheet(false);
-                  }}
-                  disabled={saveExecutionSheetMutation.isPending}
+          {editingSheet && <ExecutionSheetModal token={token} plan={plan} onClose={() => setEditingSheet(false)} onSaved={onExecutionSheetSaved} />}
+          {plan.executionSheetUrl ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2 rounded-md bg-accent-soft px-3 py-2">
+                <a
+                  href={plan.executionSheetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex min-w-0 items-center gap-1.5 text-[0.75rem] font-semibold text-blue hover:text-text"
                 >
-                  Cancel
-                </Button>
+                  <CheckCircleIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Execution sheet attached — Open ↗</span>
+                </a>
+                <button type="button" onClick={() => setEditingSheet(true)} className="shrink-0 text-[0.75rem] font-semibold text-text-faint hover:text-text">
+                  Change
+                </button>
               </div>
-              {saveExecutionSheetMutation.isError && (
-                <ErrorNotice
-                  message={saveExecutionSheetMutation.error instanceof ApiError ? saveExecutionSheetMutation.error.message : "Couldn't save that link."}
-                />
-              )}
-            </div>
-          ) : plan.executionSheetUrl ? (
-            <div className="flex items-center justify-between gap-2 rounded-md bg-accent-soft px-3 py-2">
-              <a
-                href={plan.executionSheetUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex min-w-0 items-center gap-1.5 text-[0.75rem] font-semibold text-blue hover:text-text"
-              >
-                <CheckCircleIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Execution sheet attached — Open ↗</span>
-              </a>
-              <button type="button" onClick={() => setEditingSheet(true)} className="shrink-0 text-[0.75rem] font-semibold text-text-faint hover:text-text">
-                Change
-              </button>
+              {/* Execution sheet → links (23 Sep): what the last read found,
+                  and a way to read it again after the sheet is updated. */}
+              <div className="flex flex-col gap-1.5 text-[0.72rem] text-text-faint" data-testid="execution-sheet-sync">
+                {plan.status !== "APPROVED" ? (
+                  <p>Posted links are read from this sheet once the plan is approved.</p>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p>
+                      {plan.executionSheetFetchedAt
+                        ? `Links read ${new Date(plan.executionSheetFetchedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}${(plan.executionSheetPending?.length ?? 0) > 0 ? ` · ${plan.executionSheetPending!.length} row${plan.executionSheetPending!.length === 1 ? "" : "s"} pending` : ""}`
+                        : "Not read yet."}
+                    </p>
+                    <Button variant="secondary" size="sm" className="h-7 rounded-full px-2.5 text-[0.72rem]" onClick={onSyncExecutionSheet} disabled={syncExecutionPending} data-testid="plan-sync-execution-sheet">
+                      <RefreshIcon className={cn("h-3 w-3", syncExecutionPending && "animate-spin")} />
+                      {syncExecutionPending ? "Reading…" : "Refresh links"}
+                    </Button>
+                  </div>
+                )}
+                {execSheetNotice?.summary && (
+                  <p className="text-text-muted" data-testid="execution-sheet-summary">
+                    {`Attached ${execSheetNotice.summary.attached} new link${execSheetNotice.summary.attached === 1 ? "" : "s"}`}
+                    {execSheetNotice.summary.alreadyLinked > 0 ? ` · ${execSheetNotice.summary.alreadyLinked} already linked` : ""}
+                    {execSheetNotice.summary.pending > 0 ? ` · ${execSheetNotice.summary.pending} pending` : ""}
+                  </p>
+                )}
+                {execSheetNotice?.error && <ErrorNotice message={execSheetNotice.error} />}
+                {plan.status === "APPROVED" && (plan.executionSheetPending?.length ?? 0) > 0 && (
+                  <ul className="flex flex-col gap-1 rounded-md border border-dashed border-border px-2.5 py-2" data-testid="execution-sheet-pending">
+                    {plan.executionSheetPending!.slice(0, 5).map((p) => (
+                      <li key={p.rowNumber} className="flex min-w-0 items-baseline gap-1.5">
+                        <span className="shrink-0 font-mono text-text-faint">Row {p.rowNumber}</span>
+                        <span className="truncate text-text-muted">{p.pageHandle ? `@${p.pageHandle}` : p.pageName ?? "—"}</span>
+                        <span className="min-w-0 truncate">· {p.reason}</span>
+                      </li>
+                    ))}
+                    {plan.executionSheetPending!.length > 5 && <li>+ {plan.executionSheetPending!.length - 5} more in the sheet</li>}
+                  </ul>
+                )}
+              </div>
             </div>
           ) : (
             <button

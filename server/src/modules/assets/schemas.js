@@ -44,6 +44,8 @@ export const importAssetRowSchema = z.object({
   handle: z.string().trim().min(1).max(120),
   ownerId: z.string().min(1),
   category: z.string().trim().max(40).nullable().optional(),
+  // The sheet's "Page Name" (22 Sep) — saved as the page's display name until Instagram's own replaces it.
+  pageName: z.string().trim().max(100).nullable().optional(),
   followers: z.number().int().min(0).nullable().optional(),
   rateCards: z.array(rateCardEntrySchema).max(20).optional(),
 });
