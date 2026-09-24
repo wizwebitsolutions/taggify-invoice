@@ -15,6 +15,7 @@ import {
   ClockIcon,
   ChevronDownIcon,
   CheckCircleIcon,
+  WalletIcon,
 } from "@/components/icons";
 
 type NavItem = {
@@ -91,6 +92,12 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Finance",
     items: [
       { key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] },
+      // Payouts + receivables for finance.pay holders (tasks.md #5, 23 Sep),
+      // keyed on the same gate the payables/receivables write actions on
+      // /invoices use, so a granted sub-role sees it too. CREATOR is a bare
+      // role here (24 Sep redesign): their own Pending/Paid view, scoped
+      // server-side to pages they own.
+      { key: "payments", label: "Payouts", icon: WalletIcon, href: "/payments", roles: ["ADMIN", "FINANCE", "CREATOR"], permissionKey: "finance.pay", bareRoles: ["CREATOR"] },
     ],
   },
   {

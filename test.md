@@ -134,7 +134,36 @@ costs, and the conventions for extending it. The short policy version lives in
   - `src/modules/jobs/financeExport.test.js` — the export is skipped with a
     specific, readable error (not a silent no-op, not a generic crash) when
     GitHub isn't configured, and pushes to a branch that is never `main`.
+  - `src/modules/payments/service.test.js` + `routes.test.js` — Payments
+    (tasks.md #5, 23 Sep; list-first redesign 24 Sep): payout totals (GST
+    18% and TDS 1/2/10% both off the subtotal), eligibility shared with
+    invoices (a link is on an Invoice OR a Payout, never both), draft
+    cancel, receipt confirm as a DRAFT-guarded write (a lost race is a 409)
+    with optional paid-on date (never future) and UTR; the Pending list's
+    where-clause (eligible status, not invoiced, not on any payout incl.
+    drafts; vendor / page / page-handle search / posted-or-submitted date
+    range); the Paid list filters and sorts by paid date; the creator's
+    `/me/pending` and `/me/payouts` force the owner/creator to the caller
+    whatever the query says, and `/pending` is finance.pay only.
 - **`client/tests/e2e/`** — Playwright. What's covered so far:
+  - `payments-payouts.spec.ts` — Payments redesign (24 Sep): the Internal /
+    Client receivables toggle; Pending grouped by vendor; one-vendor-per-
+    payout selection; the one-screen pay sheet (GST + TDS preview, receipt
+    required, paid-on/UTR sent) → links leave Pending and show under Paid
+    with their links; a failed receipt upload cancels the just-created
+    draft; vendor/page/month filters reach the request; a row opens its
+    link details; a receipt-less draft can be finished from its banner;
+    emptying the pay sheet doesn't wedge the page; a creator gets their own
+    Pending/Paid view (no vendor filter, never the admin endpoints); a
+    Team member gets the "restricted" message. Also (tasks.md 24 Sep #1 +
+    follow-ups): unfiltered Pending lists page owners only, each opening
+    to its links (a vendor/page filter opens them straight away); no Views
+    column; the page-owner filter is a searchable dropdown; page search
+    drops a typed "@"; "Select [N] of M" (typed or −/+) picks the vendor's
+    first N links and clamps to M; Pay sits on the vendor's own row; the
+    summary tiles (pending total, paid/TDS this month — the Paid tile jumps
+    to Paid filtered to this month); the receipt can be dragged onto the
+    pay sheet.
   - `fixtures.ts` — shared test helpers, see below.
   - `sub-admin-creation.spec.ts` — the People page's access editor
     (`components/users/access-editor.tsx`, 23 Sep): checking a section
@@ -327,4 +356,8 @@ guards them:
 |---|---|---|
 | Mobile "More" sheet's "Notifications" row navigated to `/profile` instead of showing notifications (copy/paste leftover) | `client/components/layout/more-sheet.tsx` | `nav-links.spec.ts` → "More sheet 'Notifications' row shows notifications, not the profile page" |
 | Login page's password `<input>` and its "Show password" toggle button both matched an accessible-name lookup for "Password" (ambiguous label) | `client/app/login/page.tsx` (test-side fix: match label text exactly) | `login.spec.ts` → "renders the sign-in form" |
+| `GET /links?ownerId=` overwrote a creator's own-pages scope, so a creator could read another creator's links | `server/src/modules/links/service.js` (`listLinks` — ownerId is now ANDed) | Independent review of the Payments redesign (24 Sep) → `links/service.test.js` "a creator passing someone else's ownerId…" |
+| A link already paid out by Finance could still be put on a creator invoice (billed twice) — `assertLinksInvoiceable` never checked `payoutItem` | `server/src/modules/invoices/service.js` | Independent review (24 Sep) → `invoices/service.test.js` "rejects a link Finance already paid out" |
+| Removing the last link inside the pay sheet unmounted it but left the page stuck in "paying" (bar hidden, next tick reopened the sheet) | `client/components/payments/admin-payouts.tsx` | Independent review (24 Sep) → `payments-payouts.spec.ts` "removing every link in the pay sheet…" |
+| Inventory "Create page" → "+ New user" created the account immediately and showed its password mid-form; "Create page" then closed the modal (password gone), an abandoned form left an orphan account, and the created-state row (password box + name/phone select + button) crowded the 420px modal | `client/app/inventory/page.tsx` (`NewAssetModal`, 24 Sep: Existing/New account toggle, account created with the page on one submit, password on a success screen with Copy) | User report (24 Sep) → `inventory-create-page.spec.ts` (new-account flow, abandon creates nothing, page-fails-after-account retry, no overflow at 360px) |
 | "New invoice" preview step's scrollable link list got squeezed to near-zero visible height on a short viewport — GST toggle + totals card were added below it without reserving the list any minimum space | `client/app/invoices/page.tsx` (`NewInvoiceModal`) | Driving the real flow in an actual (short) browser window — the DOM/data was correct, only the layout was broken, which no unit test would have caught. Fixed with a `min-h-[160px]` on the list container. |

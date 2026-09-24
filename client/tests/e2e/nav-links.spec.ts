@@ -41,6 +41,8 @@ test.describe("desktop sidebar navigation", () => {
     { label: "People", href: "/users", role: "ADMIN" },
     { label: "Team", href: "/team", role: "CREATOR" },
     { label: "Job runs", href: "/job-runs", role: "ADMIN" },
+    // Admin/Finance-only payouts + receivables (tasks.md #5, 23 Sep).
+    { label: "Payouts", href: "/payments", role: "ADMIN" },
   ];
 
   for (const { label, href, role } of SIDEBAR_LINKS) {
@@ -78,19 +80,23 @@ test.describe("desktop sidebar navigation", () => {
     // account holds it by baseline (it can already run the finance exports
     // server-side), so it's no longer bare-Admin-only.
     const JOB_RUNS = ["Job runs"];
+    // Payments (tasks.md #5, 23 Sep) is keyed on finance.pay — ADMIN and a
+    // plain FINANCE account hold it by baseline. Since 24 Sep a CREATOR sees
+    // it too (bare role: their own Pending/Paid view); nobody else does.
+    const PAYMENTS = ["Payouts"];
 
     const CASES: { role: MockRole; visible: string[]; hidden: string[] }[] = [
-      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...PEOPLE_ONLY, ...PLANS, ...JOB_RUNS], hidden: CREATOR_ONLY },
-      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY], hidden: [...PEOPLE_ONLY, ...PLANS, ...JOB_RUNS] },
-      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...JOB_RUNS], hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...PLANS] },
-      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...PLANS, ...JOB_RUNS] },
+      { role: "ADMIN", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...PEOPLE_ONLY, ...PLANS, ...JOB_RUNS, ...PAYMENTS], hidden: CREATOR_ONLY },
+      { role: "CREATOR", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...CREATOR_ONLY, ...PAYMENTS], hidden: [...PEOPLE_ONLY, ...PLANS, ...JOB_RUNS] },
+      { role: "FINANCE", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES, ...JOB_RUNS, ...PAYMENTS], hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...PLANS] },
+      { role: "TEAM_MEMBER", visible: [...ALWAYS, ...CAMPAIGNS_AND_INVOICES], hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...PLANS, ...JOB_RUNS, ...PAYMENTS] },
       // 12 Sep — Plan Maker now sees Campaigns + Invoices too (their own
       // plans' campaigns only, scoped server-side) so they can generate
       // per-creator invoices from a campaign page.
       {
         role: "PLAN_MAKER",
         visible: [...ALWAYS, ...PLANS, ...CAMPAIGNS_AND_INVOICES],
-        hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...JOB_RUNS],
+        hidden: [...PEOPLE_ONLY, ...CREATOR_ONLY, ...JOB_RUNS, ...PAYMENTS],
       },
     ];
 
@@ -237,6 +243,8 @@ test.describe("mobile bottom nav + More sheet", () => {
     { label: "Team", href: "/team", role: "CREATOR" },
     { label: "People", href: "/users", role: "ADMIN" },
     { label: "Job runs", href: "/job-runs", role: "ADMIN" },
+    // Admin/Finance-only payouts + receivables (tasks.md #5, 23 Sep).
+    { label: "Payouts", href: "/payments", role: "ADMIN" },
   ];
 
   for (const { label, href, role } of MORE_SHEET_ROWS) {
@@ -263,6 +271,8 @@ test.describe("mobile bottom nav + More sheet", () => {
     await page.getByRole("button", { name: "More" }).click();
 
     await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
+    // A creator's own payouts view (24 Sep redesign).
+    await expect(page.getByRole("link", { name: "Payouts", exact: true })).toBeVisible();
     for (const label of ["People", "Job runs", "Plans"]) {
       await expect(page.getByRole("link", { name: label, exact: true }), `CREATOR should not see "${label}"`).toHaveCount(0);
     }

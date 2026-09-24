@@ -428,6 +428,8 @@ export interface Link {
   screenshot?: { id: string; publicId: string; approved: boolean | null; url: string | null } | null;
   /** Present (on GET /links) when the link already sits on an invoice — even if its status hasn't caught up. */
   invoiceItem?: { invoiceId: string; invoice?: { invoiceNumber: string; status: Invoice["status"] } } | null;
+  /** Present when the link already sits on an admin-initiated Payout (tasks.md #5, 23 Sep) — the mirror of invoiceItem for that mechanism. */
+  payoutItem?: { payoutId: string } | null;
   postSnapshots?: PostSnapshot[];
 }
 
@@ -505,7 +507,7 @@ export interface ClientInvoice {
     createdById: string;
     createdBy?: { id: string; name: string | null } | null;
     campaign?: { id: string; title: string; brandName: string } | null;
-    /** The real (non-Proforma) invoice document, attached from the Plan page. */
+    /** The real (non-Proforma) invoice document, attached from the Plan page or the Payments tab (tasks.md #5, 23 Sep). */
     invoiceAttachment?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
   } | null;
   issuedBy?: { id: string; name: string | null; role: Role } | null;
@@ -896,18 +898,24 @@ export const links = {
     params: {
       status?: string;
       assetId?: string;
+      // "Vendor" filter (tasks.md #5, 23 Sep — Payments tab): the page's owner.
+      ownerId?: string;
       campaignId?: string;
       from?: string;
       to?: string;
       page?: number;
       pageSize?: number;
       unbilled?: boolean;
+      // Payout-eligible list (tasks.md #5, 23 Sep): not already on a payout or an invoice.
+      unpaid?: boolean;
     } = {}
   ) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set("status", params.status);
     if (params.unbilled) qs.set("unbilled", "true");
+    if (params.unpaid) qs.set("unpaid", "true");
     if (params.assetId) qs.set("assetId", params.assetId);
+    if (params.ownerId) qs.set("ownerId", params.ownerId);
     if (params.campaignId) qs.set("campaignId", params.campaignId);
     if (params.from) qs.set("from", params.from);
     if (params.to) qs.set("to", params.to);
@@ -1062,6 +1070,97 @@ export const invoices = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+};
+
+/**
+ * Admin/Finance-initiated payout to a creator/vendor (tasks.md #5, 23 Sep —
+ * the Payments tab's internal-costing side). Distinct from Invoice, which is
+ * the creator's own self-raised bill: here Finance picks the links and pays.
+ * DRAFT means the links are locked but no receipt has been attached yet;
+ * confirming the receipt upload is what flips it to PAID.
+ */
+export interface Payout {
+  id: string;
+  creatorId: string;
+  subtotal: string;
+  isGstInvoice: boolean;
+  gstAmount: string;
+  tdsPercent: string | null;
+  tdsAmount: string;
+  netAmount: string; // subtotal + gstAmount - tdsAmount, what actually gets paid
+  status: "DRAFT" | "PAID" | "CANCELLED";
+  paidAt: string | null;
+  /** Bank reference typed when marking paid (24 Sep redesign) — optional. */
+  utr?: string | null;
+  createdAt: string;
+  creator?: { id: string; name: string | null; phoneNumber: string } | null;
+  createdBy?: { id: string; name: string | null } | null;
+  markedPaidBy?: { id: string; name: string | null } | null;
+  receipt?: { name: string; url: string | null; uploadedAt: string | null } | null;
+  items?: { id: string; amount: string; link: PayoutItemLink }[];
+}
+
+/** One link as a payout carries it — enough for the Paid tab's expanded row. */
+export type PayoutItemLink = Pick<Link, "id" | "url" | "format" | "assetId"> &
+  Partial<Pick<Link, "cost" | "status" | "postedAt" | "createdAt" | "campaignId" | "postSnapshots">> & {
+    asset?: { id: string; handle: string };
+    campaign?: { id: string; title: string; brandName: string };
+  };
+
+/** A payable link on the Payments tab's Pending list (24 Sep redesign) — carries its page owner so the list can group by vendor. */
+export type PendingLink = Link & {
+  asset: { id: string; handle: string; ownerId: string; owner?: PageOwner | null };
+  campaign?: Campaign;
+};
+
+/** Pending/Paid tab filters (24 Sep redesign). from/to are ISO instants. */
+export interface PaymentsFilters {
+  ownerId?: string;
+  assetId?: string;
+  q?: string;
+  from?: string;
+  to?: string;
+}
+
+function paymentsQuery(params: PaymentsFilters & { status?: string; page?: number; pageSize?: number }) {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") qs.set(key, String(value));
+  }
+  return qs.toString();
+}
+
+// ── Payments tab (tasks.md #5, 23 Sep; redesigned 24 Sep) ───────────
+// Everything but the two `my*` reads is admin/finance (finance.pay) only.
+export const payments = {
+  listPayouts: (
+    token: string,
+    params: { creatorId?: string; assetId?: string; q?: string; status?: Payout["status"]; from?: string; to?: string; page?: number; pageSize?: number } = {}
+  ) => request<Paginated<Payout>>(`/payments/payouts?${paymentsQuery({ page: 1, pageSize: 100, ...params })}`, { token }),
+  /** Every vendor's payable links — the Pending tab. */
+  listPending: (token: string, filters: PaymentsFilters = {}) =>
+    request<{ items: PendingLink[]; total: number }>(`/payments/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
+  /** Creator's own payable links (server forces the owner to the caller). */
+  listMyPending: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) =>
+    request<{ items: PendingLink[]; total: number }>(`/payments/me/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
+  /** Creator's own PAID payouts. */
+  listMyPayouts: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) =>
+    request<Paginated<Payout>>(`/payments/me/payouts?${paymentsQuery({ page: 1, pageSize: 100, ...filters })}`, { token }),
+  createPayout: (token: string, body: { creatorId: string; linkIds: string[]; isGstInvoice: boolean; tdsPercent: 1 | 2 | 10 | null }) =>
+    request<Payout>("/payments/payouts", { method: "POST", token, body }),
+  cancelPayout: (token: string, payoutId: string) => request<void>(`/payments/payouts/${payoutId}`, { method: "DELETE", token }),
+  // Same two-step direct-to-Cloudinary upload as every other attachment here.
+  requestReceiptUpload: (token: string, payoutId: string) =>
+    request<{ uploadUrl: string; apiKey: string; timestamp: number; signature: string; publicId: string }>(`/payments/payouts/${payoutId}/receipt-upload`, {
+      method: "GET",
+      token,
+    }),
+  confirmReceipt: (token: string, payoutId: string, publicId: string, fileName: string, extra: { paidOn?: string; utr?: string } = {}) =>
+    request<Payout>(`/payments/payouts/${payoutId}/receipt`, {
+      method: "POST",
+      token,
+      body: { publicId, fileName, ...(extra.paidOn ? { paidOn: extra.paidOn } : {}), ...(extra.utr?.trim() ? { utr: extra.utr.trim() } : {}) },
+    }),
 };
 
 // ── Notifications ───────────────────────────────────────────────────

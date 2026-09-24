@@ -102,7 +102,8 @@ export async function mockApi(page: Page) {
     // LinkDetailPanel's timeline query this {items, total, ...} object
     // instead, which its `.map()` then threw on — no test happened to open
     // a link's detail panel under plain mockApi() until campaign-detail.spec.ts did.
-    if (path === "/api/links" || path === "/api/invoices") {
+    const PAGINATED = ["/api/links", "/api/invoices", "/api/payments/payouts", "/api/payments/pending", "/api/payments/me/pending", "/api/payments/me/payouts"];
+    if (PAGINATED.includes(path)) {
       return route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 100 } });
     }
     // Everything else the app reads on nav destinations (/api/campaigns,

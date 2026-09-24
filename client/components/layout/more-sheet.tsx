@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Sheet } from "@/components/ui/sheet";
 import { AVATAR_TONE, canSeeNavKey, type SidebarUser } from "@/components/layout/sidebar";
-import { BellIcon, TeamIcon, ClockIcon, AssetIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
+import { BellIcon, TeamIcon, ClockIcon, AssetIcon, WalletIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { notifications as notificationsApi } from "@/lib/api-client";
@@ -151,6 +151,10 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
       )}
       {canSeeNavKey("job-runs", authUser) && (
         <MenuRow href="/job-runs" onClose={onClose} icon={<ClockIcon className="h-4 w-4" />} label="Job runs" />
+      )}
+      {/* Payouts + receivables for finance.pay; a creator's own payouts (24 Sep). */}
+      {canSeeNavKey("payments", authUser) && (
+        <MenuRow href="/payments" onClose={onClose} icon={<WalletIcon className="h-4 w-4" />} label="Payouts" />
       )}
 
       <div className="my-1 h-px bg-border" />
