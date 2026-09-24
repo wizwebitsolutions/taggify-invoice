@@ -29,6 +29,10 @@ export function buildPlanInvoiceAttachmentKey(planId) {
   return `plan-invoice-attachments/${planId}/${randomUUID()}`;
 }
 
+/** The proof-of-payment receipt Finance attaches to a Payout (tasks.md #5, 23 Sep) — same one-folder-per-record layout as the others. */
+export function buildPayoutReceiptKey(payoutId) {
+  return `payout-receipts/${payoutId}/${randomUUID()}`;
+}
 
 /**
  * Returns a short-lived signed upload payload so the client uploads the

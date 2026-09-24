@@ -66,6 +66,19 @@ enum PaymentStatus {
   CANCELLED
 }
 
+// Admin/Finance-initiated payout to a creator/vendor (tasks.md, 23 Sep —
+// "Payments" tab, internal costing side) — distinct from Invoice, which is
+// the creator's own self-raised bill (13 Sep decision: "only the creator
+// raises their own invoice"). A Payout is a push, not a pull: Finance picks
+// the links and pays; it never goes through RAISED/APPROVED vetting. DRAFT
+// means the links are locked (via PayoutItem) but no receipt has been
+// attached yet; PAID is set the moment the receipt upload is confirmed.
+enum PayoutStatus {
+  DRAFT
+  PAID
+  CANCELLED
+}
+
 model User {
   id                   String    @id @default(cuid())
   phoneNumber          String    @unique
@@ -123,6 +136,9 @@ model User {
   issuedClientInvoices      ClientInvoice[]      @relation("IssuedClientInvoices")
   permissionChangesMade     PermissionAuditLog[] @relation("PermissionChangeActor")
   permissionChangesReceived PermissionAuditLog[] @relation("PermissionChangeTarget")
+  payouts                   Payout[]             @relation("PayoutCreator")
+  createdPayouts            Payout[]             @relation("PayoutCreatedBy")
+  markedPaidPayouts         Payout[]             @relation("PayoutMarkedPaidBy")
 }
 
 // Audit trail for sub-admin permission grants/edits (newTask.md, 8 Sep
@@ -395,6 +411,7 @@ model Link {
   screenshot         Screenshot?
   postSnapshots      PostSnapshot[]
   invoiceItem        InvoiceItem?
+  payoutItem         PayoutItem?
   statusEvents       LinkStatusEvent[]
   costRevisions      LinkCostRevision[]
   // Back-reference for CampaignAssignment.linkId — set only when this Link
@@ -541,6 +558,47 @@ model InvoiceItem {
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   link    Link    @relation(fields: [linkId], references: [id])
+}
+
+model Payout {
+  id                String       @id @default(cuid())
+  creatorId         String // payee — Asset.ownerId of every link on it, the "vendor"
+  subtotal          Decimal      @db.Decimal(12, 2)
+  isGstInvoice      Boolean      @default(false)
+  gstAmount         Decimal      @default(0) @db.Decimal(12, 2) // 18% of subtotal when isGstInvoice, else 0
+  tdsPercent        Decimal?     @db.Decimal(5, 2) // 1 | 2 | 10, null = no TDS withheld
+  tdsAmount         Decimal      @default(0) @db.Decimal(12, 2)
+  netAmount         Decimal      @db.Decimal(12, 2) // subtotal + gstAmount - tdsAmount, what actually gets paid
+  status            PayoutStatus @default(DRAFT)
+  createdById       String
+  paidAt            DateTime?
+  markedPaidById    String?
+  receiptPublicId   String?
+  receiptName       String?
+  receiptUploadedAt DateTime?
+  // Bank transfer reference Finance types in when marking paid (24 Sep
+  // Payments redesign) — optional, shown to the creator beside the receipt.
+  utr               String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  creator      User         @relation("PayoutCreator", fields: [creatorId], references: [id])
+  createdBy    User         @relation("PayoutCreatedBy", fields: [createdById], references: [id])
+  markedPaidBy User?        @relation("PayoutMarkedPaidBy", fields: [markedPaidById], references: [id])
+  items        PayoutItem[]
+
+  @@index([creatorId])
+  @@index([status])
+}
+
+model PayoutItem {
+  id       String  @id @default(cuid())
+  payoutId String
+  linkId   String  @unique // one payout per link, mirrors InvoiceItem — the lock that keeps a link from being paid out twice or paid out and creator-invoiced both
+  amount   Decimal @db.Decimal(12, 2)
+
+  payout Payout @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  link   Link   @relation(fields: [linkId], references: [id])
 }
 
 model Notification {

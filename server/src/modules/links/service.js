@@ -200,10 +200,29 @@ export async function listLinks(user, filters) {
     where.campaignId = seesAll || user.role === "PLAN_MAKER" ? { in: await phaseRowIds(filters.campaignId) } : filters.campaignId;
   }
   if (filters.assetId) where.assetId = filters.assetId;
+  // "Vendor" (tasks.md #5, 23 Sep — Payments tab's page/vendor filter): the
+  // user who owns the page, i.e. Asset.ownerId.
+  // ANDed, not merged into where.asset: for a caller without links.view,
+  // where.asset already holds their own-pages scope ({ ownerId: user.id }),
+  // and overwriting it let a creator read any other creator's links by
+  // passing ?ownerId= (caught in review, 24 Sep).
+  if (filters.ownerId) where.AND = [...(where.AND ?? []), { asset: { ownerId: filters.ownerId } }];
   // Not on any invoice (22 Sep) — the invoice popup's "ready" list used to
   // go by status alone and could offer a drifted link that then failed on
-  // submit with "already on invoice INV-…".
-  if (filters.unbilled) where.invoiceItem = null;
+  // submit with "already on invoice INV-…". Since the Payments tab's admin
+  // payout is a second way to bill a link, "unbilled" now also excludes a
+  // link already on a payout — a link can be billed via a creator Invoice OR
+  // an admin Payout, never both.
+  if (filters.unbilled) {
+    where.invoiceItem = null;
+    where.payoutItem = null;
+  }
+  // Payout eligibility mirrors "unbilled" from the other side: not on any
+  // payout, AND not already on an invoice either (tasks.md #5).
+  if (filters.unpaid) {
+    where.payoutItem = null;
+    where.invoiceItem = null;
+  }
   if (filters.from || filters.to) {
     where.createdAt = {};
     if (filters.from) where.createdAt.gte = filters.from;
@@ -225,6 +244,7 @@ export async function listLinks(user, filters) {
         asset: { include: { owner: { select: { id: true, name: true, phoneNumber: true } } } },
         screenshot: true,
         invoiceItem: { select: { invoiceId: true, invoice: { select: { invoiceNumber: true, status: true } } } },
+        payoutItem: { select: { payoutId: true } },
         postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 },
       },
       orderBy: { createdAt: "desc" },

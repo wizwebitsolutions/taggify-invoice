@@ -99,6 +99,16 @@ describe("bulkCreateInvoice — eligibility (screenshot and insights are both op
     await expect(bulkCreateInvoice(creator, { linkIds: ["l1"], dueInDays: 15, isGstInvoice: false })).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("regression (24 Sep review): rejects a link Finance already paid out — a link is billed via an Invoice OR a Payout, never both", async () => {
+    mockPrisma.link.findMany.mockResolvedValue([link({ id: "l1", url: "https://ig/p/7", payoutItem: { payoutId: "payout-1" } })]);
+
+    await expect(bulkCreateInvoice(creator, { linkIds: ["l1"], dueInDays: 15, isGstInvoice: false })).rejects.toMatchObject({
+      code: "INELIGIBLE_LINKS",
+      message: expect.stringContaining("https://ig/p/7 (already paid out by Taggify)"),
+    });
+    expect(mockPrisma.invoice.create).not.toHaveBeenCalled();
+  });
+
   it("a CREATOR can only raise an invoice for their own pages", async () => {
     mockPrisma.link.findMany.mockResolvedValue([link({ id: "l1", asset: { ownerId: "creator-2" } })]);
 

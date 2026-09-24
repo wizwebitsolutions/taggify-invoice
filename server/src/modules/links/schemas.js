@@ -24,11 +24,20 @@ export const listLinksQuerySchema = z.object({
   status: z.string().optional(),
   campaignId: z.string().optional(),
   assetId: z.string().optional(),
+  // "Vendor" filter (tasks.md #5, 23 Sep — Payments tab): the page's owner.
+  ownerId: z.string().optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   // "Ready to invoice" lists (22 Sep): only links not already on an invoice,
   // whatever their status says — status and InvoiceItem can drift apart.
+  // Also excludes links already on a payout (23 Sep) — an admin payout is a
+  // second way to bill a link, so this stays the one "still billable" flag.
   unbilled: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
+  // Payout-eligible lists (tasks.md #5, 23 Sep): not already on a payout or an invoice.
+  unpaid: z
     .string()
     .optional()
     .transform((v) => v === "true" || v === "1"),

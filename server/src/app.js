@@ -15,6 +15,7 @@ import campaignsRoutes from "./modules/campaigns/routes.js";
 import linksRoutes from "./modules/links/routes.js";
 import screenshotsRoutes from "./modules/screenshots/routes.js";
 import invoicesRoutes from "./modules/invoices/routes.js";
+import paymentsRoutes from "./modules/payments/routes.js";
 import billingRoutes from "./modules/billing/routes.js";
 import notificationsRoutes from "./modules/notifications/routes.js";
 import adminRoutes from "./modules/admin/routes.js";
@@ -60,6 +61,7 @@ apiRouter.use("/links", linksRoutes);
 // nested under /links/:linkId/screenshot — issuing upload URLs and confirming uploads
 apiRouter.use("/links/:linkId/screenshot", screenshotsRoutes);
 apiRouter.use("/invoices", invoicesRoutes);
+apiRouter.use("/payments", paymentsRoutes);
 apiRouter.use("/billing-profiles", billingRoutes);
 apiRouter.use("/notifications", notificationsRoutes);
 apiRouter.use("/admin", adminRoutes);

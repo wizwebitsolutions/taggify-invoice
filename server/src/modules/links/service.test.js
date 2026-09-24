@@ -32,17 +32,49 @@ beforeEach(() => {
   }));
 });
 
-describe("listLinks — unbilled filter (22 Sep)", () => {
-  it("unbilled=true restricts to links with no invoice item; without it the where is status-only", async () => {
+describe("listLinks — unbilled filter (22 Sep, broadened 23 Sep for Payouts)", () => {
+  it("unbilled=true restricts to links with no invoice item and no payout item; without it the where is status-only", async () => {
     mockPrisma.$transaction.mockResolvedValueOnce([[], 0]).mockResolvedValueOnce([[], 0]);
     mockPrisma.link.findMany = vi.fn().mockReturnValue("findMany");
     mockPrisma.link.count = vi.fn().mockReturnValue("count");
 
     await listLinks(admin, { status: "SUBMITTED,INSIGHTS_APPROVED", unbilled: true, page: 1, pageSize: 100 });
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ status: { in: ["SUBMITTED", "INSIGHTS_APPROVED"] }, invoiceItem: null });
+    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ status: { in: ["SUBMITTED", "INSIGHTS_APPROVED"] }, invoiceItem: null, payoutItem: null });
 
     await listLinks(admin, { status: "SUBMITTED", unbilled: false, page: 1, pageSize: 100 });
     expect(mockPrisma.link.findMany.mock.calls[1][0].where).toEqual({ status: "SUBMITTED" });
+  });
+});
+
+describe("listLinks — Payments tab filters (tasks.md #5, 23 Sep)", () => {
+  it("ownerId scopes to a vendor's pages", async () => {
+    mockPrisma.$transaction.mockResolvedValueOnce([[], 0]);
+    mockPrisma.link.findMany = vi.fn().mockReturnValue("findMany");
+    mockPrisma.link.count = vi.fn().mockReturnValue("count");
+
+    await listLinks(admin, { ownerId: "creator-1", page: 1, pageSize: 100 });
+    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ AND: [{ asset: { ownerId: "creator-1" } }] });
+  });
+
+  it("regression (24 Sep review): a creator passing someone else's ownerId still only gets their own pages' links", async () => {
+    mockPrisma.$transaction.mockResolvedValueOnce([[], 0]);
+    mockPrisma.link.findMany = vi.fn().mockReturnValue("findMany");
+    mockPrisma.link.count = vi.fn().mockReturnValue("count");
+
+    await listLinks({ id: "creator-1", role: "CREATOR" }, { ownerId: "creator-2", page: 1, pageSize: 100 });
+    const { where } = mockPrisma.link.findMany.mock.calls[0][0];
+    // Own-pages scope is intact, and the requested owner is ANDed on top — so the result is empty, never creator-2's links.
+    expect(where.asset).toEqual({ ownerId: "creator-1" });
+    expect(where.AND).toEqual([{ asset: { ownerId: "creator-2" } }]);
+  });
+
+  it("unpaid=true excludes links already on a payout or an invoice", async () => {
+    mockPrisma.$transaction.mockResolvedValueOnce([[], 0]);
+    mockPrisma.link.findMany = vi.fn().mockReturnValue("findMany");
+    mockPrisma.link.count = vi.fn().mockReturnValue("count");
+
+    await listLinks(admin, { unpaid: true, page: 1, pageSize: 100 });
+    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ payoutItem: null, invoiceItem: null });
   });
 });
 

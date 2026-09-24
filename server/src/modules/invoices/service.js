@@ -111,13 +111,24 @@ export async function bulkCreateInvoice(actor, { linkIds, dueInDays, isGstInvoic
  * that's what a person can actually find on screen.
  */
 function assertLinksInvoiceable(links) {
-  const ineligible = links.filter((l) => !INVOICEABLE_STATUSES.has(l.status) || l.invoiceItem);
+  // payoutItem (24 Sep): a payout doesn't change Link.status, so without this
+  // a link Finance already paid out could still be put on a creator invoice
+  // and billed twice — a link goes on an Invoice OR a Payout, never both.
+  const ineligible = links.filter((l) => !INVOICEABLE_STATUSES.has(l.status) || l.invoiceItem || l.payoutItem);
   if (ineligible.length === 0) return;
-  const describe = (l) => (l.invoiceItem ? `${l.url} (already on invoice ${l.invoiceItem.invoice?.invoiceNumber ?? l.invoiceItem.invoiceId})` : `${l.url} (${l.status.toLowerCase().replace(/_/g, " ")})`);
+  const describe = (l) => {
+    if (l.invoiceItem) return `${l.url} (already on invoice ${l.invoiceItem.invoice?.invoiceNumber ?? l.invoiceItem.invoiceId})`;
+    if (l.payoutItem) return `${l.url} (already paid out by Taggify)`;
+    return `${l.url} (${l.status.toLowerCase().replace(/_/g, " ")})`;
+  };
   throw new ApiError(400, "INELIGIBLE_LINKS", `Not eligible for invoicing: ${ineligible.map(describe).join("; ")}`);
 }
 
-const LINK_INCLUDE_FOR_INVOICING = { asset: true, invoiceItem: { include: { invoice: { select: { invoiceNumber: true, status: true } } } } };
+const LINK_INCLUDE_FOR_INVOICING = {
+  asset: true,
+  invoiceItem: { include: { invoice: { select: { invoiceNumber: true, status: true } } } },
+  payoutItem: { select: { payoutId: true } },
+};
 
 function newInvoiceNumber() {
   return `INV-${Date.now()}-${nanoid(6).toUpperCase()}`;
