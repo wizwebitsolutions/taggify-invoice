@@ -32,10 +32,11 @@ services:
       # separate processes there.)
       - key: NEXT_PUBLIC_API_URL
         value: /api
+      # DigitalOcean Managed Postgres (blr1) since 24 Sep — the Render free
+      # DB (invoice-taggify-db) expired. Set in the Render dashboard, never
+      # committed: postgresql://…@…ondigitalocean.com:25060/defaultdb?sslmode=require&connection_limit=5
       - key: DATABASE_URL
-        fromDatabase:
-          name: invoice-taggify-db
-          property: connectionString
+        sync: false
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
@@ -58,6 +59,31 @@ services:
         value: apify~instagram-scraper
       - key: APIFY_REEL_ACTOR_ID
         value: data-slayer/instagram-post-details
+      # Email 2FA (Resend). Without RESEND_API_KEY every login of a user with a
+      # verified email fails with 503 EMAIL_NOT_CONFIGURED in production
+      # (server/src/lib/mailer.js) — the login OTP can't be sent.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: "Taggify <noreply@taggify.in>"
+      # Google Sheets — finance export + per-plan sheets (service account),
+      # and the OAuth client that creates per-plan spreadsheets.
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
+        sync: false
+      - key: GOOGLE_FINANCE_SPREADSHEET_ID
+        sync: false
+      - key: GOOGLE_PLANS_SPREADSHEET_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      # https://<live domain>/api/integrations/google/callback — must also be
+      # listed on the OAuth client in Google Cloud Console.
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
       # Cron
       - key: ENABLE_CRON
         value: "true"
@@ -85,7 +111,4 @@ services:
       - key: GITHUB_FINANCE_PATH
         value: finance-exports/finance-data.xlsx
 
-databases:
-  - name: invoice-taggify-db
-    plan: free
-    region: oregon
+# No Render-managed database any more (see DATABASE_URL above).

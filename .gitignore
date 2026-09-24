@@ -1,1 +1,10 @@
 credentials.md
+# Secrets and build/test output (24 Sep)
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.log
+client/out/
+node_modules/
+test-results/
