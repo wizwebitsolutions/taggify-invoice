@@ -315,10 +315,9 @@ function PagesSection({
           isAdmin={isAdmin}
           existingCategories={categories.filter((c) => c.label !== "All").map((c) => c.label)}
           onClose={() => setShowForm(false)}
-          onCreated={() => {
-            setShowForm(false);
-            queryClient.invalidateQueries({ queryKey: ["assets"] });
-          }}
+          // The modal closes itself — after the success screen when a new
+          // account was created (its one-time password is shown there).
+          onCreated={() => queryClient.invalidateQueries({ queryKey: ["assets"] })}
         />
       )}
     </>
@@ -684,43 +683,119 @@ function NewAssetModal({
   const ownersQuery = useQuery({ queryKey: ["assets", "owners"], queryFn: () => assetsApi.owners(token), enabled: isAdmin });
   const owners = ownersQuery.data ?? [];
 
-  // Create a new creator account right here (user request, 23 Sep — "option
-  // of creating new user") instead of a trip to the Users page first. Same
-  // signup call the Users page uses; the generated password is shown once
-  // and stays visible while this modal is open so it can be copied before
-  // the page itself is submitted.
-  const [showNewUser, setShowNewUser] = useState(false);
+  // Account for the page (admin only): an existing creator, or a brand-new
+  // one. 24 Sep redesign: a new account is NOT created on its own any more —
+  // it's created together with the page on the one "Create page" submit, and
+  // its one-time password is shown on the success screen afterwards (with a
+  // Copy button), never mid-form. That way an abandoned form leaves no orphan
+  // account behind, and the password can't vanish when the modal closes.
+  const [accountMode, setAccountMode] = useState<"existing" | "new">("existing");
   const [newUserName, setNewUserName] = useState("");
   const [newUserPhone, setNewUserPhone] = useState("");
-  const [newUserPhoneBlurred, setNewUserPhoneBlurred] = useState(false);
   const newUserPhoneDigits = newUserPhone.replace(/\D/g, "");
   const newUserPhoneValid = newUserPhoneDigits.length === 10;
-  const createUserMutation = useMutation({
-    mutationFn: () => authApi.signup(token, { phoneNumber: `+91${newUserPhoneDigits}`, name: newUserName || undefined, role: "CREATOR" }),
-    onSuccess: (result) => {
-      setOwnerId(result.user.id);
-      setShowNewUser(false);
-      ownersQuery.refetch();
-    },
-  });
+  // Set once signup succeeds — kept so a failed page create can be retried
+  // without creating the account twice, and so its password is never lost.
+  const [createdAccount, setCreatedAccount] = useState<{ id: string; name: string | null; phoneNumber: string; password: string } | null>(null);
+  const [created, setCreated] = useState<{ handle: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // No accounts yet → start on "New account".
+  useEffect(() => {
+    if (isAdmin && ownersQuery.isSuccess && owners.length === 0) setAccountMode("new");
+  }, [isAdmin, ownersQuery.isSuccess, owners.length]);
 
   const cleanHandle = normalizeHandleInput(handle);
   const handleError = !handle.trim() ? "Enter the page's Instagram handle." : !cleanHandle ? "That doesn't look like an Instagram handle or profile link." : !HANDLE_PATTERN.test(cleanHandle) ? "Handles use letters, digits, dots and underscores only (up to 30 characters)." : null;
-  const ownerError = isAdmin && !ownerId ? "Pick the creator account this page belongs to." : null;
+  const usingNewAccount = isAdmin && accountMode === "new" && !createdAccount;
+  const ownerError = !isAdmin || createdAccount ? null : accountMode === "new" ? (newUserPhoneValid ? null : "Enter the new account's 10-digit mobile number.") : !ownerId ? "Pick the creator account this page belongs to." : null;
 
   const rateCards = [
     { format: "reel", amount: Number(reelRate) },
     { format: "story", amount: Number(storyRate) },
   ].filter((rc) => rc.amount > 0);
+
   const createMutation = useMutation({
-    mutationFn: () => assetsApi.create(token, cleanHandle as string, "instagram", { ...(category ? { category } : {}), ...(isAdmin ? { ownerId } : {}), ...(rateCards.length > 0 ? { rateCards } : {}) }),
-    onSuccess: onCreated,
+    mutationFn: async () => {
+      let owner = isAdmin ? (createdAccount?.id ?? (accountMode === "existing" ? ownerId : null)) : null;
+      if (usingNewAccount) {
+        const result = await authApi.signup(token, { phoneNumber: `+91${newUserPhoneDigits}`, name: newUserName.trim() || undefined, role: "CREATOR" });
+        setCreatedAccount({ id: result.user.id, name: result.user.name, phoneNumber: result.user.phoneNumber, password: result.generatedPassword });
+        owner = result.user.id;
+      }
+      return assetsApi.create(token, cleanHandle as string, "instagram", { ...(category ? { category } : {}), ...(isAdmin && owner ? { ownerId: owner } : {}), ...(rateCards.length > 0 ? { rateCards } : {}) });
+    },
+    onSuccess: () => {
+      onCreated();
+      // Nothing one-time to show for an existing account — close as before.
+      if (createdAccount || usingNewAccount) setCreated({ handle: cleanHandle as string });
+      else onClose();
+    },
+    onSettled: () => ownersQuery.refetch(),
   });
   const ownerOptions = owners.map((o) => ({ value: o.id, label: o.name?.trim() || o.phoneNumber, hint: o.name?.trim() ? o.phoneNumber : undefined, keywords: o.email ?? undefined }));
   const categorySuggestions = existingCategories.map((c) => ({ key: c, label: c }));
 
+  async function copyCredentials() {
+    if (!createdAccount) return;
+    try {
+      await navigator.clipboard.writeText(`Phone: ${createdAccount.phoneNumber}\nPassword: ${createdAccount.password}`);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  const credentials = createdAccount && (
+    <div className="flex flex-col gap-3 rounded-lg border border-border-strong bg-surface-2 p-4" data-testid="new-account-credentials">
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface text-[0.75rem] font-semibold text-text-2 ring-1 ring-inset ring-border">
+          {initialsOf(createdAccount.name ?? createdAccount.phoneNumber)}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-[0.875rem] font-semibold">{createdAccount.name ?? "New creator"}</p>
+          <p className="truncate text-[0.75rem] text-text-muted">{createdAccount.phoneNumber}</p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-[0.72rem] font-medium text-text-muted">Login password</span>
+        <div className="flex items-center gap-2">
+          <code className="min-w-0 flex-1 break-all rounded-md border border-border bg-surface px-3 py-2 font-mono text-[0.9375rem] font-semibold tracking-wide" data-testid="generated-password">
+            {createdAccount.password}
+          </code>
+          <Button type="button" size="sm" variant="secondary" onClick={copyCredentials}>
+            {copied ? <CheckIcon className="h-3.5 w-3.5" /> : null}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      </div>
+      <p className="text-[0.75rem] text-accent-2">Share it with the creator now — it won&rsquo;t be shown again.</p>
+    </div>
+  );
+
+  // ── Success (new account only): the page exists, hand over the login. ──
+  if (created && createdAccount) {
+    return (
+      <Sheet onClose={onClose} panelClassName="md:max-w-[440px]">
+        <div className="flex flex-col gap-5 overflow-y-auto p-6 pt-1" data-testid="create-page-success">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full border border-accent-line bg-accent-soft text-accent">
+              <CheckIcon className="h-5 w-5" />
+            </span>
+            <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">@{created.handle} is live</h2>
+            <p className="max-w-[36ch] text-[0.8125rem] text-text-muted">Page created under a new creator account. Followers and average views are being fetched from Instagram.</p>
+          </div>
+          {credentials}
+          <Button type="button" className="w-full" onClick={onClose}>
+            {copied ? "Done" : "I've saved the password — done"}
+          </Button>
+        </div>
+      </Sheet>
+    );
+  }
+
   return (
-    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
+    <Sheet onClose={onClose} panelClassName="md:max-w-[440px]">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -729,70 +804,68 @@ function NewAssetModal({
           createMutation.mutate();
         }}
         noValidate
-        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
+        className="flex min-w-0 flex-col gap-5 overflow-y-auto p-6 pt-1"
         data-testid="create-page-form"
       >
         <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">{isAdmin ? "Create a page" : "Add a page"}</h2>
         {isAdmin && (
-          <Field label="Account">
-            {createUserMutation.data && (
-              <div className="mb-1.5 flex flex-col gap-1 rounded-md border border-border-strong bg-surface-2 px-3 py-2 text-[0.75rem]">
-                <span className="text-text-muted">
-                  Created <strong className="text-text">{createUserMutation.data.user.phoneNumber}</strong> — share this password now, it won&apos;t be shown again:
-                </span>
-                <span className="font-mono text-[0.9375rem] font-semibold tracking-wide">{createUserMutation.data.generatedPassword}</span>
-              </div>
-            )}
-            {showNewUser ? (
-              <div className="flex flex-col gap-2.5 rounded-md border border-border-strong bg-surface-2 p-3">
-                <TextField value={newUserName} onChange={setNewUserName} placeholder="Name (optional)" aria-label="New user name" />
-                <PhoneField
-                  required
-                  value={newUserPhone}
-                  onChange={setNewUserPhone}
-                  onBlur={() => setNewUserPhoneBlurred(true)}
-                  placeholder="98765 43210"
-                  error={newUserPhoneBlurred && !newUserPhoneValid ? "Enter a valid 10-digit mobile number." : null}
-                />
-                {createUserMutation.isError && <ErrorNotice message={createUserMutation.error instanceof ApiError ? createUserMutation.error.message : "Couldn't create the account."} />}
-                <div className="flex gap-2">
-                  <Button type="button" size="sm" variant="ghost" className="flex-1" onClick={() => setShowNewUser(false)}>
-                    Cancel
-                  </Button>
-                  <Button type="button" size="sm" className="flex-1" disabled={!newUserPhoneValid || createUserMutation.isPending} onClick={() => createUserMutation.mutate()}>
-                    {createUserMutation.isPending ? "Creating…" : "Create account"}
-                  </Button>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[0.78rem] font-medium text-text-2">Account</span>
+              {!createdAccount && (
+                <div role="tablist" aria-label="Account" className="inline-flex rounded-full border border-border bg-surface-2 p-0.5 text-[0.75rem]">
+                  {(
+                    [
+                      ["existing", "Existing account"],
+                      ["new", "New account"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={accountMode === key}
+                      onClick={() => setAccountMode(key)}
+                      className={cn("rounded-full px-2.5 py-1 font-medium transition-colors", accountMode === key ? "bg-surface text-text shadow-card" : "text-text-muted hover:text-text")}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
+              )}
+            </div>
+
+            {createdAccount ? (
+              // Account was created but the page wasn't (e.g. a bad handle) — keep the login visible; a retry reuses this account.
+              credentials
+            ) : accountMode === "new" ? (
+              <div className="flex flex-col gap-2.5 rounded-lg border border-border bg-surface-2 p-3" data-testid="new-account-fields">
+                <TextField value={newUserName} onChange={setNewUserName} placeholder="Creator name (optional)" aria-label="New user name" />
+                <PhoneField required value={newUserPhone} onChange={setNewUserPhone} placeholder="98765 43210" aria-label="New user phone" error={submitted ? (newUserPhoneValid ? null : "Enter a valid 10-digit mobile number.") : null} />
+                <p className="text-[0.72rem] text-text-muted">The account is created together with the page. Its login password is shown once, right after.</p>
               </div>
             ) : ownersQuery.isError ? (
               <ErrorNotice message={ownersQuery.error instanceof ApiError ? ownersQuery.error.message : "Couldn't load creator accounts."} />
             ) : (
-              <div className="flex items-center gap-2">
-                {!ownersQuery.isLoading && owners.length === 0 ? (
-                  <p className="flex-1 text-[0.8125rem] text-text-muted">No creator accounts yet.</p>
-                ) : (
-                  <SearchableSelect
-                    className="flex-1"
-                    value={ownerId}
-                    onChange={setOwnerId}
-                    options={ownerOptions}
-                    disabled={ownersQuery.isLoading}
-                    invalid={submitted && Boolean(ownerError)}
-                    placeholder={ownersQuery.isLoading ? "Loading accounts…" : "Search by name, phone or email…"}
-                    emptyText="No creator account matches."
-                    aria-label="Creator account"
-                  />
-                )}
-                <Button type="button" size="sm" variant="secondary" onClick={() => setShowNewUser(true)}>
-                  + New user
-                </Button>
-              </div>
+              <>
+                <SearchableSelect
+                  className="min-w-0"
+                  value={ownerId}
+                  onChange={setOwnerId}
+                  options={ownerOptions}
+                  disabled={ownersQuery.isLoading}
+                  invalid={submitted && Boolean(ownerError)}
+                  placeholder={ownersQuery.isLoading ? "Loading accounts…" : "Search by name, phone or email…"}
+                  emptyText="No creator account matches — switch to New account."
+                  aria-label="Creator account"
+                />
+                {submitted && <FieldError message={ownerError} />}
+              </>
             )}
-            {submitted && <FieldError message={ownerError} />}
-          </Field>
+          </div>
         )}
         <Field label="Instagram handle">
-          <TextField value={handle} onChange={setHandle} placeholder="e.g. demo.page (without @)" aria-label="Instagram handle" />
+          <TextField value={handle} onChange={setHandle} placeholder="e.g. demo.page" aria-label="Instagram handle" />
           {submitted && <FieldError message={handleError} />}
           {!handleError && cleanHandle && cleanHandle !== handle.trim() && <p className="text-[0.75rem] text-text-muted">Will be saved as @{cleanHandle}</p>}
         </Field>
@@ -810,13 +883,17 @@ function NewAssetModal({
           </div>
         )}
         {isAdmin && <p className="-mt-2 text-[0.75rem] text-text-muted">Approved on creation. Followers and average views are fetched from Instagram right after — usually within a minute or two.</p>}
-        {createMutation.isError && <ErrorNotice message={createMutation.error instanceof ApiError ? createMutation.error.message : "Couldn't add the page."} />}
+        {createMutation.isError && (
+          <ErrorNotice
+            message={`${createdAccount ? "The account was created, but the page wasn't: " : ""}${createMutation.error instanceof ApiError ? createMutation.error.message : "Couldn't add the page."}`}
+          />
+        )}
         <div className="flex gap-2.5">
           <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" className="flex-1" disabled={createMutation.isPending || (isAdmin && owners.length === 0)}>
-            {createMutation.isPending ? (isAdmin ? "Creating…" : "Adding…") : isAdmin ? "Create page" : "Add page"}
+          <Button type="submit" className="flex-1" disabled={createMutation.isPending}>
+            {createMutation.isPending ? "Creating…" : !isAdmin ? "Add page" : usingNewAccount ? "Create account & page" : "Create page"}
           </Button>
         </div>
       </form>
