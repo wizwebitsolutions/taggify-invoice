@@ -343,6 +343,17 @@ tiered loop is the default now. If a genuinely greenfield effort starts later
 that surface stabilizes, then lock it in with a smoke test immediately rather than
 retrofitting coverage after it's drifted.
 
+### Test-run cadence (keep the full suite for the end)
+
+While implementing, run only the file(s) relevant to the change (`vitest run path/to/x.test.js`,
+`playwright test path/to/x.spec.ts`) — that's the fast feedback loop and it's what you
+want after every edit. Run the **full** suite exactly once, right before reporting the
+task done, not after every intermediate edit; that single full run is what actually
+guards against a regression somewhere untouched, and running it repeatedly mid-task
+just burns time without catching anything the targeted run wouldn't have. The
+pre-release tier is the one exception — there it's the full suite because that's the
+point of that tier, not a repeated habit.
+
 ### What it costs
 
 Measured against "implement and hand back unverified," per non-trivial task, once the

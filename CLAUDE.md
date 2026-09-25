@@ -45,10 +45,12 @@ pays for itself most, so it's the default here, not something to phase in later.
 Treat a task as done only once **all** of these hold — don't report back before then:
 
 1. **Automated tests cover the change.** Add/update a vitest test (`server/`) or a
-   Playwright test (`client/tests/e2e/`) for the behavior you changed, then run the
-   full suite — it must pass. If a bug report is what triggered the task, the fix
-   isn't done until there's a regression test that would have caught it; that test is
-   what prevents the same bug from silently coming back later.
+   Playwright test (`client/tests/e2e/`) for the behavior you changed. While iterating,
+   run just the targeted file(s) for the change (fast feedback loop) — run the *full*
+   suite once, at the end, before reporting the task done; it must pass. If a bug
+   report is what triggered the task, the fix isn't done until there's a regression
+   test that would have caught it; that test is what prevents the same bug from
+   silently coming back later.
 2. **Drive it for real, don't just read the diff.** For anything touching UI or a
    user-facing flow, actually exercise it — Playwright test run and/or
    `claude-in-chrome` browser automation clicking the real flow in the real app — before
