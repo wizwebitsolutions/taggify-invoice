@@ -169,6 +169,50 @@ test.describe("Inventory — Create page popup: category search + inline new use
     expect(calls[0].body).toMatchObject({ ownerId: "creator-1", handle: "priya.page" });
   });
 
+  // 25 Sep: a plan maker can register a vendor's page too, while building a
+  // plan — same owner-assignment UI an admin gets (existing/new account
+  // tabs), but never the admin-only extras (rate cards, auto-approval).
+  test("PLAN_MAKER can add a page under an existing creator — no rate card fields, always pending", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await mockApi(page);
+    const calls = await mockCreateFlow(page, { owners });
+
+    await page.goto("/inventory");
+    await page.getByRole("button", { name: "Add page" }).first().click();
+    await expect(page.getByRole("tab", { name: "Existing account" })).toHaveAttribute("aria-selected", "true");
+    // Admin-only extras stay hidden — a plan maker's page is always pending, never priced.
+    await expect(page.getByLabel("Reel rate")).toHaveCount(0);
+    await expect(page.getByText("Approved on creation.")).toHaveCount(0);
+
+    await page.getByLabel("Creator account").click();
+    await page.getByRole("option", { name: /Priya Creator/ }).click();
+    await page.getByLabel("Instagram handle").fill("vendor.page");
+    await page.getByTestId("create-page-form").getByRole("button", { name: "Create page" }).click();
+
+    await expect(page.getByTestId("create-page-form")).toHaveCount(0);
+    expect(calls.map((c) => c.path)).toEqual(["/assets"]);
+    expect(calls[0].body).toMatchObject({ ownerId: "creator-1", handle: "vendor.page" });
+  });
+
+  test("PLAN_MAKER can also create a brand-new creator account inline while adding a page", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await mockApi(page);
+    const calls = await mockCreateFlow(page, { owners });
+
+    await page.goto("/inventory");
+    await page.getByRole("button", { name: "Add page" }).first().click();
+    await page.getByRole("tab", { name: "New account" }).click();
+    await page.getByLabel("New user name").fill("Amit Kumar");
+    await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
+    await page.getByLabel("Instagram handle").fill("amit.memes");
+    await page.getByRole("button", { name: "Create account & page" }).click();
+
+    await expect(page.getByTestId("create-page-success")).toBeVisible();
+    expect(calls.map((c) => c.path)).toEqual(["/auth/signup", "/assets"]);
+    expect(calls[0].body).toEqual({ email: "amit.kumar@gmail.com", name: "Amit Kumar", role: "CREATOR" });
+    expect(calls[1].body).toMatchObject({ handle: "amit.memes", ownerId: "new-creator-1" });
+  });
+
   test("regression (24 Sep): no horizontal overflow in the form or the success screen at phone width, even with a long name and password", async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 780 });
     await signIn(page, "ADMIN");

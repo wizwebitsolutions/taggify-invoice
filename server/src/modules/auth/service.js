@@ -65,6 +65,15 @@ export async function signup({ email, phoneNumber, name, role, permissions }, ac
   const passwordHash = await bcrypt.hash(plaintextPassword, BCRYPT_ROUNDS);
 
   const requested = sanitizePermissionsInput(permissions) ?? {};
+  // Defense in depth for the route's own check (routes.js requireSignupAccess):
+  // even if that check is ever loosened by mistake, a plan maker can never
+  // create anything but a plain creator account with no permissions overlay.
+  // An ADMIN target is left to the existing isFullAdmin check just below —
+  // it already 403s a PLAN_MAKER with the more specific ADMIN_ACCOUNT_RESTRICTED,
+  // and short-circuiting it here would skip the actor lookup that path expects.
+  if (actor?.role === "PLAN_MAKER" && role !== "ADMIN" && (role !== "CREATOR" || Object.keys(requested).length > 0)) {
+    throw new ApiError(403, "FORBIDDEN", "A plan maker can only create a plain creator account, with no extra permissions.");
+  }
   // CREATOR / TEAM_MEMBER / PLAN_MAKER (24 Sep): their overlay is own-content
   // switches only — any global key is a 400 (lib/permissions.js ownOverlayFor).
   const ownScope = isOwnScopeRole(role);

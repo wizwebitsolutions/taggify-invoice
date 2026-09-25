@@ -52,10 +52,11 @@ router.get("/", requireOwnAccess("inventory.view"), async (req, res, next) => {
   }
 });
 
-// CREATOR is a bare role here — adding their own page is unaffected by
-// the overlay either way; ADMIN (or any other role granted inventory.manage)
-// goes through the permission check.
-router.post("/", requireAccess("inventory.edit", "CREATOR"), validateBody(createAssetSchema), async (req, res, next) => {
+// CREATOR and PLAN_MAKER are bare roles here — each goes through their own
+// inventory.edit own-capability check (adding their own page for CREATOR;
+// registering a vendor's page, 25 Sep, for PLAN_MAKER); ADMIN (or any other
+// role granted inventory.edit) goes through the staff permission check.
+router.post("/", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), validateBody(createAssetSchema), async (req, res, next) => {
   try {
     res.status(201).json(await assetsService.createAsset(req.user, req.body));
   } catch (err) {
@@ -106,9 +107,11 @@ router.put(
 
 // Creator accounts the admin can register a page under (the "Create page"
 // modal's account picker and the import preview's fallback picker). Gated
-// on inventory.manage rather than users.manage, since a sub-admin allowed
-// to manage Inventory needs it even without access to the Users page.
-router.get("/owners", requireAccess("inventory.edit"), async (req, res, next) => {
+// on inventory.edit rather than users.edit, since a sub-admin allowed to
+// manage Inventory needs it even without access to the Users page; PLAN_MAKER
+// is a bare role too (25 Sep) so their own "Add pages" modal can load the
+// same picker to register a vendor's page.
+router.get("/owners", requireAccess("inventory.edit", "PLAN_MAKER"), async (req, res, next) => {
   try {
     res.json(await assetsService.listPageOwners());
   } catch (err) {

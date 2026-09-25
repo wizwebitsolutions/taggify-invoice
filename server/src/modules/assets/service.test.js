@@ -55,6 +55,48 @@ describe("createAsset — admin registering a page for someone else (newTask.md 
   });
 });
 
+// 25 Sep: a plan maker can register a page too, while onboarding a vendor —
+// but only under an existing creator, never themselves, and always pending.
+describe("createAsset — PLAN_MAKER registering a vendor's page (25 Sep)", () => {
+  it("succeeds against an existing creator account, pending, no rate card", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    const asset = await createAsset(planMaker, { platform: "instagram", handle: "vendor.page", ownerId: "creator-1" });
+    expect(asset.ownerId).toBe("creator-1");
+    expect(asset.approvalStatus).toBe("pending");
+    expect(asset.rateCards).toBeUndefined();
+  });
+
+  it("sending a rate card is refused, same as a creator's own submission — rate cards stay admin-only", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    const err = await createAsset(planMaker, { platform: "instagram", handle: "vendor.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }] }).catch((e) => e);
+    expect(err.statusCode).toBe(403);
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+  });
+
+  it("without an ownerId, fails loudly instead of defaulting to the plan maker's own id", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    const err = await createAsset(planMaker, { platform: "instagram", handle: "vendor.page" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe("OWNER_REQUIRED");
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+  });
+
+  it("targeting a non-creator account (e.g. another plan maker, finance, admin) is rejected", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    const err = await createAsset(planMaker, { platform: "instagram", handle: "x", ownerId: "fin-1" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe("OWNER_NOT_CREATOR");
+  });
+
+  it("sending their own id as ownerId is rejected too — a plan maker is never a page owner", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    const err = await createAsset(planMaker, { platform: "instagram", handle: "x", ownerId: "pm-1" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe("OWNER_REQUIRED");
+    expect(mockPrisma.asset.create).not.toHaveBeenCalled();
+  });
+});
+
 
 // Inventory "Create page" (14 Sep): registering a handle that already exists
 // used to surface Prisma's unique-constraint error as a generic 500

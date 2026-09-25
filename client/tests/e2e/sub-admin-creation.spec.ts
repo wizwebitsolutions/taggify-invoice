@@ -131,9 +131,12 @@ test.describe("Add user — access editor per role", () => {
     await expect(page.getByTestId("access-own-note")).toBeVisible();
     await expect(page.getByLabel("Plans: Approve")).toBeChecked();
     await expect(page.getByLabel("Campaigns: Add phases")).toBeChecked();
-    // The one exception: the full catalogue, read-only — no edit action.
-    await expect(page.getByTestId("access-section-inventory")).toContainText("Browse the full page catalogue (read-only)");
-    await expect(page.getByTestId("access-section-inventory").getByRole("checkbox")).toHaveCount(1);
+    // 25 Sep: a plan maker can also be granted "Add pages" (vendor onboarding
+    // while building a plan) — view + edit, on by default like every other
+    // own-content switch.
+    await expect(page.getByTestId("access-section-inventory")).toContainText("Browse the full page catalogue");
+    await expect(page.getByLabel("Inventory: Add pages")).toBeChecked();
+    await expect(page.getByTestId("access-section-inventory").getByRole("checkbox")).toHaveCount(2);
 
     await page.getByRole("combobox").selectOption("FINANCE");
     await expect(page.getByTestId("access-own-note")).toHaveCount(0);
@@ -193,6 +196,37 @@ test.describe("Add user — access editor per role", () => {
     for (const k of ["finance.approve", "finance.pay", "links.approve", "inventory.approve", "plans.view", "campaigns.edit"]) {
       expect(perms[k]).toBeUndefined();
     }
+  });
+
+  // 25 Sep: a plan maker's Inventory "Add pages" (vendor onboarding while
+  // building a plan) is on by default like every other own-content switch,
+  // and can be switched off the same way Creator's Finance access can.
+  test("switching off a Plan Maker's 'Add pages' sends inventory.edit: false, never finance.pay", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    let sentBody: Record<string, unknown> | null = null;
+    await page.route(`${API_URL}/auth/signup`, (route) => {
+      sentBody = route.request().postDataJSON();
+      return route.fulfill({ json: { user: { id: "new-pm-1", phoneNumber: null, email: "new.pm@gmail.com", name: null, role: "PLAN_MAKER" }, generatedPassword: "Abcdefg1!" } });
+    });
+
+    await page.goto("/users");
+    await page.getByRole("button", { name: "Add user" }).click();
+    await page.getByRole("combobox").selectOption("PLAN_MAKER");
+    await expect(page.getByLabel("Inventory: Add pages")).toBeChecked();
+    await page.getByLabel("Inventory: Add pages").click();
+    await page.getByLabel("Email", { exact: true }).fill("new.pm@gmail.com");
+    await page.getByRole("button", { name: "Create user" }).click();
+
+    await expect(page.getByText(/Account created for/)).toBeVisible();
+    const perms = sentBody!.permissions as Record<string, boolean>;
+    expect(perms["inventory.edit"]).toBe(false);
+    // Turning off Inventory doesn't touch the sections left alone — Plans
+    // stays on, untouched, at its own default.
+    expect(perms["plans.edit"]).toBe(true);
+    // finance.pay is never own-scope, for any role — never even sent, since
+    // it's never a checkbox in a plan maker's editor.
+    expect(perms["finance.pay"]).toBeUndefined();
   });
 });
 

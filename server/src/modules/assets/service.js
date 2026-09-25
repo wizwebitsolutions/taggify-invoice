@@ -79,14 +79,23 @@ export async function getAvgEngagement(assetId, asset = null) {
 // (plans/service.js addPendingPage) — a starting count from the sheet until
 // the background scrape below replaces it.
 export async function createAsset(user, { platform, handle, category, ownerId, rateCards, followers }) {
-  // Only an admin may register a page on someone else's behalf (the "create
-  // a user with their first page(s)" flow on the Users page); a CREATOR
+  // Only an admin or plan maker may register a page on someone else's behalf
+  // (the "create a user with their first page(s)" flow, and — 25 Sep — a
+  // plan maker onboarding a vendor while building a plan); a CREATOR
   // creating their own page never sends ownerId, so this never fires for them.
-  if (ownerId && ownerId !== user.id && user.role !== "ADMIN") {
-    throw new ApiError(403, "FORBIDDEN", "Only an admin can register a page for another user");
+  if (ownerId && ownerId !== user.id && user.role !== "ADMIN" && user.role !== "PLAN_MAKER") {
+    throw new ApiError(403, "FORBIDDEN", "Only an admin or plan maker can register a page for another user");
   }
-  // Only a CREATOR account owns pages — an admin picking (or a client
-  // sending) any other account's id is a mistake, not a page to create.
+  // A plan maker isn't a page owner themselves — unlike a creator/admin,
+  // there's no "their own id" to fall back to below, so a missing ownerId
+  // (or one sent as their own id, e.g. a copy-pasted request) must fail
+  // loudly here instead of silently creating a plan-maker-owned asset
+  // (which nothing downstream — links, invoices — expects to exist).
+  if (user.role === "PLAN_MAKER" && (!ownerId || ownerId === user.id)) {
+    throw new ApiError(400, "OWNER_REQUIRED", "Pick or create the creator account this page belongs to.");
+  }
+  // Only a CREATOR account owns pages — an admin/plan maker picking (or a
+  // client sending) any other account's id is a mistake, not a page to create.
   if (ownerId && ownerId !== user.id) {
     const target = await prisma.user.findUnique({ where: { id: ownerId }, select: { role: true } });
     if (!target) throw new ApiError(404, "USER_NOT_FOUND", "That account doesn't exist.");

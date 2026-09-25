@@ -95,7 +95,11 @@ const OWN_SECTION_META: Partial<Record<Role, Partial<typeof SECTION_META>>> = {
       view: "See invoices and client receivables on their own plans",
       actions: { edit: { label: "Attach files", hint: "Attach or remove the invoice document on those invoices" } },
     },
-    inventory: { label: "Inventory", view: "Browse the full page catalogue (read-only) to build plans", actions: {} },
+    inventory: {
+      label: "Inventory",
+      view: "Browse the full page catalogue to build plans",
+      actions: { edit: { label: "Add pages", hint: "Register a page under an existing or brand-new creator account (admin approves)" } },
+    },
   },
 };
 

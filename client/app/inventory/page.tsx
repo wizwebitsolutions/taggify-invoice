@@ -53,11 +53,18 @@ function InventoryContent() {
   // "Admin" in the loose sense of "can manage Inventory" — a plain ADMIN by
   // default, or (15 Sep) any other role explicitly granted inventory.manage.
   const isAdmin = hasAccess(user, "inventory.edit");
-  // A creator adds their own pages; whoever can manage Inventory (unless
-  // their sub-admin overlay turns it off, or — 15 Sep — a non-admin role
-  // was granted it) registers pages under any creator account, one at a
-  // time or from a sheet (user request, 14 Sep).
-  const canAddPage = user?.role === "CREATOR" && canUse(user, "inventory.edit");
+  // A creator adds their own pages; a plan maker (25 Sep) registers a
+  // vendor's page while building a plan — both via the same simple "Add
+  // page" entry point, distinguished inside the modal by canAssignOwner.
+  // Whoever can manage Inventory more broadly (unless their sub-admin
+  // overlay turns it off, or — 15 Sep — a non-admin role was granted it)
+  // registers pages under any creator account, one at a time or from a
+  // sheet (user request, 14 Sep).
+  const canAddPage = (user?.role === "CREATOR" || user?.role === "PLAN_MAKER") && canUse(user, "inventory.edit");
+  // Owner-assignment UI (existing-account picker + create-a-new-creator):
+  // real staff isAdmin, or a plan maker granted inventory.edit — never a
+  // plain creator, whose own page is implicitly theirs.
+  const canAssignOwner = isAdmin || (user?.role === "PLAN_MAKER" && canUse(user, "inventory.edit"));
   const canManagePlans = hasAccess(user, "plans.edit") || (user?.role === "PLAN_MAKER" && canUse(user, "plans.edit"));
 
   function onCreatePlanFromSelection() {
@@ -115,7 +122,7 @@ function InventoryContent() {
             ) : undefined
           }
         />
-        <PagesSection token={token} isAdmin={isAdmin} showForm={showAddPage} setShowForm={setShowAddPage} canSelect={canManagePlans || isAdmin} selectedAssetIds={selectedAssetIds} setSelectedAssetIds={setSelectedAssetIds} />
+        <PagesSection token={token} isAdmin={isAdmin} canAssignOwner={canAssignOwner} showForm={showAddPage} setShowForm={setShowAddPage} canSelect={canManagePlans || isAdmin} selectedAssetIds={selectedAssetIds} setSelectedAssetIds={setSelectedAssetIds} />
       </div>
 
       {showImport && <ImportPagesModal token={token} onClose={() => setShowImport(false)} onImported={() => queryClient.invalidateQueries({ queryKey: ["assets"] })} />}
@@ -144,6 +151,7 @@ function InventoryContent() {
 function PagesSection({
   token,
   isAdmin,
+  canAssignOwner,
   showForm,
   setShowForm,
   canSelect,
@@ -152,6 +160,7 @@ function PagesSection({
 }: {
   token: string;
   isAdmin: boolean;
+  canAssignOwner: boolean;
   showForm: boolean;
   setShowForm: (v: boolean) => void;
   canSelect: boolean;
@@ -316,6 +325,7 @@ function PagesSection({
         <NewAssetModal
           token={token}
           isAdmin={isAdmin}
+          canAssignOwner={canAssignOwner}
           existingCategories={categories.filter((c) => c.label !== "All").map((c) => c.label)}
           onClose={() => setShowForm(false)}
           // The modal closes itself — after the success screen when a new
@@ -664,12 +674,16 @@ function normalizeHandleInput(raw: string): string | null {
 function NewAssetModal({
   token,
   isAdmin,
+  canAssignOwner,
   existingCategories,
   onClose,
   onCreated,
 }: {
   token: string;
+  /** Real staff admin extras only — rate cards, auto-approval-on-creation. */
   isAdmin: boolean;
+  /** Owner-picker + new-account creation: real admin, or a plan maker granted inventory.edit (25 Sep). A plain creator's page is always their own, so neither applies to them. */
+  canAssignOwner: boolean;
   /** Distinct categories already on some page in the DB (user request, 23 Sep — search, not a fixed list). */
   existingCategories: string[];
   onClose: () => void;
@@ -681,9 +695,10 @@ function NewAssetModal({
   const [reelRate, setReelRate] = useState("");
   const [storyRate, setStoryRate] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  // Admin picks which creator account the page sits under (user request,
-  // 14 Sep); a creator's page is always their own, so no picker for them.
-  const ownersQuery = useQuery({ queryKey: ["assets", "owners"], queryFn: () => assetsApi.owners(token), enabled: isAdmin });
+  // Whoever can assign an owner picks which creator account the page sits
+  // under (user request, 14 Sep; extended to plan makers 25 Sep); a plain
+  // creator's page is always their own, so no picker for them.
+  const ownersQuery = useQuery({ queryKey: ["assets", "owners"], queryFn: () => assetsApi.owners(token), enabled: canAssignOwner });
   const owners = ownersQuery.data ?? [];
 
   // Account for the page (admin only): an existing creator, or a brand-new
@@ -705,13 +720,13 @@ function NewAssetModal({
 
   // No accounts yet → start on "New account".
   useEffect(() => {
-    if (isAdmin && ownersQuery.isSuccess && owners.length === 0) setAccountMode("new");
-  }, [isAdmin, ownersQuery.isSuccess, owners.length]);
+    if (canAssignOwner && ownersQuery.isSuccess && owners.length === 0) setAccountMode("new");
+  }, [canAssignOwner, ownersQuery.isSuccess, owners.length]);
 
   const cleanHandle = normalizeHandleInput(handle);
   const handleError = !handle.trim() ? "Enter the page's Instagram handle." : !cleanHandle ? "That doesn't look like an Instagram handle or profile link." : !HANDLE_PATTERN.test(cleanHandle) ? "Handles use letters, digits, dots and underscores only (up to 30 characters)." : null;
-  const usingNewAccount = isAdmin && accountMode === "new" && !createdAccount;
-  const ownerError = !isAdmin || createdAccount ? null : accountMode === "new" ? (newUserEmailValid ? null : "Enter the new account's email — it's their login.") : !ownerId ? "Pick the creator account this page belongs to." : null;
+  const usingNewAccount = canAssignOwner && accountMode === "new" && !createdAccount;
+  const ownerError = !canAssignOwner || createdAccount ? null : accountMode === "new" ? (newUserEmailValid ? null : "Enter the new account's email — it's their login.") : !ownerId ? "Pick the creator account this page belongs to." : null;
 
   const rateCards = [
     { format: "reel", amount: Number(reelRate) },
@@ -720,13 +735,13 @@ function NewAssetModal({
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      let owner = isAdmin ? (createdAccount?.id ?? (accountMode === "existing" ? ownerId : null)) : null;
+      let owner = canAssignOwner ? (createdAccount?.id ?? (accountMode === "existing" ? ownerId : null)) : null;
       if (usingNewAccount) {
         const result = await authApi.signup(token, { email: newUserEmail.trim(), name: newUserName.trim() || undefined, role: "CREATOR" });
         setCreatedAccount({ id: result.user.id, name: result.user.name, email: result.user.email ?? newUserEmail.trim(), password: result.generatedPassword });
         owner = result.user.id;
       }
-      return assetsApi.create(token, cleanHandle as string, "instagram", { ...(category ? { category } : {}), ...(isAdmin && owner ? { ownerId: owner } : {}), ...(rateCards.length > 0 ? { rateCards } : {}) });
+      return assetsApi.create(token, cleanHandle as string, "instagram", { ...(category ? { category } : {}), ...(canAssignOwner && owner ? { ownerId: owner } : {}), ...(rateCards.length > 0 ? { rateCards } : {}) });
     },
     onSuccess: () => {
       onCreated();
@@ -810,8 +825,8 @@ function NewAssetModal({
         className="flex min-w-0 flex-col gap-5 overflow-y-auto p-6 pt-1"
         data-testid="create-page-form"
       >
-        <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">{isAdmin ? "Create a page" : "Add a page"}</h2>
-        {isAdmin && (
+        <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">{canAssignOwner ? "Create a page" : "Add a page"}</h2>
+        {canAssignOwner && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-[0.78rem] font-medium text-text-2">Account</span>
@@ -897,7 +912,7 @@ function NewAssetModal({
             Cancel
           </Button>
           <Button type="submit" className="flex-1" disabled={createMutation.isPending}>
-            {createMutation.isPending ? "Creating…" : !isAdmin ? "Add page" : usingNewAccount ? "Create account & page" : "Create page"}
+            {createMutation.isPending ? "Creating…" : !canAssignOwner ? "Add page" : usingNewAccount ? "Create account & page" : "Create page"}
           </Button>
         </div>
       </form>

@@ -104,13 +104,19 @@ export function isOwnScopeRole(role) {
  *   links.view              — links on those campaigns
  *   finance.view            — invoices on own plans' campaigns + own plans' receivables
  *   finance.edit            — attach / remove the invoice file on those invoices
- *   inventory.view          — the full page catalogue, read-only (the one exception —
- *                             planners pick pages for clients from it)
+ *   inventory.view          — the full page catalogue (planners pick pages for clients from it)
+ *   inventory.edit          — 25 Sep: register a page under an existing OR brand-new creator
+ *                             account (vendor onboarding while building a plan) — always
+ *                             lands `pending` for admin approval, never carries a rate card,
+ *                             same as a creator's own inventory.edit (createAsset.js).
+ *
+ * `finance.pay` is never own-scope, for any role — it means paying someone
+ * else, which doesn't fit "own content" no matter how far this list grows.
  */
 export const OWN_CAPABILITIES = {
   CREATOR: ["campaigns.view", "inventory.view", "inventory.edit", "links.view", "links.edit", "finance.view", "finance.edit", "users.view", "users.edit"],
   TEAM_MEMBER: ["campaigns.view", "inventory.view", "links.view", "links.edit", "finance.view"],
-  PLAN_MAKER: ["plans.view", "plans.edit", "plans.approve", "campaigns.view", "campaigns.edit", "links.view", "finance.view", "finance.edit", "inventory.view"],
+  PLAN_MAKER: ["plans.view", "plans.edit", "plans.approve", "campaigns.view", "campaigns.edit", "links.view", "finance.view", "finance.edit", "inventory.view", "inventory.edit"],
 };
 
 /**

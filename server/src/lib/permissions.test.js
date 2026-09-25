@@ -280,4 +280,18 @@ describe("own-scope roles: own-content switches instead of global grants (24 Sep
       expect(err.code).toBe("OWN_SCOPE_ONLY");
     }
   });
+
+  it("PLAN_MAKER can be granted inventory.edit (25 Sep — vendor onboarding while building a plan), on by default", () => {
+    expect(OWN_CAPABILITIES.PLAN_MAKER).toContain("inventory.edit");
+    // Granting it no longer throws OWN_SCOPE_ONLY (regression check for the old, narrower whitelist).
+    expect(ownOverlayFor("PLAN_MAKER", { "inventory.edit": true })).toBeNull();
+    expect(hasOwnCapability({ role: "PLAN_MAKER", permissions: null }, "inventory.edit")).toBe(true);
+    expect(hasOwnCapability({ role: "PLAN_MAKER", permissions: { "inventory.edit": false } }, "inventory.edit")).toBe(false);
+  });
+
+  it("finance.pay is never own-scope, for any role", () => {
+    for (const role of ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) {
+      expect(OWN_CAPABILITIES[role], role).not.toContain("finance.pay");
+    }
+  });
 });

@@ -196,7 +196,7 @@ export const isOwnScopeRole = (role: Role | undefined | null) => !!role && OWN_S
 export const OWN_CAPABILITIES: Partial<Record<Role, PermissionKey[]>> = {
   CREATOR: ["campaigns.view", "inventory.view", "inventory.edit", "links.view", "links.edit", "finance.view", "finance.edit", "users.view", "users.edit"],
   TEAM_MEMBER: ["campaigns.view", "inventory.view", "links.view", "links.edit", "finance.view"],
-  PLAN_MAKER: ["plans.view", "plans.edit", "plans.approve", "campaigns.view", "campaigns.edit", "links.view", "finance.view", "finance.edit", "inventory.view"],
+  PLAN_MAKER: ["plans.view", "plans.edit", "plans.approve", "campaigns.view", "campaigns.edit", "links.view", "finance.view", "finance.edit", "inventory.view", "inventory.edit"],
 };
 
 /** An own-scope role's switches with nothing turned off. */

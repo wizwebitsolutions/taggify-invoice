@@ -3,6 +3,8 @@ import rateLimit from "express-rate-limit";
 import { validateBody } from "../../middleware/validate.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
+import { prisma } from "../../lib/prisma.js";
+import { hasOwnCapability } from "../../lib/permissions.js";
 import {
   signupSchema,
   loginSchema,
@@ -58,10 +60,26 @@ function emailSetupIdentity(req, res, next) {
 // reachable by anyone unauthenticated, which let a caller mint themselves
 // an ADMIN account. requireAccess("users.edit") also lets a non-admin
 // role explicitly granted that section create accounts (15 Sep).
+//
+// 25 Sep: a plan maker can reach this route too, but only for the narrow
+// case of minting a plain CREATOR login while onboarding a vendor's page
+// (Inventory's "Add pages" flow) — never a general people-management grant,
+// and never a role or permissions overlay of their choosing. Read fresh from
+// the DB, not the JWT, so a just-revoked inventory.edit takes effect at once.
+async function requireSignupAccess(req, res, next) {
+  if (req.user.role !== "PLAN_MAKER") return requireAccess("users.edit")(req, res, next);
+  // This runs before validateBody applies signupSchema's role default, so an
+  // omitted role (same as an explicit "CREATOR") must be read the same way here.
+  const wantsPlainCreator = (req.body?.role ?? "CREATOR") === "CREATOR" && !req.body?.permissions;
+  const fresh = wantsPlainCreator ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { role: true, permissions: true } }) : null;
+  if (fresh && hasOwnCapability(fresh, "inventory.edit")) return next();
+  return res.status(403).json({ error: { code: "ACCESS_REMOVED", message: "Your admin has turned this off for your account" } });
+}
+
 router.post(
   "/signup",
   requireAuth,
-  requireAccess("users.edit"),
+  requireSignupAccess,
   validateBody(signupSchema),
   async (req, res, next) => {
     try {
