@@ -14,7 +14,10 @@ import {
   applyViewImplication,
   isFullAdmin,
   isGrantableRole,
-  assertGrantableRole,
+  OWN_CAPABILITIES,
+  getOwnCapabilities,
+  hasOwnCapability,
+  ownOverlayFor,
 } from "./permissions.js";
 import { ApiError } from "../middleware/errorHandler.js";
 
@@ -53,22 +56,20 @@ describe("getEffectivePermissions — role baseline merged with the overlay", ()
     for (const key of ["users.view", "users.edit", "campaigns.edit", "inventory.edit", "inventory.approve", "links.edit", "links.approve", "plans.view", "plans.edit", "plans.approve"]) expect(effective[key]).toBe(false);
   });
 
-  it("PLAN_MAKER reads Inventory only; CREATOR / TEAM_MEMBER get nothing", () => {
-    const pm = getEffectivePermissions({ role: "PLAN_MAKER", permissions: null });
-    expect(pm["inventory.view"]).toBe(true);
-    for (const key of PERMISSION_KEYS.filter((k) => k !== "inventory.view")) expect(pm[key]).toBe(false);
-    for (const role of ["CREATOR", "TEAM_MEMBER"]) {
-      const effective = getEffectivePermissions({ role, permissions: null });
-      for (const key of PERMISSION_KEYS) expect(effective[key]).toBe(false);
+  it("own-scope roles (CREATOR, TEAM_MEMBER, PLAN_MAKER) hold no global key — even with a stored overlay that says otherwise (24 Sep)", () => {
+    for (const role of ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) {
+      for (const permissions of [null, { "links.approve": true, "finance.pay": true, "users.manage": true }]) {
+        const effective = getEffectivePermissions({ role, permissions });
+        for (const key of PERMISSION_KEYS) expect(effective[key], `${role} ${key}`).toBe(false);
+      }
     }
-    expect(ROLE_DEFAULTS.CREATOR).toEqual(ROLE_DEFAULTS.TEAM_MEMBER);
   });
 
-  it("lets an overlay grant a non-ADMIN role an individual key without touching the rest", () => {
-    const effective = getEffectivePermissions({ role: "PLAN_MAKER", permissions: { "campaigns.edit": true } });
+  it("lets an overlay grant a staff (FINANCE) account an individual key without touching the rest", () => {
+    const effective = getEffectivePermissions({ role: "FINANCE", permissions: { "campaigns.edit": true } });
     expect(effective["campaigns.edit"]).toBe(true);
     expect(effective["campaigns.view"]).toBe(true); // implied
-    expect(effective["links.view"]).toBe(false);
+    expect(effective["users.view"]).toBe(false);
   });
 
   it("edit / approve / pay each imply their section's view, even if the overlay says view=false", () => {
@@ -83,7 +84,7 @@ describe("getEffectivePermissions — role baseline merged with the overlay", ()
     for (const key of LEGACY_KEY_MAP["finance.manage"]) expect(sub[key]).toBe(false);
     expect(sub["plans.edit"]).toBe(true);
 
-    const granted = getEffectivePermissions({ role: "PLAN_MAKER", permissions: { "links.review": true } });
+    const granted = getEffectivePermissions({ role: "FINANCE", permissions: { "links.review": true } });
     for (const key of LEGACY_KEY_MAP["links.review"]) expect(granted[key]).toBe(true);
   });
 });
@@ -147,8 +148,8 @@ describe("computeNewAccountOverlay — new-account grant can never exceed the ac
     });
 
     it("an unrestricted actor's requested grant passes through, stored as a minimal overlay with view implied", () => {
-      expect(computeNewAccountOverlay(fullAdmin, { "inventory.edit": true }, "PLAN_MAKER")).toEqual({ "inventory.edit": true });
-      expect(computeNewAccountOverlay(fullAdmin, { "links.approve": true }, "PLAN_MAKER")).toEqual({ "links.view": true, "links.approve": true });
+      expect(computeNewAccountOverlay(fullAdmin, { "inventory.edit": true }, "FINANCE")).toEqual({ "inventory.edit": true });
+      expect(computeNewAccountOverlay(fullAdmin, { "users.edit": true }, "FINANCE")).toEqual({ "users.view": true, "users.edit": true });
     });
 
     it("can take a baseline key away from a FINANCE account (e.g. no approve sign-off)", () => {
@@ -213,30 +214,70 @@ describe("isFullAdmin — the only actor allowed to touch ADMIN accounts (23 Sep
   });
 });
 
-describe("assertGrantableRole — CREATOR/TEAM_MEMBER can't carry an overlay (23 Sep)", () => {
-  it("passes every other role, and passes those two roles when nothing is actually granted", () => {
-    for (const role of ["ADMIN", "FINANCE", "PLAN_MAKER"]) {
-      expect(isGrantableRole(role)).toBe(true);
-      expect(() => assertGrantableRole(role, { "links.approve": true })).not.toThrow();
-    }
-    expect(() => assertGrantableRole("CREATOR", {})).not.toThrow();
-    expect(() => assertGrantableRole("CREATOR", null)).not.toThrow();
-    expect(() => assertGrantableRole("TEAM_MEMBER", { "links.approve": false })).not.toThrow();
+describe("own-scope roles: own-content switches instead of global grants (24 Sep)", () => {
+  it("staff roles are grantable; CREATOR, TEAM_MEMBER and PLAN_MAKER are not (they get own-content switches)", () => {
+    for (const role of ["ADMIN", "FINANCE"]) expect(isGrantableRole(role)).toBe(true);
+    for (const role of ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) expect(isGrantableRole(role)).toBe(false);
   });
 
-  it("throws a 400 ROLE_NOT_GRANTABLE for either role once any key is actually granted", () => {
-    for (const role of ["CREATOR", "TEAM_MEMBER"]) {
-      expect(isGrantableRole(role)).toBe(false);
+  it("every own capability defaults ON; keys outside the role's list are always off", () => {
+    for (const role of ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) {
+      const caps = getOwnCapabilities({ role, permissions: null });
+      for (const key of PERMISSION_KEYS) expect(caps[key], `${role} ${key}`).toBe(OWN_CAPABILITIES[role].includes(key));
+    }
+    // A creator can never hold an approve/pay switch, even if one is stored.
+    const creator = getOwnCapabilities({ role: "CREATOR", permissions: { "links.approve": true, "finance.pay": true } });
+    expect(creator["links.approve"]).toBe(false);
+    expect(creator["finance.pay"]).toBe(false);
+    // Staff accounts have no own-content switches.
+    for (const key of PERMISSION_KEYS) expect(getOwnCapabilities({ role: "ADMIN", permissions: null })[key]).toBe(false);
+  });
+
+  it("the admin can switch one off; turning a section's view off takes its actions with it", () => {
+    const noInvoicing = getOwnCapabilities({ role: "CREATOR", permissions: { "finance.edit": false } });
+    expect(noInvoicing["finance.edit"]).toBe(false);
+    expect(noInvoicing["finance.view"]).toBe(true);
+    const noFinance = getOwnCapabilities({ role: "CREATOR", permissions: { "finance.view": false } });
+    expect(noFinance["finance.edit"]).toBe(false);
+    expect(hasOwnCapability({ role: "PLAN_MAKER", permissions: { "plans.edit": false } }, "plans.edit")).toBe(false);
+    expect(hasOwnCapability({ role: "PLAN_MAKER", permissions: { "plans.edit": false } }, "plans.view")).toBe(true);
+  });
+
+  it("an overlay left by the old global-grant model doesn't switch a planner's own sections off", () => {
+    // Real row shape from before 23 Sep: false there meant "no global grant", not "switched off".
+    const legacy = { "links.review": false, "plans.manage": true, "users.manage": false, "finance.manage": false, "campaigns.manage": false, "inventory.manage": false };
+    const caps = getOwnCapabilities({ role: "PLAN_MAKER", permissions: legacy });
+    for (const key of OWN_CAPABILITIES.PLAN_MAKER) expect(caps[key], key).toBe(true);
+    // Same for a 23 Sep per-action map carrying a global grant alongside.
+    const perAction = getOwnCapabilities({ role: "PLAN_MAKER", permissions: { "finance.view": true, "campaigns.view": false } });
+    expect(perAction["campaigns.view"]).toBe(true);
+    // Saving the editor over a legacy row doesn't carry the old values forward.
+    expect(ownOverlayFor("PLAN_MAKER", { "plans.edit": false }, legacy)).toEqual({ "plans.edit": false });
+    // A genuine own overlay is still honoured.
+    expect(getOwnCapabilities({ role: "PLAN_MAKER", permissions: { "campaigns.view": false } })["campaigns.view"]).toBe(false);
+  });
+
+  it("ownOverlayFor stores only what's switched off, and merges with the existing overlay", () => {
+    expect(ownOverlayFor("CREATOR", {})).toBeNull();
+    expect(ownOverlayFor("CREATOR", { "finance.edit": false, "links.view": true })).toEqual({ "finance.edit": false });
+    expect(ownOverlayFor("CREATOR", { "links.edit": false }, { "finance.edit": false })).toEqual({ "finance.edit": false, "links.edit": false });
+    expect(ownOverlayFor("CREATOR", { "finance.edit": true }, { "finance.edit": false })).toBeNull();
+    // Switching off a key outside the role's list is a harmless no-op.
+    expect(ownOverlayFor("TEAM_MEMBER", { "links.approve": false })).toBeNull();
+  });
+
+  it("ownOverlayFor refuses to *give* an own-scope role anything outside its own content (400 OWN_SCOPE_ONLY)", () => {
+    for (const [role, key] of [["CREATOR", "links.approve"], ["TEAM_MEMBER", "finance.edit"], ["PLAN_MAKER", "finance.pay"], ["PLAN_MAKER", "users.edit"]]) {
       const err = (() => {
         try {
-          assertGrantableRole(role, { "links.approve": true, "plans.edit": false });
+          ownOverlayFor(role, { [key]: true });
         } catch (e) {
           return e;
         }
       })();
-      expect(err).toBeInstanceOf(ApiError);
+      expect(err, `${role} ${key}`).toBeInstanceOf(ApiError);
       expect(err.statusCode).toBe(400);
-      expect(err.code).toBe("ROLE_NOT_GRANTABLE");
+      expect(err.code).toBe("OWN_SCOPE_ONLY");
     }
   });
 });

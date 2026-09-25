@@ -32,7 +32,7 @@ import {
   type Invoice,
   type Campaign,
 } from "@/lib/api-client";
-import { money, initialsOf, roleLabel } from "@/lib/format";
+import { money, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { lastNMonths } from "@/lib/dates";
 
 const LINK_PIPELINE_ORDER: LinkRow["status"][] = [
@@ -204,7 +204,7 @@ export function AdminDashboard() {
       out.push({
         id: `bill-${b.id}`,
         title: `Billing profile · ${b.name}`,
-        sub: `${b.user?.name ?? b.user?.phoneNumber ?? "—"} · PAN ${b.pan}`,
+        sub: `${personLabel(b.user, "—")} · PAN ${b.pan}`,
         href: `/approvals`,
         primary: { label: "Approve", onClick: () => approveBilling.mutate(b.id), pending: approveBilling.isPending },
       });

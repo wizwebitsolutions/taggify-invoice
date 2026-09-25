@@ -93,8 +93,8 @@ describe("POST /invoices/:id/approve — who may sign off", () => {
     expect(approveInvoice).not.toHaveBeenCalled();
   });
 
-  it("403s a PLAN_MAKER without a finance.manage grant, 200s one with it", async () => {
+  it("403s a PLAN_MAKER with or without a stored finance grant (regression (24 Sep — own-scope roles never get global access))", async () => {
     expect(await approveAs({ id: "pm-1", role: "PLAN_MAKER" })).toBe(403);
-    expect(await approveAs({ id: "pm-2", role: "PLAN_MAKER", permissions: { "finance.manage": true } })).toBe(200);
+    expect(await approveAs({ id: "pm-2", role: "PLAN_MAKER", permissions: { "finance.manage": true } })).toBe(403);
   });
 });

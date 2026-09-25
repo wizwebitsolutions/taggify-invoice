@@ -15,7 +15,7 @@ export async function listOwn(userId) {
 
 export async function listAll() {
   return prisma.billingProfile.findMany({
-    include: { user: { select: { id: true, name: true, phoneNumber: true } } },
+    include: { user: { select: { id: true, name: true, phoneNumber: true, email: true } } },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -55,7 +55,7 @@ export async function update(id, actor, data) {
   return prisma.billingProfile.update({
     where: { id },
     data: { ...clean, ...(isReviewer ? {} : { approvalStatus: "pending" }) },
-    include: { user: { select: { id: true, name: true, phoneNumber: true } } },
+    include: { user: { select: { id: true, name: true, phoneNumber: true, email: true } } },
   });
 }
 

@@ -194,7 +194,7 @@ export async function listInvoices(user, filters) {
       // read a name from and fell back to literally printing "Creator" in
       // that column for every row (see client/app/invoices/page.tsx).
       include: {
-        creator: { select: { id: true, name: true, phoneNumber: true } },
+        creator: { select: { id: true, name: true, phoneNumber: true, email: true } },
         campaign: { select: { id: true, title: true, brandName: true } },
         raisedBy: { select: { id: true, name: true, role: true } },
         items: { include: { link: true } },

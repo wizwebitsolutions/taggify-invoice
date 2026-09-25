@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
+import { getEffectivePermissions, getOwnCapabilities } from "../../lib/permissions.js";
 
 const PROFILE_SELECT = {
   id: true,
@@ -18,9 +19,12 @@ const PROFILE_SELECT = {
 };
 
 export async function getProfile(userId) {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: PROFILE_SELECT });
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { ...PROFILE_SELECT, permissions: true } });
   if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
-  return user;
+  // Fresh access (24 Sep) — the client refreshes its nav from this, so an
+  // admin switching a section off shows up without a re-login.
+  const { permissions: _overlay, ...profile } = user;
+  return { ...profile, permissions: getEffectivePermissions(user), ownAccess: getOwnCapabilities(user) };
 }
 
 export async function updateProfile(userId, data) {

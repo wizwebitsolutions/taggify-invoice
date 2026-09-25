@@ -98,6 +98,9 @@ vi.mock("../../lib/campaignAccess.js", () => ({
   campaignVisibilityWhere: () => ({}),
   planMakerCampaignWhere: () => ({}),
   canPlanMakerAccessCampaign: (...a) => canPlanMakerAccessCampaign(...a),
+  // Creator campaign scoping (24 Sep) has its own tests — lib/campaignAccess.test.js.
+  canCreatorAccessCampaign: async () => true,
+  ownerIdsFor: async (user) => [user.id],
 }));
 
 const { listCampaigns, getCampaignById, createPhase, deletePhase, listAssignments } = await import("./service.js");
@@ -217,6 +220,8 @@ describe("creator view — every row is its own numbered phase", () => {
     ]);
     // Their Phase 1 entry counts only phase 1's own post, not the extra one.
     expect(list[0].postCount).toBe(1);
+    // Each entry says which of their pages it takes links for (booked campaigns only, 24 Sep).
+    for (const entry of list) expect(entry.bookedAssetIds).toEqual(["asset-a"]);
   });
 
   it("a creator with one post per phase counts only their own rows — another page's 2nd reel leaves no gap (Phase 1, 2)", async () => {

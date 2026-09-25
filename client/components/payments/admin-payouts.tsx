@@ -22,7 +22,7 @@ import {
   type FilterState,
 } from "@/components/payments/payments-filters";
 import { payments as paymentsApi, assets as assetsApi, ApiError, type Link, type PageOwner, type Payout, type PendingLink } from "@/lib/api-client";
-import { money, compactNumber, initialsOf } from "@/lib/format";
+import { money, compactNumber, initialsOf, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -254,7 +254,7 @@ function PendingTab({
     for (const link of links) {
       const ownerId = link.asset.ownerId;
       if (!byOwner.has(ownerId)) {
-        const owner = link.asset.owner ?? owners.find((o) => o.id === ownerId) ?? { id: ownerId, name: null, phoneNumber: "" };
+        const owner = link.asset.owner ?? owners.find((o) => o.id === ownerId) ?? { id: ownerId, name: null, phoneNumber: null };
         byOwner.set(ownerId, { owner, links: [] });
       }
       byOwner.get(ownerId)!.links.push(link);
@@ -297,7 +297,7 @@ function PendingTab({
         >
           <ClockIcon className="h-4 w-4 shrink-0 text-accent-2" />
           <span className="min-w-0 flex-1">
-            <b className="font-semibold">Waiting for a receipt:</b> {d.creator?.name ?? d.creator?.phoneNumber ?? "—"} · {d.items?.length ?? 0} link
+            <b className="font-semibold">Waiting for a receipt:</b> {personLabel(d.creator)} · {d.items?.length ?? 0} link
             {(d.items?.length ?? 0) === 1 ? "" : "s"} · {money(d.netAmount)}. Its links stay off this list until it&rsquo;s finished or cancelled.
           </span>
           <button type="button" onClick={() => setResuming(d)} className="font-medium text-blue hover:underline">
@@ -341,7 +341,7 @@ function PendingTab({
           groups.map((group) => {
             const allIn = group.links.every((l) => selected.has(l.id));
             const pages = new Set(group.links.map((l) => l.assetId)).size;
-            const name = group.owner.name ?? group.owner.phoneNumber;
+            const name = personLabel(group.owner);
             const open = isOpen(group.owner.id);
             const groupSelected = group.links.filter((l) => selected.has(l.id));
             const groupTotal = group.links.reduce((s, l) => s + Number(l.cost), 0);
@@ -357,7 +357,7 @@ function PendingTab({
                   />
                   <button type="button" aria-expanded={open} onClick={() => toggleOpen(group.owner.id)} className="group flex min-w-0 items-center gap-3 text-left">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[0.75rem] font-semibold text-text-2 ring-1 ring-inset ring-border">
-                      {initialsOf(group.owner.name ?? group.owner.phoneNumber)}
+                      {initialsOf(name)}
                     </span>
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate text-[0.875rem] font-semibold group-hover:underline">{name}</span>
@@ -368,7 +368,7 @@ function PendingTab({
                         <span className="rounded-full border border-border bg-surface px-1.5 py-px tabular-nums">
                           {group.links.length} link{group.links.length === 1 ? "" : "s"}
                         </span>
-                        <span className="hidden text-text-faint sm:inline">{group.owner.phoneNumber}</span>
+                        <span className="hidden text-text-faint sm:inline">{group.owner.email ?? group.owner.phoneNumber}</span>
                       </span>
                     </span>
                   </button>
@@ -533,7 +533,7 @@ function PendingTab({
           <div className="flex flex-col gap-4 overflow-y-auto p-6 pt-1" data-testid="payments-link-detail">
             <div>
               <p className="text-[0.75rem] text-text-muted">
-                {detail.campaign?.title ?? "—"} · {detail.asset.owner?.name ?? detail.asset.owner?.phoneNumber ?? ""}
+                {detail.campaign?.title ?? "—"} · {personLabel(detail.asset.owner, "")}
               </p>
               <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">
                 @{detail.asset.handle} · <span className="capitalize">{detail.format}</span>
@@ -580,7 +580,7 @@ function PaidTab({ payouts, isLoading, error }: { payouts: Payout[]; isLoading: 
               <div className={cn("grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-5 py-3.5", PAID_COLS)}>
                 <span className="text-[0.8125rem] tabular-nums text-text-2">{p.paidAt ? shortDate(p.paidAt) : "—"}</span>
                 <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : p.id)} className="flex min-w-0 flex-col text-left">
-                  <span className="truncate text-[0.8438rem] font-medium hover:underline">{p.creator?.name ?? p.creator?.phoneNumber ?? "—"}</span>
+                  <span className="truncate text-[0.8438rem] font-medium hover:underline">{personLabel(p.creator)}</span>
                   <span className="truncate text-[0.72rem] text-text-faint">by {p.markedPaidBy?.name ?? p.createdBy?.name ?? "—"}</span>
                 </button>
                 <span className="hidden truncate text-[0.8125rem] text-text-2 md:block">{pages.map((h) => `@${h}`).join(", ") || "—"}</span>

@@ -1,7 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { autoAttachLink } from "../links/service.js";
-import { campaignVisibilityWhere, canPlanMakerAccessCampaign, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
+import { campaignVisibilityWhere, canPlanMakerAccessCampaign, canCreatorAccessCampaign, ownerIdsFor, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 import { byPhaseThenPost, creatorPhaseNumberIn, creatorPhaseTitle, creatorRowsOf, groupsByRoot, phaseRowIds } from "../../lib/campaignPhases.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 
@@ -89,7 +89,7 @@ export async function listCampaigns({ search } = {}, requester) {
   // under AND rather than one clobbering the other on the same key.
   const clauses = [];
   if (search) clauses.push({ OR: [{ title: { contains: search, mode: "insensitive" } }, { brandName: { contains: search, mode: "insensitive" } }] });
-  const scope = campaignVisibilityWhere(requester);
+  const scope = await campaignVisibilityWhere(requester);
   if (Object.keys(scope).length > 0) clauses.push(scope);
 
   const roots = await prisma.campaign.findMany({
@@ -174,11 +174,17 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
   const rootIds = annotatedRoots.map((r) => r.id);
   const groups = await groupsByRoot(rootIds);
   const childIds = [...groups.values()].flat().filter((r) => r.parentCampaignId).map((r) => r.id);
-  const mine = new Set(
-    childIds.length === 0
-      ? []
-      : (await prisma.campaignAssignment.findMany({ where: { campaignId: { in: childIds }, asset: { ownerId: requester.id } }, select: { campaignId: true } })).map((a) => a.campaignId)
-  );
+  // Their pages' bookings across every row of these groups (a team member's
+  // include their creator's pages) — which child rows are theirs, and which
+  // pages each entry will accept a link for.
+  const ownerIds = await ownerIdsFor(requester);
+  const bookings = await prisma.campaignAssignment.findMany({
+    where: { campaignId: { in: [...rootIds, ...childIds] }, asset: { ownerId: { in: ownerIds } } },
+    select: { campaignId: true, assetId: true },
+  });
+  const bookedAssetIds = (campaignId) => [...new Set(bookings.filter((b) => b.campaignId === campaignId).map((b) => b.assetId))];
+  const childSet = new Set(childIds);
+  const mine = new Set(bookings.map((b) => b.campaignId).filter((id) => childSet.has(id)));
   const children = childIds.length === 0 ? [] : await prisma.campaign.findMany({ where: { id: { in: [...mine] } } });
   const childById = new Map(children.map((c) => [c.id, c]));
 
@@ -186,7 +192,7 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
   for (const root of annotatedRoots) {
     const group = groups.get(root.id) ?? [];
     // To the creator, Phase 1 is just the root row — its extra posts are their own entries below.
-    out.push({ ...annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), phaseCount: root.phaseCount, creatorPhaseNumber: 1 });
+    out.push({ ...annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), phaseCount: root.phaseCount, creatorPhaseNumber: 1, bookedAssetIds: bookedAssetIds(root.id) });
     // Numbered over this creator's own rows only (root + what they're booked on).
     const theirs = creatorRowsOf(group, mine);
     for (const row of [...theirs].sort(byPhaseThenPost)) {
@@ -194,7 +200,7 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
       if (!child) continue;
       const n = creatorPhaseNumberIn(theirs, row.id);
       const annotated = annotateCampaign({ ...child, title: creatorPhaseTitle(root.title, n), phaseNumber: n }, linksByCampaign.get(child.id) ?? [], pendingByCampaign.get(child.id) ?? 0);
-      out.push({ ...annotated, costCap: root.costCap, creatorPhaseNumber: n, phaseCount: 1 });
+      out.push({ ...annotated, costCap: root.costCap, creatorPhaseNumber: n, phaseCount: 1, bookedAssetIds: bookedAssetIds(child.id) });
     }
   }
   return out;
@@ -217,6 +223,10 @@ export async function getCampaignById(id, requester) {
   // plans — same "don't confirm it exists" convention listInvoices/
   // getInvoiceDetail use for another creator's invoice.
   if (requester?.role === "PLAN_MAKER" && !(await canPlanMakerAccessCampaign(requester.id, id))) {
+    throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
+  }
+  // Creators / team members (24 Sep): only campaigns their pages are in.
+  if ((requester?.role === "CREATOR" || requester?.role === "TEAM_MEMBER") && !(await canCreatorAccessCampaign(requester, id))) {
     throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
   }
 

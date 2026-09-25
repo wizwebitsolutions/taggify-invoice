@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { MoneyField, PhoneField } from "@/components/ui/form-field";
@@ -106,6 +107,8 @@ function PendingAssignmentRow({
   const [expanded, setExpanded] = useState(false);
   const [phone, setPhone] = useState(assignment.creatorPhone?.replace(/^\+91/, "") ?? "");
   const [name, setName] = useState("");
+  // Email is the new account's login (24 Sep) — required; phone optional.
+  const [email, setEmail] = useState("");
   const [category, setCategory] = useState("");
   const [rates, setRates] = useState<Record<string, string>>({});
   const [phoneBlurred, setPhoneBlurred] = useState(false);
@@ -132,19 +135,19 @@ function PendingAssignmentRow({
   }
   const visibleCreators = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
-    const list = q ? creators.filter((u) => (u.name ?? "").toLowerCase().includes(q) || u.phoneNumber.includes(q)) : creators;
+    const list = q ? creators.filter((u) => (u.name ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q) || (u.phoneNumber ?? "").includes(q)) : creators;
     return list.slice(0, 8);
   }, [creators, userSearch]);
   const selectedUser = creators.find((u) => u.id === existingId) ?? null;
 
-  // Same signup call, same 10-digit requirement, as CreateUserModal
-  // (app/users/page.tsx) — this row also calls authApi.signup with a
-  // "+91"-prefixed phone number to create a brand-new creator account for
-  // an unmatched page. It used to only check "non-empty" (bugs.md #3/#4).
+  // Same signup call and rules as CreateUserModal (app/users/page.tsx):
+  // email required; phone optional, but a full 10 digits if given (a
+  // partial number used to reach the server as "+91123", bugs.md #3/#4).
+  const emailValid = /^\S+@\S+\.\S+$/.test(email.trim());
   const phoneDigits = phone.replace(/\D/g, "");
-  const phoneValid = phoneDigits.length === 10;
+  const phoneValid = phoneDigits.length === 0 || phoneDigits.length === 10;
   const showPhoneError = phoneBlurred && !phoneValid;
-  const canSubmit = mode === "existing" ? Boolean(existingId) : phoneValid;
+  const canSubmit = mode === "existing" ? Boolean(existingId) : emailValid && phoneValid;
 
   const resolveMutation = useMutation({
     mutationFn: async () => {
@@ -153,27 +156,39 @@ function PendingAssignmentRow({
       if (mode === "existing") {
         ownerId = existingId!;
       } else {
-        // The phone might already belong to an existing creator (this
-        // page's owner just hadn't registered this particular handle yet)
-        // — reuse them instead of erroring, rather than forcing a
+        // The email or phone might already belong to an existing creator
+        // (this page's owner just hadn't registered this particular handle
+        // yet) — reuse them instead of erroring, rather than forcing a
         // duplicate account.
         try {
           const signupResult = await authApi.signup(token, {
-            phoneNumber: `+91${phoneDigits}`,
+            email: email.trim(),
+            phoneNumber: phoneDigits ? `+91${phoneDigits}` : undefined,
             name: name || undefined,
             role: "CREATOR",
           });
           ownerId = signupResult.user.id;
           generatedPassword = signupResult.generatedPassword;
         } catch (err) {
+          // Same email = same person: reuse that account. A phone that's
+          // already someone else's is NOT reused silently (24 Sep review) —
+          // the admin typed a different email, so say so and let them choose.
           if (err instanceof ApiError && err.code === "PHONE_ALREADY_REGISTERED") {
             const allUsers = await adminApi.users(token);
-            const existing = allUsers.find((u) => u.phoneNumber === `+91${phoneDigits}`);
-            if (!existing) throw err;
-            ownerId = existing.id;
-          } else {
-            throw err;
+            const holder = allUsers.find((u) => u.phoneNumber === `+91${phoneDigits}`);
+            throw new ApiError(
+              409,
+              err.code,
+              holder
+                ? `That phone number already belongs to ${personLabel(holder)}. Use "Existing user" to attach the page to them, or clear the phone.`
+                : "That phone number is already registered — clear it or use a different one."
+            );
           }
+          if (!(err instanceof ApiError && err.code === "EMAIL_ALREADY_REGISTERED")) throw err;
+          const allUsers = await adminApi.users(token);
+          const existing = allUsers.find((u) => u.email?.toLowerCase() === email.trim().toLowerCase());
+          if (!existing) throw err;
+          ownerId = existing.id;
         }
       }
 
@@ -196,7 +211,7 @@ function PendingAssignmentRow({
       <div className="flex items-center gap-2.5 rounded-md border border-accent/25 bg-accent-soft px-3.5 py-3 text-[0.8125rem]">
         <CheckCircleIcon className="h-4 w-4 shrink-0 text-accent" />
         <span>
-          @{assignment.pageHandle} {mode === "existing" && selectedUser ? `attached to ${selectedUser.name ?? selectedUser.phoneNumber}.` : "created."}
+          @{assignment.pageHandle} {mode === "existing" && selectedUser ? `attached to ${personLabel(selectedUser)}.` : "created."}
           {resolveMutation.data && (
             <>
               {" "}
@@ -252,7 +267,7 @@ function PendingAssignmentRow({
           </div>
           {phoneOwner && mode === "existing" && existingId === phoneOwner.id && (
             <p className="text-[0.75rem] text-accent">
-              The sheet's phone number already belongs to {phoneOwner.name ?? phoneOwner.phoneNumber} — attaching to them.
+              The sheet's phone number already belongs to {personLabel(phoneOwner)} — attaching to them.
             </p>
           )}
 
@@ -263,7 +278,7 @@ function PendingAssignmentRow({
                 <input
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
-                  placeholder="Search creators by name or phone…"
+                  placeholder="Search creators by name, email or phone…"
                   aria-label="Search existing users"
                   className="h-9 w-full rounded-md border border-border-strong bg-surface-2 pl-8 pr-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
                 />
@@ -291,7 +306,7 @@ function PendingAssignmentRow({
                         <span className="min-w-0">
                           <span className="block truncate text-[0.8125rem] font-semibold">{u.name ?? "Unnamed"}</span>
                           <span className="block text-[0.6875rem] text-text-faint">
-                            {u.phoneNumber} · {u.role === "TEAM_MEMBER" ? "Team member" : "Creator"}
+                            {u.email ?? u.phoneNumber ?? "—"} · {u.role === "TEAM_MEMBER" ? "Team member" : "Creator"}
                           </span>
                         </span>
                         {on && <CheckCircleIcon className="h-4 w-4 shrink-0 text-accent" />}
@@ -303,13 +318,21 @@ function PendingAssignmentRow({
             </div>
           ) : (
             <>
-              <PhoneField size="sm" value={phone} onChange={setPhone} onBlur={() => setPhoneBlurred(true)} placeholder="Creator's phone number" error={showPhoneError ? "Enter a valid 10-digit mobile number." : null} />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Creator's email (their login)"
+                aria-label="Creator's email"
+                className="h-9 w-full rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
+              />
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Creator's name (optional)"
                 className="h-9 w-full rounded-md border border-border-strong bg-surface-2 px-2.5 text-[0.8125rem] text-text placeholder:text-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-30"
               />
+              <PhoneField size="sm" value={phone} onChange={setPhone} onBlur={() => setPhoneBlurred(true)} placeholder="Phone (optional)" error={showPhoneError ? "Enter a valid 10-digit mobile number, or leave it empty." : null} />
             </>
           )}
           <CategoryPicker value={category} onChange={setCategory} />

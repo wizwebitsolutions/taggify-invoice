@@ -71,8 +71,8 @@ describe("Payments routes — admin/finance only (tasks.md #5, 23 Sep)", () => {
     expect(listPayouts).toHaveBeenCalledTimes(2);
   });
 
-  it("a PLAN_MAKER explicitly granted finance.pay can reach the module", async () => {
-    expect(await call({ id: "pm-2", role: "PLAN_MAKER", permissions: { "finance.pay": true } }, "GET", "/payouts")).toBe(200);
+  it("regression (24 Sep — own-scope roles never get global access): a PLAN_MAKER with a stored finance.pay grant still can't reach the module", async () => {
+    expect(await call({ id: "pm-2", role: "PLAN_MAKER", permissions: { "finance.pay": true } }, "GET", "/payouts")).toBe(403);
   });
 
   it("POST /payments/payouts creates a payout for FINANCE, refuses CREATOR", async () => {

@@ -183,7 +183,49 @@ const LEGACY_KEY_MAP: Record<string, PermissionKey[]> = {
   "plans.manage": ["plans.view", "plans.edit", "plans.approve"],
 };
 
-type AccessUser = { role?: Role; permissions?: Partial<Record<string, boolean>> } | null | undefined;
+type AccessUser = { role?: Role; permissions?: Partial<Record<string, boolean>>; ownAccess?: Partial<Record<string, boolean>> } | null | undefined;
+
+/**
+ * Own-scope roles (24 Sep, mirrors server lib/permissions.js): Creators,
+ * Team members and Plan makers never hold global keys — their access is a
+ * set of switches over their *own* content (OWN_CAPABILITIES), all ON by
+ * default; an admin can switch any off on People → Edit access.
+ */
+export const OWN_SCOPE_ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"];
+export const isOwnScopeRole = (role: Role | undefined | null) => !!role && OWN_SCOPE_ROLES.includes(role);
+export const OWN_CAPABILITIES: Partial<Record<Role, PermissionKey[]>> = {
+  CREATOR: ["campaigns.view", "inventory.view", "inventory.edit", "links.view", "links.edit", "finance.view", "finance.edit", "users.view", "users.edit"],
+  TEAM_MEMBER: ["campaigns.view", "inventory.view", "links.view", "links.edit", "finance.view"],
+  PLAN_MAKER: ["plans.view", "plans.edit", "plans.approve", "campaigns.view", "campaigns.edit", "links.view", "finance.view", "finance.edit", "inventory.view"],
+};
+
+/** An own-scope role's switches with nothing turned off. */
+export function defaultOwnAccess(role: Role): Permissions {
+  const allowed = OWN_CAPABILITIES[role] ?? [];
+  return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, allowed.includes(k)])) as Permissions;
+}
+
+/**
+ * Is an own-content feature switched on for this (own-scope) account? Same
+ * answer as the server's hasOwnCapability. A session from before 24 Sep has
+ * no map yet — treat the role's own features as on (the server default)
+ * until its next refresh. Staff roles: false (use hasAccess).
+ */
+export function hasOwnAccess(user: AccessUser, key: PermissionKey): boolean {
+  if (!isOwnScopeRole(user?.role)) return false;
+  const allowed = OWN_CAPABILITIES[user!.role!] ?? [];
+  if (!allowed.includes(key)) return false;
+  const map = user?.ownAccess;
+  if (!map) return true;
+  const section = key.split(".")[0];
+  if (key !== `${section}.view` && map[`${section}.view`] === false) return false;
+  return map[key] !== false;
+}
+
+/** The one gate for UI that both kinds of account can use: own-content switch for own-scope roles, global key for staff. */
+export function canUse(user: AccessUser, key: PermissionKey): boolean {
+  return isOwnScopeRole(user?.role) ? hasOwnAccess(user, key) : hasAccess(user, key);
+}
 
 /**
  * Same answer the server's hasPermission() gives. The server's effective
@@ -210,7 +252,8 @@ export function hasAccess(user: AccessUser, key: PermissionKey): boolean {
 
 export interface User {
   id: string;
-  phoneNumber: string;
+  /** Optional since 24 Sep — accounts are created with an email (the login); phone is extra contact info. */
+  phoneNumber: string | null;
   name: string | null;
   role: Role;
   whatsappVerified: boolean;
@@ -231,6 +274,8 @@ export interface User {
   permissions?: Permissions;
   /** Which admin created this account, if it was created via the sub-admin flow (admin Users list only). */
   createdByAdminId?: string | null;
+  /** Own-content switches for CREATOR / TEAM_MEMBER / PLAN_MAKER (24 Sep); all-false for staff. */
+  ownAccess?: Partial<Record<string, boolean>>;
 }
 
 export interface BillingProfile {
@@ -244,7 +289,7 @@ export interface BillingProfile {
   ifscCode: string;
   approvalStatus: "pending" | "approved" | "rejected";
   createdAt: string;
-  user?: { id: string; name: string | null; phoneNumber: string };
+  user?: { id: string; name: string | null; phoneNumber: string | null; email?: string | null };
 }
 
 export interface AuthResponse {
@@ -257,10 +302,9 @@ export interface AuthResponse {
 // AUTHENTICATED carries a session (see server auth/service.js's login).
 // The challengeToken is the proof-of-password to hand to the next step's
 // endpoint; it is not a session and must never be stored as one.
-export type LoginResult =
-  | ({ step: "AUTHENTICATED"; unverifiedLoginsLeft?: number } & AuthResponse)
-  | { step: "OTP_REQUIRED"; challengeToken: string; emailHint: string }
-  | { step: "EMAIL_VERIFICATION_REQUIRED"; challengeToken: string };
+// Since 24 Sep there are only two answers: a code was emailed, or (a
+// remembered device) straight in.
+export type LoginResult = ({ step: "AUTHENTICATED" } & AuthResponse) | { step: "OTP_REQUIRED"; challengeToken: string; emailHint: string };
 
 /** How email setup proves who's asking: a locked-out login's challenge token, or a normal session's access token. */
 export type EmailSetupIdentity = { challengeToken: string } | { token: string };
@@ -310,7 +354,7 @@ export interface Asset {
   /** Set while a profile scrape is queued/running for this page (create, import, bulk refresh); null once it finishes. */
   scrapeQueuedAt?: string | null;
   /** The creator this page belongs to — Inventory's owner filter (newTask.md, 9 Sep). */
-  owner?: { id: string; name: string | null; phoneNumber: string } | null;
+  owner?: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } | null;
   /** Every campaign this page has been assigned to, deduped — Inventory card's "campaigns they've made" (user request, 11 Sep). */
   campaigns: { id: string; title: string; brandName: string }[];
 }
@@ -343,6 +387,10 @@ export interface Campaign {
   postNumber?: number;
   /** Creator / team member responses only — this row's number in one running count over the campaign's phases and extra posts ("X — Phase 3"). */
   creatorPhaseNumber?: number;
+  /** Creator / team member list only (24 Sep): their pages booked on this
+   *  exact row — the only pages it takes links for (server:
+   *  lib/pageOwnership.js assertPageBooked). */
+  bookedAssetIds?: string[];
   /** The whole phase group (including this campaign), phase-1-first. Only present on getCampaignById's response, not the list. */
   phases?: { id: string; phaseNumber: number; title: string; createdAt: string }[];
   /** Only present on listCampaigns' response — how many phases (including this root) exist. 1 for a campaign with no phases. */
@@ -464,7 +512,7 @@ export interface Invoice {
   paidAt: string | null;
   createdAt: string;
   overdueDays: number;
-  creator?: { id: string; name: string | null; phoneNumber: string };
+  creator?: { id: string; name: string | null; phoneNumber: string | null; email?: string | null };
   /** Set when the invoice is tied to one campaign — always for one generated from a campaign page (12 Sep), and for a creator-raised one whose links all share a campaign. */
   campaignId?: string | null;
   campaign?: { id: string; title: string; brandName: string } | null;
@@ -666,8 +714,9 @@ export const auth = {
   // credentials: "include" — sends/accepts the trusted-device cookie
   // ("skip OTP for 7 days", 23 Sep). Login must send whatever cookie this
   // browser already has; verify-otp is what sets a fresh one.
-  login: (identifier: { phoneNumber: string } | { email: string }, password: string) =>
-    request<LoginResult>("/auth/login", { method: "POST", body: { ...identifier, password }, credentials: "include" }),
+  // Email + password only (24 Sep) — phone-number login is gone.
+  login: (email: string, password: string) =>
+    request<LoginResult>("/auth/login", { method: "POST", body: { email, password }, credentials: "include" }),
   // remember defaults true (the checkbox next to the code entry starts
   // checked) — unchecking it still signs in, just without a trusted-device
   // cookie, so the next login asks for OTP again.
@@ -695,7 +744,8 @@ export const auth = {
   // Admin-only — creates the account and returns a system-generated password, shown once.
   // `permissions` (only meaningful when role is "ADMIN") is the sub-admin
   // creation path (newTask.md, 8 Sep) — omit it, or leave every key true, for a plain admin.
-  signup: (token: string, body: { phoneNumber: string; name?: string; role: Role; permissions?: Partial<Permissions> }) =>
+  // Email required (the new account's login), phone optional; the password is generated server-side and returned once.
+  signup: (token: string, body: { email: string; phoneNumber?: string; name?: string; role: Role; permissions?: Partial<Permissions> }) =>
     request<{ user: User; generatedPassword: string }>("/auth/signup", { method: "POST", token, body }),
 };
 
@@ -769,7 +819,7 @@ export const assets = {
 export interface PageOwner {
   id: string;
   name: string | null;
-  phoneNumber: string;
+  phoneNumber: string | null;
   email?: string | null;
 }
 
@@ -787,7 +837,7 @@ export interface ImportPreviewRow {
   /** What the sheet's owner cell said, verbatim. */
   ownerRef: string | null;
   /** The account this row resolved to (or already lives under, for "exists"). */
-  owner: { id: string; name: string | null; phoneNumber: string } | null;
+  owner: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } | null;
   ownerId: string | null;
   status: ImportRowStatus;
   reason: string | null;
@@ -819,7 +869,7 @@ export interface ImportAssetRow {
 }
 
 export interface ImportResult {
-  created: { id: string; handle: string; ownerId: string; owner: { id: string; name: string | null; phoneNumber: string } }[];
+  created: { id: string; handle: string; ownerId: string; owner: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } }[];
   skipped: { handle: string; reason: string }[];
 }
 
@@ -1093,7 +1143,7 @@ export interface Payout {
   /** Bank reference typed when marking paid (24 Sep redesign) — optional. */
   utr?: string | null;
   createdAt: string;
-  creator?: { id: string; name: string | null; phoneNumber: string } | null;
+  creator?: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } | null;
   createdBy?: { id: string; name: string | null } | null;
   markedPaidBy?: { id: string; name: string | null } | null;
   receipt?: { name: string; url: string | null; uploadedAt: string | null } | null;
@@ -1192,6 +1242,9 @@ export const admin = {
   // Reset-and-reveal, not a stored/recoverable password — see admin/service.js.
   resetPassword: (token: string, userId: string) =>
     request<{ generatedPassword: string }>(`/admin/users/${userId}/reset-password`, { method: "POST", token }),
+  // Change a user's email — their login (24 Sep). The new address starts unverified; they're signed out everywhere.
+  updateUserEmail: (token: string, userId: string, email: string) =>
+    request<{ id: string; email: string; emailVerified: boolean }>(`/admin/users/${userId}/email`, { method: "PUT", token, body: { email } }),
   // Sub-admin permission edits (newTask.md, 8 Sep) — only the keys being
   // changed need to be sent; the server merges onto the existing overlay.
   updatePermissions: (token: string, userId: string, permissions: Partial<Permissions>) =>
@@ -1420,7 +1473,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<Role, Permissions> = {
   FINANCE: Object.fromEntries(
     PERMISSION_KEYS.map((k) => [k, (["finance.view", "finance.edit", "finance.approve", "finance.pay", "campaigns.view", "inventory.view", "links.view"] as PermissionKey[]).includes(k)])
   ) as Permissions,
-  PLAN_MAKER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, k === "inventory.view"])) as Permissions,
+  // Own-scope roles hold no global key (24 Sep) — their switches are defaultOwnAccess().
+  PLAN_MAKER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
   CREATOR: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
   TEAM_MEMBER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
 };

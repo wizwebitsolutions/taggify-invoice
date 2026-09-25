@@ -114,7 +114,7 @@ function ProfileTab({ token, me }: { token: string; me: User }) {
             <TextField value={name} onChange={setName} placeholder="Your name" />
           </Field>
           <Field label="Phone (registered)">
-            <TextField value={me.phoneNumber} onChange={() => {}} disabled className="opacity-60" />
+            <TextField value={me.phoneNumber ?? ""} placeholder="Not added" onChange={() => {}} disabled className="opacity-60" />
           </Field>
           {/* Once verified, the email is the sign-in identifier (email 2FA,
               21 Sep) and the server refuses to change it from here — show it
@@ -262,10 +262,10 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
   // One row per account, the signed-in user's own first (so an admin can
   // add their own even with none yet), then the rest by name.
   const accounts = useMemo(() => {
-    const byUser = new Map<string, { id: string; name: string | null; phoneNumber: string; profiles: BillingProfile[] }>();
-    if (user) byUser.set(user.id, { id: user.id, name: user.name, phoneNumber: user.phoneNumber, profiles: [] });
+    const byUser = new Map<string, { id: string; name: string | null; phoneNumber: string | null; email?: string | null; profiles: BillingProfile[] }>();
+    if (user) byUser.set(user.id, { id: user.id, name: user.name, phoneNumber: user.phoneNumber, email: user.email, profiles: [] });
     for (const bp of items) {
-      const u = bp.user ?? { id: bp.userId, name: null, phoneNumber: "—" };
+      const u = bp.user ?? { id: bp.userId, name: null, phoneNumber: null };
       if (!byUser.has(u.id)) byUser.set(u.id, { ...u, profiles: [] });
       byUser.get(u.id)!.profiles.push(bp);
     }
@@ -312,7 +312,7 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
             </p>
             {isReviewer && bp.user && (
               <p className="mt-0.5 text-xs text-text-faint">
-                {bp.user.name ?? "—"} · {bp.user.phoneNumber}
+                {bp.user.name ?? "—"} · {bp.user.email ?? bp.user.phoneNumber ?? "—"}
               </p>
             )}
           </div>
@@ -409,7 +409,7 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
                   >
                     <div className="min-w-0">
                       <p className="truncate text-[0.875rem] font-semibold">{a.id === user?.id ? `${a.name ?? "You"} (you)` : (a.name ?? "—")}</p>
-                      <p className="truncate text-[0.75rem] text-text-faint">{a.phoneNumber}</p>
+                      <p className="truncate text-[0.75rem] text-text-faint">{a.email ?? a.phoneNumber ?? "—"}</p>
                     </div>
                     <span className="shrink-0 text-[0.6875rem] text-text-faint">
                       {pending > 0 ? <span className="rounded-full bg-slate-soft px-2 py-0.5 font-semibold text-slate">{pending} pending</span> : `${a.profiles.length}`}
@@ -423,8 +423,8 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
             {selected && (
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[0.8125rem] text-text-muted">
-                  <span className="font-semibold text-text">{selectedIsMe ? "Your billing profiles" : (selected.name ?? selected.phoneNumber)}</span>
-                  {!selectedIsMe && ` · ${selected.phoneNumber}`}
+                  <span className="font-semibold text-text">{selectedIsMe ? "Your billing profiles" : (selected.name ?? selected.email ?? selected.phoneNumber)}</span>
+                  {!selectedIsMe && (selected.email ?? selected.phoneNumber) && ` · ${selected.email ?? selected.phoneNumber}`}
                 </p>
                 {selectedIsMe && (
                   <Button size="sm" onClick={() => setShowForm(true)}>

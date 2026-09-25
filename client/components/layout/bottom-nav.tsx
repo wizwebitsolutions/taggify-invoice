@@ -6,7 +6,8 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { GridIcon, CampaignIcon, InvoiceIcon, InventoryIcon, MoreIcon } from "@/components/icons";
 import { MoreSheet } from "@/components/layout/more-sheet";
-import type { SidebarUser } from "@/components/layout/sidebar";
+import { canSeeNavKey, type SidebarUser } from "@/components/layout/sidebar";
+import { useAuth } from "@/lib/auth-context";
 
 const TABS = [
   { key: "dashboard", label: "Home", href: "/dashboard", icon: GridIcon },
@@ -26,6 +27,10 @@ const TABS = [
  */
 export function BottomNav({ active, user }: { active: string; user: SidebarUser }) {
   const [moreOpen, setMoreOpen] = useState(false);
+  // Same visibility as the sidebar (24 Sep — a creator whose Invoices were
+  // switched off shouldn't get the tab here either).
+  const { user: authUser } = useAuth();
+  const tabs = TABS.filter((t) => canSeeNavKey(t.key, authUser));
   const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs" || active === "plans" || active === "payments";
 
   return (
@@ -34,7 +39,7 @@ export function BottomNav({ active, user }: { active: string; user: SidebarUser 
         className="fixed inset-x-0 bottom-0 z-40 flex h-16 border-t border-border bg-surface-90 backdrop-blur-md md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = tab.key === active;
           return (

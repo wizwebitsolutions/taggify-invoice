@@ -18,7 +18,7 @@ import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { ChevronRightIcon, CheckIcon, ArrowRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { links as linksApi, assets as assetsApi, billing as billingApi, plans as plansApi, campaigns as campaignsApi, hasAccess, type Link as LinkRow, type Plan, type Asset, type BillingProfile, type Campaign } from "@/lib/api-client";
-import { money, count, initialsOf, roleLabel } from "@/lib/format";
+import { money, count, initialsOf, roleLabel, personLabel } from "@/lib/format";
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / DAY));
@@ -361,7 +361,7 @@ function DetailPanel({
     const b = item.profile;
     return (
       <Card className="flex flex-col" data-testid="approval-detail">
-        {header(b.name, `${b.user?.name ?? b.user?.phoneNumber ?? "—"} · PAN ${b.pan}`)}
+        {header(b.name, `${personLabel(b.user, "—")} · PAN ${b.pan}`)}
         <div className="grid grid-cols-2 gap-2 p-[18px]">
           <Stat label="GSTIN" value={b.gstin ?? "—"} />
           <Stat label="Bank" value={`${b.bankAccountNumber} · ${b.ifscCode}`} />

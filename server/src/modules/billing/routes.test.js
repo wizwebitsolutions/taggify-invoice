@@ -67,9 +67,14 @@ describe("GET /billing — finance.view decides the scope, read fresh (23 Sep, S
     expect(listAll).not.toHaveBeenCalled();
   });
 
-  it("granting finance.view to a role that doesn't normally hold it opens the full list", async () => {
+  it("regression (24 Sep — own-scope roles never get global access): a PLAN_MAKER with a stored finance.view grant still gets only their own billing profiles", async () => {
     const { body } = await listAs({ id: "pm-1", role: "PLAN_MAKER", permissions: { "finance.view": true } });
-    expect(body).toEqual([{ id: "bp-other", userId: "someone-else", pan: "AAAAA0000A" }]);
-    expect(listAll).toHaveBeenCalledTimes(1);
+    expect(body).toEqual([{ id: "bp-own", userId: "pm-1", pan: "BBBBB1111B" }]);
+    expect(listAll).not.toHaveBeenCalled();
+  });
+
+  it("24 Sep: a creator whose Finance section is switched off gets 403 ACCESS_REMOVED", async () => {
+    const { status } = await listAs({ id: "c-1", role: "CREATOR", permissions: { "finance.view": false } });
+    expect(status).toBe(403);
   });
 });

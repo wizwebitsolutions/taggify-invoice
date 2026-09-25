@@ -27,7 +27,8 @@ const verifyTrustedDevice = vi.fn();
 const revokeTrustedDevices = vi.fn();
 vi.mock("../../lib/auth/trustedDevice.js", () => ({ issueTrustedDevice, verifyTrustedDevice, revokeTrustedDevices }));
 
-const { login, verifyLoginOtp, resendLoginOtp, startEmailVerification, confirmEmailVerification, changePassword, MAX_UNVERIFIED_LOGINS } = await import("./service.js");
+const { login, verifyLoginOtp, resendLoginOtp, startEmailVerification, confirmEmailVerification, changePassword } = await import("./service.js");
+const { loginSchema, signupSchema } = await import("./schemas.js");
 const { signChallengeToken, verifyAccessToken, signAccessToken } = await import("../../lib/auth/jwt.js");
 
 const PHONE = "+919876543210";
@@ -43,59 +44,101 @@ beforeEach(() => {
   issueTrustedDevice.mockResolvedValue("new-trusted-device-token");
 });
 
-describe("login — unverified account (phone number)", () => {
-  it("gives a normal session for the first logins, counting each one", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(unverified());
-    mockPrisma.user.updateMany.mockResolvedValue({ count: 1 });
-
-    const result = await login({ phoneNumber: PHONE, password: "right-password" });
-
-    expect(result.step).toBe("AUTHENTICATED");
-    expect(result.accessToken).toBeTruthy();
-    expect(result.user.emailVerified).toBe(false);
-    expect(result.unverifiedLoginsLeft).toBe(MAX_UNVERIFIED_LOGINS - 1);
-    // Conditional on the allowance still being open — see the race test below.
-    expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
-      where: { id: "u1", emailVerifiedAt: null, unverifiedLoginCount: { lt: MAX_UNVERIFIED_LOGINS } },
-      data: { unverifiedLoginCount: { increment: 1 } },
-    });
-    expect(issueOtp).not.toHaveBeenCalled();
+describe("login — email only (24 Sep: 'on login only email verification will be required')", () => {
+  it("the login schema takes an email + password; a phone number is no longer an identifier", () => {
+    expect(loginSchema.safeParse({ email: "creator@gmail.com", password: "x" }).success).toBe(true);
+    expect(loginSchema.safeParse({ phoneNumber: PHONE, password: "x" }).success).toBe(false);
   });
 
-  it("parallel logins can't both take the last allowed login — the loser of the race is locked out", async () => {
-    // This request read "1 used", but by the time it writes, another request has taken the last slot.
-    mockPrisma.user.findUnique.mockResolvedValue(unverified({ unverifiedLoginCount: MAX_UNVERIFIED_LOGINS - 1 }));
-    mockPrisma.user.updateMany.mockResolvedValue({ count: 0 });
+  it("signup requires an email; phone is optional", () => {
+    expect(signupSchema.safeParse({ name: "A", role: "CREATOR" }).success).toBe(false);
+    expect(signupSchema.safeParse({ email: "not-an-email", role: "CREATOR" }).success).toBe(false);
+    expect(signupSchema.safeParse({ email: "a@gmail.com", role: "CREATOR" }).success).toBe(true);
+    expect(signupSchema.safeParse({ email: "a@company.in", phoneNumber: PHONE, role: "CREATOR" }).success).toBe(true);
+  });
 
-    const result = await login({ phoneNumber: PHONE, password: "right-password" });
+  it("an admin-created account (email set, not yet verified) gets an emailed code on its first login — no session, no lock-out counting", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(unverified({ email: "new.creator@gmail.com" }));
 
-    expect(result.step).toBe("EMAIL_VERIFICATION_REQUIRED");
+    const result = await login({ email: "New.Creator@gmail.com", password: "right-password" });
+
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { email: "new.creator@gmail.com" } });
+    expect(issueOtp).toHaveBeenCalledWith({ userId: "u1", purpose: "LOGIN", email: "new.creator@gmail.com" });
+    expect(result).toMatchObject({ step: "OTP_REQUIRED", emailHint: "ne***@gmail.com" });
     expect(result.accessToken).toBeUndefined();
-    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
-  });
-
-  it("stops issuing sessions once the allowance is used — email verification is the only way in", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(unverified({ unverifiedLoginCount: MAX_UNVERIFIED_LOGINS }));
-    mockPrisma.user.updateMany.mockResolvedValue({ count: 0 });
-
-    const result = await login({ phoneNumber: PHONE, password: "right-password" });
-
-    expect(result.step).toBe("EMAIL_VERIFICATION_REQUIRED");
-    expect(result.challengeToken).toBeTruthy();
-    expect(result.accessToken).toBeUndefined();
-    expect(result.refreshToken).toBeUndefined();
-    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
-  });
-
-  it("doesn't spend a login or reveal lock-out state on a wrong password", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(unverified({ unverifiedLoginCount: MAX_UNVERIFIED_LOGINS }));
-    await expect(login({ phoneNumber: PHONE, password: "nope" })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
     expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
   });
 
-  it("won't accept an unverified profile email as a login identifier", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(unverified({ email: "typed-in-profile@gmail.com" }));
-    await expect(login({ email: "typed-in-profile@gmail.com", password: "right-password" })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+  it("...and never skips that first code via a trusted-device cookie", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(unverified({ email: "new.creator@gmail.com" }));
+    verifyTrustedDevice.mockResolvedValue(true);
+
+    const result = await login({ email: "new.creator@gmail.com", password: "right-password", trustedDeviceToken: "cookie-value" });
+
+    expect(verifyTrustedDevice).not.toHaveBeenCalled();
+    expect(result.step).toBe("OTP_REQUIRED");
+  });
+
+  it("redeeming that first code marks the email verified and signs in", async () => {
+    const user = unverified({ email: "new.creator@gmail.com" });
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    mockPrisma.user.update.mockImplementation(async ({ data }) => ({ ...user, ...data }));
+    consumeOtp.mockResolvedValue({ email: user.email });
+
+    const result = await verifyLoginOtp({ challengeToken: signChallengeToken(user, "login-otp"), code: "123456" });
+
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({ where: { id: "u1" }, data: { emailVerifiedAt: expect.any(Date) } });
+    expect(result.step).toBe("AUTHENTICATED");
+    expect(result.user.emailVerified).toBe(true);
+  });
+
+  it("regression (24 Sep review): a code sent to one address doesn't verify an email changed in between", async () => {
+    const user = unverified({ email: "changed-after@gmail.com" });
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    consumeOtp.mockResolvedValue({ email: "sent-to@gmail.com" });
+
+    const result = await verifyLoginOtp({ challengeToken: signChallengeToken(user, "login-otp"), code: "123456" });
+
+    expect(result.step).toBe("AUTHENTICATED");
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(result.user.emailVerified).toBe(false);
+  });
+
+  it("regression (24 Sep review): an unknown email still runs a bcrypt compare, so timing doesn't reveal which emails exist", async () => {
+    const bcrypt = (await import("bcryptjs")).default;
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    await expect(login({ email: "nobody@gmail.com", password: "whatever" })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    const [pw, hash] = bcrypt.compare.mock.calls.at(-1);
+    expect(pw).toBe("whatever");
+    expect(hash.startsWith("$2")).toBe(true);
+    expect(hash).toHaveLength(60);
+  });
+
+  it("an already-verified account's code doesn't rewrite emailVerifiedAt", async () => {
+    const user = verified();
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    consumeOtp.mockResolvedValue({ email: user.email });
+
+    await verifyLoginOtp({ challengeToken: signChallengeToken(user, "login-otp"), code: "123456" });
+
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("an unknown email or a wrong password is the same INVALID_CREDENTIALS, and sends no code", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    await expect(login({ email: "nobody@gmail.com", password: "right-password" })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    mockPrisma.user.findUnique.mockResolvedValue(unverified({ email: "new.creator@gmail.com" }));
+    await expect(login({ email: "new.creator@gmail.com", password: "nope" })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    expect(issueOtp).not.toHaveBeenCalled();
+  });
+
+  it("resending the code works before the email is verified too", async () => {
+    const user = unverified({ email: "new.creator@gmail.com" });
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+
+    await resendLoginOtp({ challengeToken: signChallengeToken(user, "login-otp") });
+
+    expect(issueOtp).toHaveBeenCalledWith({ userId: "u1", purpose: "LOGIN", email: "new.creator@gmail.com" });
   });
 });
 
@@ -127,12 +170,6 @@ describe("login — verified account (email + OTP)", () => {
     issueOtp.mockRejectedValueOnce(Object.assign(new Error("resend down"), { code: "EMAIL_SEND_FAILED" }));
 
     await expect(login({ email: "creator@gmail.com", password: "right-password" })).rejects.toMatchObject({ code: "EMAIL_SEND_FAILED" });
-  });
-
-  it("no longer accepts the phone number once an email is verified", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(verified());
-    await expect(login({ phoneNumber: PHONE, password: "right-password" })).rejects.toMatchObject({ code: "USE_EMAIL_LOGIN" });
-    expect(issueOtp).not.toHaveBeenCalled();
   });
 
   it("sends no code on a wrong password", async () => {
@@ -196,15 +233,6 @@ describe("login — trusted device (user decision, 23 Sep: 'skip OTP for 7 days'
 
     expect(result.step).toBe("OTP_REQUIRED");
     expect(issueOtp).toHaveBeenCalledWith({ userId: "u1", purpose: "LOGIN", email: "creator@gmail.com" });
-  });
-
-  it("an unverified (phone-login) account never consults device trust at all", async () => {
-    mockPrisma.user.findUnique.mockResolvedValue(unverified());
-    mockPrisma.user.updateMany.mockResolvedValue({ count: 1 });
-
-    await login({ phoneNumber: PHONE, password: "right-password", trustedDeviceToken: "cookie-value" });
-
-    expect(verifyTrustedDevice).not.toHaveBeenCalled();
   });
 
   it("verifyLoginOtp mints a new trusted-device token for this browser alongside the session (remember defaults true)", async () => {
@@ -285,15 +313,14 @@ describe("email verification", () => {
     expect(result.emailHint).toBe("ne***@gmail.com");
   });
 
-  it("start: refuses an email another account has already verified, but not one merely typed into a profile", async () => {
+  it("start: refuses an email another account holds — verified or not (24 Sep: an unverified address is an admin-created account's only login)", async () => {
     const user = unverified();
     mockPrisma.user.findUnique.mockResolvedValueOnce(user).mockResolvedValueOnce(verified({ id: "other" }));
     await expect(startEmailVerification({ userId: "u1", email: "creator@gmail.com" })).rejects.toMatchObject({ code: "EMAIL_ALREADY_REGISTERED" });
-    expect(issueOtp).not.toHaveBeenCalled();
 
     mockPrisma.user.findUnique.mockResolvedValueOnce(user).mockResolvedValueOnce(unverified({ id: "other", email: "creator@gmail.com" }));
-    await startEmailVerification({ userId: "u1", email: "creator@gmail.com" });
-    expect(issueOtp).toHaveBeenCalledTimes(1);
+    await expect(startEmailVerification({ userId: "u1", email: "creator@gmail.com" })).rejects.toMatchObject({ code: "EMAIL_ALREADY_REGISTERED" });
+    expect(issueOtp).not.toHaveBeenCalled();
   });
 
   it("start/confirm: refused for an account that's already verified", async () => {
@@ -325,15 +352,13 @@ describe("email verification", () => {
     expect(result.accessToken).toBeTruthy();
   });
 
-  it("confirm: clears the address off another account's unverified profile so the unique column doesn't block the real owner", async () => {
+  it("regression (24 Sep review): confirm never clears another account's address — that could wipe an admin-created account's only login", async () => {
     const user = unverified();
-    mockPrisma.user.findUnique.mockResolvedValueOnce(user).mockResolvedValueOnce(unverified({ id: "squatter", email: "new@gmail.com" }));
+    mockPrisma.user.findUnique.mockResolvedValueOnce(user).mockResolvedValueOnce(unverified({ id: "new-account", email: "new@gmail.com" }));
     consumeOtp.mockResolvedValue({ email: "new@gmail.com" });
-    mockPrisma.user.update.mockResolvedValue(verified({ email: "new@gmail.com" }));
 
-    await confirmEmailVerification({ userId: "u1", code: "123456" });
-
-    expect(mockPrisma.user.update).toHaveBeenNthCalledWith(1, { where: { id: "squatter" }, data: { email: null } });
+    await expect(confirmEmailVerification({ userId: "u1", code: "123456" })).rejects.toMatchObject({ code: "EMAIL_ALREADY_REGISTERED" });
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
   });
 
   it("confirm: losing a same-address race to another account is a 409, not a 500", async () => {

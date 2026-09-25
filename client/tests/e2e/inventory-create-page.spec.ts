@@ -50,7 +50,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await expect(category).toHaveValue("Podcast page");
   });
 
-  const NEW_USER = { id: "new-creator-1", phoneNumber: "+919876500000", name: "Amit Kumar", role: "CREATOR", email: null, emailVerified: false, whatsappVerified: false };
+  const NEW_USER = { id: "new-creator-1", phoneNumber: null, name: "Amit Kumar", role: "CREATOR", email: "amit.kumar@gmail.com", emailVerified: false, whatsappVerified: false };
 
   /** Mocks owners, signup and page create; records what was called, in order. */
   async function mockCreateFlow(page: import("@playwright/test").Page, opts: { owners?: typeof owners; assetStatus?: number[] } = {}) {
@@ -84,8 +84,12 @@ test.describe("Inventory — Create page popup: category search + inline new use
     // No accounts yet → starts on "New account".
     await expect(page.getByRole("tab", { name: "New account" })).toHaveAttribute("aria-selected", "true");
 
+    // Only name + email are asked for a new account (24 Sep) — no phone field.
+    const fields = page.getByTestId("new-account-fields");
+    await expect(fields.getByRole("textbox")).toHaveCount(2);
+    await expect(fields.getByPlaceholder("98765 43210")).toHaveCount(0);
     await page.getByLabel("New user name").fill("Amit Kumar");
-    await page.getByPlaceholder("98765 43210").fill("9876500000");
+    await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByLabel("Instagram handle").fill("@amit.memes");
     // Nothing created while filling in, and no password shown mid-form.
     expect(calls).toHaveLength(0);
@@ -96,9 +100,9 @@ test.describe("Inventory — Create page popup: category search + inline new use
     const success = page.getByTestId("create-page-success");
     await expect(success).toContainText("@amit.memes is live");
     await expect(success.getByTestId("generated-password")).toHaveText("Xk9#mPz2-long-Password-Value");
-    await expect(success).toContainText("+919876500000");
+    await expect(success).toContainText("amit.kumar@gmail.com");
     expect(calls.map((c) => c.path)).toEqual(["/auth/signup", "/assets"]);
-    expect(calls[0].body).toMatchObject({ phoneNumber: "+919876500000", name: "Amit Kumar", role: "CREATOR" });
+    expect(calls[0].body).toEqual({ email: "amit.kumar@gmail.com", name: "Amit Kumar", role: "CREATOR" });
     expect(calls[1].body).toMatchObject({ handle: "amit.memes", ownerId: "new-creator-1" });
 
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -117,7 +121,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.getByRole("button", { name: "Create page" }).click();
     await page.getByRole("tab", { name: "New account" }).click();
     await page.getByLabel("New user name").fill("Amit Kumar");
-    await page.getByPlaceholder("98765 43210").fill("9876500000");
+    await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByTestId("create-page-form").getByRole("button", { name: "Cancel" }).click();
 
     await expect(page.getByTestId("create-page-form")).toHaveCount(0);
@@ -131,7 +135,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
 
     await page.goto("/inventory");
     await page.getByRole("button", { name: "Create page" }).click();
-    await page.getByPlaceholder("98765 43210").fill("9876500000");
+    await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByLabel("Instagram handle").fill("taken.page");
     await page.getByRole("button", { name: "Create account & page" }).click();
 
@@ -174,7 +178,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.goto("/inventory");
     await page.getByRole("button", { name: /Create page/ }).first().click();
     await page.getByLabel("New user name").fill("Aarav Khanna Productions Private Limited Mumbai");
-    await page.getByPlaceholder("98765 43210").fill("9876500000");
+    await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByLabel("Instagram handle").fill("a.very.long.instagram.handle_x");
 
     const noOverflow = (testId: string) =>

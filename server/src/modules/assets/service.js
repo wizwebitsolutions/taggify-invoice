@@ -29,7 +29,7 @@ export async function listAssets(user) {
     // assignment row against the same campaign, e.g. re-attached sheets).
     include: {
       rateCards: true,
-      owner: { select: { id: true, name: true, phoneNumber: true } },
+      owner: { select: { id: true, name: true, phoneNumber: true, email: true } },
       assignments: { select: { campaign: { select: { id: true, title: true, brandName: true } } } },
     },
     orderBy: { createdAt: "desc" },
@@ -415,7 +415,7 @@ export async function previewImport(parsed) {
   const existing = handles.length
     ? await prisma.asset.findMany({
         where: { platform: "instagram", handle: { in: handles, mode: "insensitive" } },
-        select: { id: true, handle: true, ownerId: true, owner: { select: { id: true, name: true, phoneNumber: true } } },
+        select: { id: true, handle: true, ownerId: true, owner: { select: { id: true, name: true, phoneNumber: true, email: true } } },
       })
     : [];
   const existingByHandle = new Map();

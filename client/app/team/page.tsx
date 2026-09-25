@@ -1,5 +1,6 @@
 "use client";
 
+import { OwnSectionGate } from "@/components/auth/own-section-gate";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -11,13 +12,15 @@ import { Field, TextField } from "@/components/ui/form-field";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, TeamIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { users as usersApi, ApiError } from "@/lib/api-client";
+import { users as usersApi, ApiError, canUse } from "@/lib/api-client";
 import { initialsOf, roleLabel } from "@/lib/format";
 
 export default function TeamPage() {
   return (
     <RequireAuth>
-      <TeamContent />
+      <OwnSectionGate ownKey="users.view" active="team">
+        <TeamContent />
+      </OwnSectionGate>
     </RequireAuth>
   );
 }
@@ -28,6 +31,8 @@ function TeamContent() {
   const [showForm, setShowForm] = useState(false);
   const token = accessToken!;
   const isCreator = user?.role === "CREATOR";
+  // Adding members needs Team → Manage (24 Sep — an admin can switch it off).
+  const canManageTeam = isCreator && canUse(user, "users.edit");
 
   const teamQuery = useQuery({
     queryKey: ["team"],
@@ -41,7 +46,7 @@ function TeamContent() {
       user={{ initials: initialsOf(user?.name), name: user?.name ?? "—", role: roleLabel(user?.role), tone: user?.role === "FINANCE" ? "blue" : "emerald" }}
       searchPlaceholder="Search team members…"
       topbarActions={
-        isCreator ? (
+        canManageTeam ? (
           <Button size="default" onClick={() => setShowForm(true)}>
             <PlusIcon className="h-[15px] w-[15px] text-accent-ink" />
             Add member
@@ -57,7 +62,7 @@ function TeamContent() {
             <p className="max-w-[56ch] text-[0.875rem] text-text-muted">People helping manage your pages and links.</p>
           </div>
           {/* Desktop carries this same action in the topbar (hidden below md). */}
-          {isCreator && (
+          {canManageTeam && (
             <Button size="icon" className="shrink-0 md:hidden" onClick={() => setShowForm(true)} aria-label="Add member">
               <PlusIcon className="h-4 w-4 text-accent-ink" />
             </Button>

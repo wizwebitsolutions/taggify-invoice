@@ -4,7 +4,7 @@ import type { ComponentType } from "react";
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/ui/logo";
 import { useAuth } from "@/lib/auth-context";
-import { hasAccess, type Role, type Permissions, type PermissionKey } from "@/lib/api-client";
+import { hasAccess, type Role, type Permissions, type PermissionKey, hasOwnAccess, isOwnScopeRole } from "@/lib/api-client";
 import {
   GridIcon,
   CampaignIcon,
@@ -43,6 +43,11 @@ type NavItem = {
   /** Roles the server lets through the keyed route *without* the key (its
    *  own self-service users, e.g. PLAN_MAKER on /plans). */
   bareRoles?: Role[];
+  /** 24 Sep: for Creator / Team member / Plan maker, the own-content switch
+   *  that shows this item (an admin can switch it off on People → Edit
+   *  access). Their visibility is roles + this switch; global keys never
+   *  apply to them. */
+  ownKey?: PermissionKey;
 };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -75,29 +80,29 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // generate per-creator invoices from a campaign page. Every role is
       // on the list now; kept explicit rather than open like Inventory so
       // the allowlist stays the single place to read "who sees Campaigns".
-      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] },
+      { key: "campaigns", label: "Campaigns", icon: CampaignIcon, href: "/campaigns", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"], ownKey: "campaigns.view" },
       // Visible to every role (Pages, the former /assets content, is for
       // everyone, Plan Maker included) — newTask.md, 8 Sep: "assets tab
       // will be removed" — folded into this one instead.
-      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory" },
+      { key: "inventory", label: "Inventory", icon: InventoryIcon, href: "/inventory", ownKey: "inventory.view" },
       // Split back out into its own nav tab (newTask.md, 9 Sep: "plan will
       // be in separate nav tab") — was a second tab inside Inventory,
       // gated the same way (Admin + Plan Maker) but now at the nav level
       // too, matching Campaigns' allowlist pattern above. permissionKey
       // lets a granted non-ADMIN/PLAN_MAKER role in too (15 Sep).
-      { key: "plans", label: "Plans", icon: AssetIcon, href: "/plans", roles: ["ADMIN", "PLAN_MAKER"], permissionKey: "plans.view", bareRoles: ["PLAN_MAKER"] },
+      { key: "plans", label: "Plans", icon: AssetIcon, href: "/plans", roles: ["ADMIN", "PLAN_MAKER"], permissionKey: "plans.view", bareRoles: ["PLAN_MAKER"], ownKey: "plans.view" },
     ],
   },
   {
     label: "Finance",
     items: [
-      { key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"] },
+      { key: "invoices", label: "Invoices", icon: InvoiceIcon, href: "/invoices", roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"], ownKey: "finance.view" },
       // Payouts + receivables for finance.pay holders (tasks.md #5, 23 Sep),
       // keyed on the same gate the payables/receivables write actions on
       // /invoices use, so a granted sub-role sees it too. CREATOR is a bare
       // role here (24 Sep redesign): their own Pending/Paid view, scoped
       // server-side to pages they own.
-      { key: "payments", label: "Payouts", icon: WalletIcon, href: "/payments", roles: ["ADMIN", "FINANCE", "CREATOR"], permissionKey: "finance.pay", bareRoles: ["CREATOR"] },
+      { key: "payments", label: "Payouts", icon: WalletIcon, href: "/payments", roles: ["ADMIN", "FINANCE", "CREATOR"], permissionKey: "finance.pay", bareRoles: ["CREATOR"], ownKey: "finance.view" },
     ],
   },
   {
@@ -111,7 +116,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // admin function despite living in this group (see team/page.tsx's
       // "Team management is available to Creator accounts" fallback and
       // users routes: GET/POST /users/me/team both requireRole("CREATOR")).
-      { key: "team", label: "Team", icon: TeamIcon, href: "/team", roles: ["CREATOR"] },
+      { key: "team", label: "Team", icon: TeamIcon, href: "/team", roles: ["CREATOR"], ownKey: "users.view" },
       // Gated on finance.edit server-side (23 Sep) — a plain Finance
       // account holds it by baseline, matching the route.
       { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs", roles: ["ADMIN"], permissionKey: "finance.edit" },
@@ -122,10 +127,13 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 /** Just the two auth-context fields nav visibility actually needs — accepts
  *  the full `useAuth().user` object as-is rather than a role string, so a
  *  permissionKey check has something to read. */
-type NavUser = { role?: Role; permissions?: Permissions } | null | undefined;
+type NavUser = { role?: Role; permissions?: Permissions; ownAccess?: Partial<Record<string, boolean>> } | null | undefined;
 
 function canSeeNavItem(item: NavItem, user: NavUser) {
   const roleAllowed = !item.roles || (!!user?.role && item.roles.includes(user.role));
+  // Creator / Team member / Plan maker (24 Sep): their role list plus their
+  // own-content switch — never a global key.
+  if (isOwnScopeRole(user?.role)) return roleAllowed && (!item.ownKey || hasOwnAccess(user, item.ownKey));
   // A destination whose whole route is keyed: the key decides, whatever the
   // role — a sub-admin denied it is hidden, a granted Finance/Planner sees
   // it. Same answer the server's requireAccess() gives (hasAccess mirrors

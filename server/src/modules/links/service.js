@@ -6,10 +6,13 @@ import { publicUrlFor } from "../../lib/cloudinaryClient.js";
 import { planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 import { creatorPhaseLabels, phaseRowIds } from "../../lib/campaignPhases.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
+import { assertCanActOnPage, assertPageBooked } from "../../lib/pageOwnership.js";
 
 export async function createLink(user, { campaignId, assetId, url, format, customAmount }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
   if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
+  await assertCanActOnPage(user, asset);
+  await assertPageBooked(campaignId, assetId);
 
   return createOneLink(user, asset, { campaignId, assetId, url, format, customAmount });
 }
@@ -48,6 +51,8 @@ async function createOneLink(user, asset, { campaignId, assetId, url, format, cu
 export async function bulkCreateLink(user, { campaignId, assetId, format, urls }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
   if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
+  await assertCanActOnPage(user, asset);
+  await assertPageBooked(campaignId, assetId);
 
   // De-dupe the pasted list itself (creators commonly paste the same link twice).
   const uniqueUrls = [...new Set(urls.map((u) => u.trim()).filter(Boolean))];
@@ -241,7 +246,7 @@ export async function listLinks(user, filters) {
       // as billable and failing on submit.
       include: {
         campaign: true,
-        asset: { include: { owner: { select: { id: true, name: true, phoneNumber: true } } } },
+        asset: { include: { owner: { select: { id: true, name: true, phoneNumber: true, email: true } } } },
         screenshot: true,
         invoiceItem: { select: { invoiceId: true, invoice: { select: { invoiceNumber: true, status: true } } } },
         payoutItem: { select: { payoutId: true } },
@@ -269,7 +274,17 @@ export async function listLinks(user, filters) {
   return { items: withScreenshotUrls, total, page: filters.page, pageSize: filters.pageSize };
 }
 
-export async function getLinkTimeline(linkId) {
+/**
+ * A link's status history — for whoever may see the link in listLinks
+ * (24 Sep: it used to answer for any link id, whoever asked).
+ */
+export async function getLinkTimeline(linkId, user) {
+  const effective = await loadEffectivePermissions(user.id);
+  if (!effective["links.view"]) {
+    const scope = user.role === "PLAN_MAKER" ? { OR: [{ campaign: planMakerCampaignWhere(user.id) }, { asset: { ownerId: user.id } }] } : { asset: { ownerId: user.id } };
+    const visible = await prisma.link.findFirst({ where: { id: linkId, ...scope }, select: { id: true } });
+    if (!visible) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  }
   return prisma.linkStatusEvent.findMany({ where: { linkId }, orderBy: { createdAt: "asc" } });
 }
 

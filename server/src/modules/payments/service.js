@@ -122,7 +122,7 @@ export async function confirmPayoutReceipt(payoutId, actor, { publicId, fileName
 }
 
 const PAYOUT_INCLUDE = {
-  creator: { select: { id: true, name: true, phoneNumber: true } },
+  creator: { select: { id: true, name: true, phoneNumber: true, email: true } },
   createdBy: { select: { id: true, name: true } },
   markedPaidBy: { select: { id: true, name: true } },
   // Enough per link for the Paid tab's expanded row (24 Sep): campaign, page, format, posted date, views, cost.
@@ -237,7 +237,7 @@ export async function listPendingLinks(actor, filters = {}) {
       where,
       include: {
         campaign: { select: { id: true, title: true, brandName: true } },
-        asset: { select: { id: true, handle: true, ownerId: true, owner: { select: { id: true, name: true, phoneNumber: true } } } },
+        asset: { select: { id: true, handle: true, ownerId: true, owner: { select: { id: true, name: true, phoneNumber: true, email: true } } } },
         screenshot: true,
         postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 },
       },

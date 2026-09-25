@@ -1,5 +1,6 @@
 "use client";
 
+import { OwnSectionGate } from "@/components/auth/own-section-gate";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,7 +22,7 @@ import { ResolvePendingAssignmentsModal } from "@/components/campaigns/resolve-p
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { PlusIcon, AlertIcon, SearchIcon, DownloadIcon, ArrowRightIcon, MoreIcon, CampaignIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { campaigns as campaignsApi, assets as assetsApi, links as linksApi, ApiError, hasAccess, type Campaign } from "@/lib/api-client";
+import { campaigns as campaignsApi, assets as assetsApi, links as linksApi, ApiError, hasAccess, type Campaign, canUse } from "@/lib/api-client";
 import { parseAssignmentSheet, parseWorkImportSheet, type ParsedAssignmentRow, type ParsedWorkImportRow } from "@/lib/parseAssignmentSheet";
 import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -29,9 +30,11 @@ import { cn } from "@/lib/utils";
 export default function CampaignsPage() {
   return (
     <RequireAuth>
+      <OwnSectionGate ownKey="campaigns.view" active="campaigns">
       <Suspense>
         <CampaignsContent />
       </Suspense>
+      </OwnSectionGate>
     </RequireAuth>
   );
 }
@@ -67,7 +70,7 @@ function CampaignsContent() {
   const items = campaignsQuery.data ?? [];
   // A plain ADMIN by default, or (15 Sep) any other role explicitly granted campaigns.manage.
   const canCreate = hasAccess(user, "campaigns.edit");
-  const canUploadLinks = user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
+  const canUploadLinks = (user?.role === "CREATOR" || user?.role === "TEAM_MEMBER") && canUse(user, "links.edit");
 
   // Only phase-1 rows are listed; a later phase's posts/spend already roll
   // up into its parent server-side (annotateCampaign). Except a creator's own

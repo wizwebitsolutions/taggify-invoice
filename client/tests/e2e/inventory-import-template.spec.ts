@@ -11,7 +11,7 @@ import { signIn, mockApi, API_URL } from "./fixtures";
  * importAssets.test.js, profilePicStore.test.js.
  */
 
-const owners = [{ id: "creator-1", name: "Priya Creator", phoneNumber: "+919000000001", email: null }];
+const owners = [{ id: "creator-1", name: "Priya Creator", phoneNumber: "+919000000001", email: "priya@gmail.com" }];
 
 const templateRow = (rowNumber: number, pageName: string, handle: string, rateCards = [{ format: "reel", amount: 18000 }, { format: "story", amount: 6000 }]) => ({
   rowNumber,
@@ -74,7 +74,7 @@ test.describe("Import pages — template, verification, new user (22 Sep)", () =
     let signupBody: Record<string, unknown> | null = null;
     await page.route(`${API_URL}/auth/signup`, (route) => {
       signupBody = route.request().postDataJSON();
-      return route.fulfill({ status: 201, json: { user: { id: "new-creator", name: "Kavya Rao", phoneNumber: "+919812345678", role: "CREATOR", whatsappVerified: false }, generatedPassword: "Xy7!pQ2mZr" } });
+      return route.fulfill({ status: 201, json: { user: { id: "new-creator", name: "Kavya Rao", phoneNumber: null, email: "kavya.rao@gmail.com", role: "CREATOR", whatsappVerified: false }, generatedPassword: "Xy7!pQ2mZr" } });
     });
     let importBody: { rows: Array<Record<string, unknown>> } | null = null;
     await page.route(`${API_URL}/assets/import`, (route) => {
@@ -101,12 +101,14 @@ test.describe("Import pages — template, verification, new user (22 Sep)", () =
     const form = page.getByTestId("import-new-user-form");
     await form.getByLabel("New user name").fill("Kavya Rao");
     await form.getByRole("button", { name: "Create user" }).click();
-    await expect(form).toContainText("Enter a 10-digit mobile number.");
+    // Only name + email are asked (24 Sep); email is required.
+    await expect(form).toContainText("Enter a valid email — it's their login.");
+    await expect(form.getByLabel("New user phone")).toHaveCount(0);
     expect(signupBody).toBeNull();
-    await form.getByLabel("New user phone").fill("9812345678");
+    await form.getByLabel("New user email").fill("Kavya.Rao@gmail.com");
     await form.getByRole("button", { name: "Create user" }).click();
 
-    expect(signupBody).toEqual({ phoneNumber: "+919812345678", name: "Kavya Rao", role: "CREATOR" });
+    await expect.poll(() => signupBody).toEqual({ email: "kavya.rao@gmail.com", name: "Kavya Rao", role: "CREATOR" });
     await expect(page.getByTestId("import-new-user-password")).toContainText("Xy7!pQ2mZr");
     await expect(page.getByLabel("Account for all pages")).toHaveValue("new-creator");
     await expect(page.getByTestId("import-confirm")).toHaveText("Import 2 pages");
@@ -196,17 +198,17 @@ test.describe("Import pages — template, verification, new user (22 Sep)", () =
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test("creating a user with a creator's existing number just selects that creator (no duplicate, no password)", async ({ page }) => {
+  test("creating a user with a creator's existing email just selects that creator (no duplicate, no password)", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets/import/preview`, (route) => route.fulfill({ json: preview() }));
     await page.route(`${API_URL}/assets/import/followers`, (route) => route.fulfill({ json: { profiles: { laughtercolours: profile(1), ghantaa: profile(2) } } }));
-    await page.route(`${API_URL}/auth/signup`, (route) => route.fulfill({ status: 409, json: { error: { code: "PHONE_ALREADY_REGISTERED", message: "This phone number is already registered" } } }));
+    await page.route(`${API_URL}/auth/signup`, (route) => route.fulfill({ status: 409, json: { error: { code: "EMAIL_ALREADY_REGISTERED", message: "An account with this email already exists" } } }));
 
     await openImport(page);
     await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(xlsx);
     await page.getByTestId("import-new-user").click();
-    await page.getByLabel("New user phone").fill("9000000001");
+    await page.getByLabel("New user email").fill("priya@gmail.com");
     await page.getByTestId("import-new-user-form").getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByLabel("Account for all pages")).toHaveValue("creator-1");

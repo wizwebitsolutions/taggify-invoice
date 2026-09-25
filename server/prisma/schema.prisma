@@ -81,7 +81,9 @@ enum PayoutStatus {
 
 model User {
   id                   String    @id @default(cuid())
-  phoneNumber          String    @unique
+  // Optional since 24 Sep — accounts are created with an email (the login
+  // identifier); a phone is extra contact info when the admin has one.
+  phoneNumber          String?   @unique
   passwordHash         String
   role                 Role
   name                 String?

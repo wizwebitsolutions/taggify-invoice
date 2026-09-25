@@ -4,6 +4,7 @@ import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
 import { createAssetSchema, updateRateCardSchema, importAssetsSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
+import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import * as assetsService from "./service.js";
 import { buildImportPagesTemplate } from "../../lib/importPagesTemplate.js";
 
@@ -43,7 +44,7 @@ router.get("/:id/profile-pic", async (req, res, next) => {
 
 router.use(requireAuth);
 
-router.get("/", async (req, res, next) => {
+router.get("/", requireOwnAccess("inventory.view"), async (req, res, next) => {
   try {
     res.json(await assetsService.listAssets(req.user));
   } catch (err) {

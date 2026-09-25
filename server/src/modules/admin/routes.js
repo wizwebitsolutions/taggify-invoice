@@ -4,8 +4,8 @@ import { requireRole } from "../../middleware/requireRole.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
 import { prisma } from "../../lib/prisma.js";
-import { getEffectivePermissions } from "../../lib/permissions.js";
-import { updatePermissionsSchema } from "./schemas.js";
+import { getEffectivePermissions, getOwnCapabilities } from "../../lib/permissions.js";
+import { updatePermissionsSchema, updateUserEmailSchema } from "./schemas.js";
 import { invoiceNumberingSchema } from "../plans/schemas.js";
 import { getNumbering, setNumbering } from "../../lib/clientInvoiceNumbering.js";
 import { repairInvoicedLinks } from "../../lib/repairInvoicedLinks.js";
@@ -42,14 +42,14 @@ router.put("/invoice-numbering", requireAccess("finance.edit"), validateBody(inv
 router.get("/users", requireAccess("users.view"), async (req, res, next) => {
   try {
     const users = await prisma.user.findMany({
-      select: { id: true, phoneNumber: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true },
+      select: { id: true, phoneNumber: true, email: true, emailVerifiedAt: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true },
       orderBy: { createdAt: "desc" },
     });
     // Every row carries its *effective* permissions (role defaults merged
     // with any override), not the raw overlay — the Users page shouldn't
     // have to re-derive ADMIN's defaults itself to know what a plain admin
     // can do vs. a restricted sub-admin.
-    res.json(users.map((u) => ({ ...u, permissions: getEffectivePermissions(u) })));
+    res.json(users.map((u) => ({ ...u, permissions: getEffectivePermissions(u), ownAccess: getOwnCapabilities(u) })));
   } catch (err) {
     next(err);
   }
@@ -80,6 +80,15 @@ router.put(
     }
   }
 );
+
+// Change a user's email — their login (24 Sep). See adminService.updateUserEmail.
+router.put("/users/:id/email", requireAccess("users.edit"), validateBody(updateUserEmailSchema), async (req, res, next) => {
+  try {
+    res.json(await adminService.updateUserEmail(req.user.id, req.params.id, req.body.email));
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.post("/users/:id/reset-password", requireAccess("users.edit"), async (req, res, next) => {
   try {

@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-import { auth, AUTH_STORAGE_KEY, type AuthResponse, type LoginResult, type User } from "@/lib/api-client";
+import { auth, AUTH_STORAGE_KEY, type AuthResponse, type LoginResult, type User, users as usersApi } from "@/lib/api-client";
 
 const STORAGE_KEY = AUTH_STORAGE_KEY;
 
@@ -20,7 +20,7 @@ interface AuthContextValue {
   /** Password step only (email 2FA, 21 Sep). Signs in when the server says
    *  AUTHENTICATED; for any other step the caller walks the user through it
    *  and finishes with adoptSession(). */
-  login: (identifier: { phoneNumber: string } | { email: string }, password: string) => Promise<LoginResult>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   /** Installs a session the server issued outside login() — OTP verified, or email just verified. */
   adoptSession: (session: AuthResponse) => void;
   logout: () => void;
@@ -71,6 +71,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Fresh access (24 Sep): an admin can switch a section off for a creator /
+  // planner at any time — re-read the user's access on load and when the tab
+  // regains focus, so the nav follows without waiting for the next token
+  // refresh (the server enforces it immediately either way). Only merged when
+  // it's the same account and role as the stored session.
+  const accessToken = stored?.accessToken;
+  const storedUserId = stored?.user?.id;
+  const storedRole = stored?.user?.role;
+  useEffect(() => {
+    if (!accessToken || !storedUserId) return;
+    let cancelled = false;
+    async function syncAccess() {
+      try {
+        const me = await usersApi.me(accessToken!);
+        if (cancelled || me.id !== storedUserId || me.role !== storedRole) return;
+        setStored((prev) => {
+          if (!prev?.user) return prev;
+          const next = { ...prev, user: { ...prev.user, permissions: me.permissions ?? prev.user.permissions, ownAccess: me.ownAccess ?? prev.user.ownAccess } };
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+          } catch {
+            // best-effort
+          }
+          return next;
+        });
+      } catch {
+        // offline / expired — the normal refresh path handles it
+      }
+    }
+    syncAccess();
+    window.addEventListener("focus", syncAccess);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", syncAccess);
+    };
+  }, [accessToken, storedUserId, storedRole]);
+
   function adoptSession(session: AuthResponse) {
     const next: StoredAuth = { user: session.user, accessToken: session.accessToken, refreshToken: session.refreshToken };
     setStored(next);
@@ -81,8 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function login(identifier: { phoneNumber: string } | { email: string }, password: string) {
-    const result = await auth.login(identifier, password);
+  async function login(email: string, password: string) {
+    const result = await auth.login(email, password);
     if (result.step === "AUTHENTICATED") adoptSession(result);
     return result;
   }

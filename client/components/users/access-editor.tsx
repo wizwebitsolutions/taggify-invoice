@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
-import { PERMISSION_SECTIONS, type PermissionAction, type PermissionKey, type PermissionSection, type Permissions, type Role } from "@/lib/api-client";
+import { PERMISSION_SECTIONS, OWN_CAPABILITIES, isOwnScopeRole, type PermissionAction, type PermissionKey, type PermissionSection, type Permissions, type Role } from "@/lib/api-client";
 
 /**
  * Per-section access editor (user request, 23 Sep — "user selects Invoices,
@@ -59,16 +59,70 @@ export const SECTION_META: Record<PermissionSection, { label: string; view: stri
   },
 };
 
+/**
+ * Own-content copy (24 Sep) for CREATOR / TEAM_MEMBER / PLAN_MAKER — the same
+ * keys, but they only ever cover that person's own content. Only the
+ * sections/actions in the role's OWN_CAPABILITIES are shown.
+ */
+const OWN_SECTION_META: Partial<Record<Role, Partial<typeof SECTION_META>>> = {
+  CREATOR: {
+    users: { label: "Team", view: "See their own team", actions: { edit: { label: "Manage", hint: "Add team members to work on their pages" } } },
+    campaigns: { label: "Campaigns", view: "See the campaigns their pages are in", actions: {} },
+    inventory: { label: "Inventory", view: "See their own pages", actions: { edit: { label: "Add pages", hint: "Add their own pages (admin approves)" } } },
+    links: { label: "Links", view: "See their own posted links", actions: { edit: { label: "Submit", hint: "Submit links and upload screenshots for their pages" } } },
+    finance: {
+      label: "Invoices & payouts",
+      view: "See their own invoices, payouts and billing profiles",
+      actions: { edit: { label: "Raise invoices", hint: "Raise invoices on their links, manage billing profiles" } },
+    },
+  },
+  TEAM_MEMBER: {
+    campaigns: { label: "Campaigns", view: "See the campaigns their creator's pages are in", actions: {} },
+    inventory: { label: "Inventory", view: "See their creator's pages", actions: {} },
+    links: { label: "Links", view: "See posted links", actions: { edit: { label: "Submit", hint: "Submit links and upload screenshots for their creator's pages" } } },
+    finance: { label: "Invoices & payouts", view: "See invoices and payouts", actions: {} },
+  },
+  PLAN_MAKER: {
+    plans: {
+      label: "Plans",
+      view: "See their own plans",
+      actions: { edit: { label: "Edit", hint: "Create and edit their own plans, sheets and client invoices" }, approve: { label: "Approve", hint: "Approve or reject their own plans" } },
+    },
+    campaigns: { label: "Campaigns", view: "See campaigns created from their plans", actions: { edit: { label: "Add phases", hint: "Add phases to those campaigns" } } },
+    links: { label: "Links", view: "See posted links on those campaigns", actions: {} },
+    finance: {
+      label: "Invoices & receivables",
+      view: "See invoices and client receivables on their own plans",
+      actions: { edit: { label: "Attach files", hint: "Attach or remove the invoice document on those invoices" } },
+    },
+    inventory: { label: "Inventory", view: "Browse the full page catalogue (read-only) to build plans", actions: {} },
+  },
+};
+
 export const SECTION_ORDER = Object.keys(PERMISSION_SECTIONS) as PermissionSection[];
 
 const keyOf = (section: PermissionSection, action: PermissionAction) => `${section}.${action}` as PermissionKey;
-const actionsOf = (section: PermissionSection) => PERMISSION_SECTIONS[section].filter((a) => a !== "view") as PermissionAction[];
+/** The sections a role's editor shows, and each one's actions — own-scope roles see only their own capabilities. */
+function sectionsFor(role?: Role): PermissionSection[] {
+  if (!isOwnScopeRole(role)) return SECTION_ORDER;
+  const allowed = OWN_CAPABILITIES[role!] ?? [];
+  return SECTION_ORDER.filter((s) => allowed.includes(keyOf(s, "view")));
+}
+function actionsOf(section: PermissionSection, role?: Role) {
+  const all = PERMISSION_SECTIONS[section].filter((a) => a !== "view") as PermissionAction[];
+  if (!isOwnScopeRole(role)) return all;
+  const allowed = OWN_CAPABILITIES[role!] ?? [];
+  return all.filter((a) => allowed.includes(keyOf(section, a)));
+}
+function metaFor(section: PermissionSection, role?: Role) {
+  return (isOwnScopeRole(role) ? OWN_SECTION_META[role!]?.[section] : undefined) ?? SECTION_META[section];
+}
 
 /** "View · Pay" — what's on in a section, for the collapsed row and the read-only summary. */
-export function sectionSummary(section: PermissionSection, value: Partial<Permissions>) {
+export function sectionSummary(section: PermissionSection, value: Partial<Permissions>, role?: Role) {
   if (!value[keyOf(section, "view")]) return "Off";
-  const on = actionsOf(section).filter((a) => value[keyOf(section, a)]);
-  return ["View", ...on.map((a) => SECTION_META[section].actions[a]?.label ?? a)].join(" · ");
+  const on = actionsOf(section, role).filter((a) => value[keyOf(section, a)]);
+  return ["View", ...on.map((a) => metaFor(section, role).actions[a]?.label ?? a)].join(" · ");
 }
 
 function IndeterminateCheckbox({ indeterminate, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { indeterminate?: boolean }) {
@@ -87,14 +141,14 @@ export function AccessEditor({
 }: {
   value: Permissions;
   onChange: (next: Permissions) => void;
-  /** Only used for copy — a Finance account's baseline sections read differently from a sub-admin's. */
+  /** Decides which sections show and their wording — own-scope roles (creator, team member, planner) get own-content switches only. */
   role?: Role;
   disabled?: boolean;
 }) {
   function setSection(section: PermissionSection, on: boolean) {
     const next = { ...value };
     next[keyOf(section, "view")] = on;
-    if (!on) for (const a of actionsOf(section)) next[keyOf(section, a)] = false;
+    if (!on) for (const a of actionsOf(section, role)) next[keyOf(section, a)] = false;
     onChange(next);
   }
   function setAction(section: PermissionSection, action: PermissionAction, on: boolean) {
@@ -105,15 +159,20 @@ export function AccessEditor({
 
   return (
     <div className="flex flex-col gap-2" data-testid="access-editor">
-      {SECTION_ORDER.map((section) => {
-        const meta = SECTION_META[section];
-        const actions = actionsOf(section);
+      {isOwnScopeRole(role) && (
+        <p className="text-[0.75rem] text-text-muted" data-testid="access-own-note">
+          Only ever their own content — nothing here gives access to anyone else&apos;s. Everything starts on; uncheck to take a section away.
+        </p>
+      )}
+      {sectionsFor(role).map((section) => {
+        const meta = metaFor(section, role);
+        const actions = actionsOf(section, role);
         const viewOn = value[keyOf(section, "view")] === true;
         const onCount = actions.filter((a) => value[keyOf(section, a)]).length;
         const allOn = viewOn && onCount === actions.length;
-        const summary = sectionSummary(section, value);
+        const summary = sectionSummary(section, value, role);
         return (
-          <div key={section} className={cn("rounded-md border border-border", viewOn && "bg-surface-2/40")} data-testid={`access-section-${section}`}>
+          <div key={section} className={cn("rounded-md border border-border", viewOn && "bg-surface-2")} data-testid={`access-section-${section}`}>
             <label className="flex cursor-pointer items-center gap-3 p-3 hover:bg-surface-2">
               <IndeterminateCheckbox
                 checked={viewOn}
@@ -132,7 +191,7 @@ export function AccessEditor({
                 {summary}
               </span>
             </label>
-            {viewOn && (
+            {viewOn && actions.length > 0 && (
               <fieldset className="flex flex-col gap-1 border-t border-border px-3 py-2 pl-10" data-testid={`access-actions-${section}`}>
                 <legend className="sr-only">{meta.label} actions</legend>
                 {actions.map((action) => {
@@ -159,23 +218,21 @@ export function AccessEditor({
           </div>
         );
       })}
-      {role && role !== "ADMIN" && (
-        <p className="text-[0.72rem] text-text-faint">Unchecked sections stay at a plain {role === "FINANCE" ? "Finance" : role === "PLAN_MAKER" ? "Plan maker" : role.toLowerCase()} account&apos;s normal access.</p>
-      )}
+      {role === "FINANCE" && <p className="text-[0.72rem] text-text-faint">Unchecked sections stay at a plain Finance account&apos;s normal access.</p>}
     </div>
   );
 }
 
 /** Read-only version for the person detail panel: one line per section with its summary chip. */
-export function AccessSummary({ value }: { value: Partial<Permissions> }) {
+export function AccessSummary({ value, role }: { value: Partial<Permissions>; role?: Role }) {
   return (
     <div className="flex flex-col gap-1.5" data-testid="access-summary">
-      {SECTION_ORDER.map((section) => {
-        const summary = sectionSummary(section, value);
+      {sectionsFor(role).map((section) => {
+        const summary = sectionSummary(section, value, role);
         const on = summary !== "Off";
         return (
           <div key={section} className="flex items-center justify-between gap-3 text-[0.8125rem]">
-            <span className="text-text-2">{SECTION_META[section].label}</span>
+            <span className="text-text-2">{metaFor(section, role).label}</span>
             <span className={cn("rounded-full px-2 py-0.5 text-[0.7rem] font-medium", on ? "bg-ink text-white" : "bg-surface-2 text-text-faint")}>{summary}</span>
           </div>
         );

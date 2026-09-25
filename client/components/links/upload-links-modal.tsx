@@ -33,14 +33,19 @@ export function UploadLinksModal({
   onCreated,
 }: {
   token: string;
-  campaigns: { id: string; title: string }[];
+  campaigns: { id: string; title: string; bookedAssetIds?: string[] }[];
   assets: { id: string; handle: string; rateCards: { format: string }[] }[];
   initialCampaignId?: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [campaignId, setCampaignId] = useState(initialCampaignId ?? campaigns[0]?.id ?? "");
-  const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
+  // Booked campaigns only (24 Sep): a creator can post only on a campaign
+  // row one of their pages is booked on, and only for those pages.
+  const bookable = campaigns.filter((c) => !c.bookedAssetIds || c.bookedAssetIds.length > 0);
+  const [campaignId, setCampaignId] = useState(initialCampaignId ?? bookable[0]?.id ?? "");
+  const selectedCampaign = campaigns.find((c) => c.id === campaignId);
+  const pageOptions = !selectedCampaign ? [] : selectedCampaign.bookedAssetIds ? assets.filter((a) => selectedCampaign.bookedAssetIds!.includes(a.id)) : assets;
+  const [assetId, setAssetId] = useState(pageOptions[0]?.id ?? "");
   const [urlsText, setUrlsText] = useState("");
   const [format, setFormat] = useState(assets[0]?.rateCards[0]?.format ?? STANDARD_FORMATS[0]);
 
@@ -50,6 +55,12 @@ export function UploadLinksModal({
   // reel/story only (14 Sep) — a legacy rate card with another format is
   // not offered for new submissions.
   const availableFormats = [...STANDARD_FORMATS];
+
+  // Switching campaign keeps the page choice valid for it.
+  useEffect(() => {
+    if (!pageOptions.some((a) => a.id === assetId)) setAssetId(pageOptions[0]?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
 
   // Keep the selected format valid when the chosen page changes, preferring
   // a format this page has actually priced.
@@ -96,7 +107,7 @@ export function UploadLinksModal({
         ) : (
           <Field label="Campaign">
             <Select value={campaignId} onChange={setCampaignId}>
-              {campaigns.map((c) => (
+              {bookable.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.title}
                 </option>
@@ -107,13 +118,19 @@ export function UploadLinksModal({
 
         <Field label="Page">
           <Select value={assetId} onChange={setAssetId}>
-            {assets.map((a) => (
+            {pageOptions.map((a) => (
               <option key={a.id} value={a.id}>
                 @{a.handle}
               </option>
             ))}
           </Select>
         </Field>
+
+        {pageOptions.length === 0 && (
+          <p className="rounded-md border border-border bg-surface-2 px-3.5 py-2.5 text-[0.8125rem] text-text-muted" data-testid="upload-not-booked">
+            {bookable.length === 0 ? "None of your pages is booked on a campaign yet." : "None of your pages is booked on this campaign."} Ask your admin to book your page first.
+          </p>
+        )}
 
         <Field label="Format">
           <Select value={format} onChange={setFormat}>

@@ -25,21 +25,31 @@ import {
   hasAccess,
   PERMISSION_KEYS,
   ROLE_DEFAULT_PERMISSIONS,
+  OWN_CAPABILITIES,
+  defaultOwnAccess,
+  hasOwnAccess,
+  isOwnScopeRole,
   type User,
   type Role,
   type Permissions,
   type Asset,
 } from "@/lib/api-client";
 import { AccessEditor, AccessSummary } from "@/components/users/access-editor";
-import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
+import { initialsOf, roleLabel, money, compactNumber, personLabel } from "@/lib/format";
 
 const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
 
-// Roles an access overlay can be stored on (23 Sep, mirrors the server's
-// NON_GRANTABLE_ROLES in lib/permissions.js): a Creator / Team member only
-// ever sees their own rows, so any section grant would just let them approve
-// or price their own work. No checklist is shown for them at all.
-const isGrantableRole = (role: Role | undefined) => role !== "CREATOR" && role !== "TEAM_MEMBER";
+// Every role gets an access editor (24 Sep). Staff (Admin/Finance) hold
+// global sections; Creator / Team member / Plan maker get own-content
+// switches (lib/api-client.ts OWN_CAPABILITIES) that never reach anyone
+// else's data.
+const accessBaseline = (role: Role): Permissions => (isOwnScopeRole(role) ? defaultOwnAccess(role) : ROLE_DEFAULT_PERMISSIONS[role]);
+const accessOf = (u: User): Permissions =>
+  isOwnScopeRole(u.role)
+    ? (Object.fromEntries(PERMISSION_KEYS.map((k) => [k, hasOwnAccess(u, k)])) as Permissions)
+    : (u.permissions as Permissions);
+// Only these can be reset / have their email changed by a non-full admin (mirrors admin/service.js).
+const SUB_ADMIN_RESETTABLE_ROLES: Role[] = ["CREATOR", "TEAM_MEMBER"];
 
 // A plain, unrestricted ADMIN — the only actor the server lets touch another
 // ADMIN account's role or password, or promote anyone to ADMIN (see
@@ -50,7 +60,7 @@ const isFullAdmin = (u: { role?: Role; permissions?: Permissions } | null | unde
 
 /** True once a role's overlay deviates at all from that role's own baseline — used to badge both directions (a sub-admin missing something, or any role granted something extra) with one check. */
 const deviatesFromBaseline = (role: Role, permissions: Permissions | undefined) =>
-  !!permissions && PERMISSION_KEYS.some((k) => permissions[k] !== ROLE_DEFAULT_PERMISSIONS[role][k]);
+  !!permissions && PERMISSION_KEYS.some((k) => permissions[k] !== accessBaseline(role)[k]);
 
 // Only CREATOR accounts own Instagram pages (see system design.md's roles) —
 // Team member/Admin/Finance accounts have no use for one, so the "at least
@@ -78,6 +88,7 @@ function UsersContent() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [resettingUser, setResettingUser] = useState<User | null>(null);
+  const [emailUser, setEmailUser] = useState<User | null>(null);
   const [editingAccessUser, setEditingAccessUser] = useState<User | null>(null);
   const [tab, setTab] = useState<Role | "ALL">("CREATOR");
   const [search, setSearch] = useState("");
@@ -91,8 +102,8 @@ function UsersContent() {
   // (23 Sep): a non-full-admin may only reset Creator / Team member
   // passwords (any other role could out-rank them once signed in as), and
   // may not edit an ADMIN's overlay at all.
-  const canResetPassword = (u: User) => actorIsFullAdmin || !isGrantableRole(u.role);
-  const canEditAccess = (u: User) => isGrantableRole(u.role) && (actorIsFullAdmin || u.role !== "ADMIN");
+  const canResetPassword = (u: User) => actorIsFullAdmin || SUB_ADMIN_RESETTABLE_ROLES.includes(u.role);
+  const canEditAccess = (u: User) => actorIsFullAdmin || u.role !== "ADMIN";
 
   const usersQuery = useQuery({ queryKey: ["adminUsers"], queryFn: () => adminApi.users(token), enabled: isAdmin });
   const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token), enabled: isAdmin });
@@ -110,7 +121,7 @@ function UsersContent() {
   }, [items]);
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter((u) => tab === "ALL" || u.role === tab).filter((u) => !q || (u.name ?? "").toLowerCase().includes(q) || u.phoneNumber.includes(q));
+    return items.filter((u) => tab === "ALL" || u.role === tab).filter((u) => !q || (u.name ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q) || (u.phoneNumber ?? "").includes(q));
   }, [items, tab, search]);
   const selected = visible.find((u) => u.id === selectedId) ?? null;
 
@@ -123,7 +134,9 @@ function UsersContent() {
   // The non-ADMIN counterpart (15 Sep) — a Finance/Planner whose overlay
   // deviates from that role's own baseline (a grant on top of it, or a
   // baseline section taken away).
-  const hasGrantedAccess = (u: User) => u.role !== "ADMIN" && isGrantableRole(u.role) && deviatesFromBaseline(u.role, u.permissions);
+  const hasGrantedAccess = (u: User) => u.role === "FINANCE" && deviatesFromBaseline(u.role, u.permissions);
+  // An own-scope account with a section switched off (24 Sep).
+  const hasLimitedAccess = (u: User) => isOwnScopeRole(u.role) && deviatesFromBaseline(u.role, accessOf(u));
 
   return (
     <AppShell
@@ -172,7 +185,7 @@ function UsersContent() {
               </div>
               <label className="relative block w-full sm:w-[240px]">
                 <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-faint" />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or phone" aria-label="Search users" className="h-9 w-full rounded-md border border-border bg-surface pl-8 pr-3 text-[0.8125rem] shadow-card placeholder:text-text-faint focus:border-ink focus:outline-none focus:ring-[3px] focus:ring-ink-10" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, email or phone" aria-label="Search users" className="h-9 w-full rounded-md border border-border bg-surface pl-8 pr-3 text-[0.8125rem] shadow-card placeholder:text-text-faint focus:border-ink focus:outline-none focus:ring-[3px] focus:ring-ink-10" />
               </label>
             </div>
 
@@ -187,7 +200,7 @@ function UsersContent() {
                     <THead>
                       <tr>
                         <TH>Name</TH>
-                        <TH className="hidden md:table-cell">Phone</TH>
+                        <TH className="hidden md:table-cell">Email</TH>
                         <TH className="hidden xl:table-cell">Pages</TH>
                         <TH>Role</TH>
                         <TH className="hidden xl:table-cell">Joined</TH>
@@ -202,10 +215,13 @@ function UsersContent() {
                             <TD>
                               <div className="flex items-center gap-3">
                                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[0.72rem] font-semibold text-text-2 ring-1 ring-inset ring-border">{initialsOf(u.name)}</span>
-                                <Cell2 primary={u.name ?? "—"} secondary={<span className="md:hidden">{u.phoneNumber}</span>} />
+                                <Cell2 primary={u.name ?? "—"} secondary={<span className="md:hidden">{u.email ?? u.phoneNumber}</span>} />
                               </div>
                             </TD>
-                            <TD className="hidden whitespace-nowrap tabular-nums text-text-muted md:table-cell">{u.phoneNumber}</TD>
+                            <TD className="hidden max-w-[240px] truncate text-text-muted md:table-cell">
+                              {u.email ?? <span className="text-text-faint">—</span>}
+                              {u.phoneNumber && <span className="block text-[0.72rem] tabular-nums text-text-faint">{u.phoneNumber}</span>}
+                            </TD>
                             <TD className="hidden max-w-[220px] truncate text-text-muted xl:table-cell">{pages.length === 0 ? <span className="text-text-faint">—</span> : pages.map((p) => `@${p.handle}`).join(", ")}</TD>
                             <TD onClick={(e) => e.stopPropagation()}>
                               <div className="flex flex-col items-start gap-1">
@@ -220,7 +236,7 @@ function UsersContent() {
                                         ? "Only a full admin can change an admin's role"
                                         : "Change role"
                                   }
-                                  aria-label={`Role for ${u.name ?? u.phoneNumber}`}
+                                  aria-label={`Role for ${personLabel(u)}`}
                                   className="h-8 w-fit rounded-[6px] border border-border-strong bg-surface px-2 text-[0.78rem] text-text shadow-card focus:border-ink focus:outline-none disabled:opacity-50"
                                 >
                                   {ROLES.map((r) => (
@@ -231,6 +247,7 @@ function UsersContent() {
                                 </select>
                                 {isSubAdmin(u) && <Tag tone="wait">Sub-admin</Tag>}
                                 {hasGrantedAccess(u) && <Tag tone="wait">Granted access</Tag>}
+                                {hasLimitedAccess(u) && <Tag tone="wait">Limited access</Tag>}
                               </div>
                             </TD>
                             <TD className="hidden whitespace-nowrap text-text-muted xl:table-cell">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</TD>
@@ -239,6 +256,11 @@ function UsersContent() {
                                 {canResetPassword(u) && (
                                   <button type="button" onClick={() => setResettingUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
                                     Reset password
+                                  </button>
+                                )}
+                                {canResetPassword(u) && (
+                                  <button type="button" onClick={() => setEmailUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
+                                    Change email
                                   </button>
                                 )}
                                 {u.id !== user?.id && canEditAccess(u) && (
@@ -261,12 +283,17 @@ function UsersContent() {
                   <Card className="flex flex-col" data-testid="person-detail">
                     <CardHeader
                       title={selected.name ?? "—"}
-                      meta={<span className="text-[0.78rem] text-text-muted">{roleLabel(selected.role)} · {selected.phoneNumber}</span>}
+                      meta={<span className="text-[0.78rem] text-text-muted">{roleLabel(selected.role)} · {selected.email ?? selected.phoneNumber ?? "—"}</span>}
                       action={
                         canResetPassword(selected) ? (
-                          <Button size="sm" variant="secondary" onClick={() => setResettingUser(selected)}>
-                            Reset password
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="secondary" onClick={() => setEmailUser(selected)}>
+                              Change email
+                            </Button>
+                            <Button size="sm" variant="secondary" onClick={() => setResettingUser(selected)}>
+                              Reset password
+                            </Button>
+                          </div>
                         ) : undefined
                       }
                     />
@@ -295,10 +322,10 @@ function UsersContent() {
                           </div>
                         )}
                       </div>
-                      {selected.permissions && isGrantableRole(selected.role) && (
+                      {(selected.permissions || isOwnScopeRole(selected.role)) && (
                         <div>
-                          <p className="mb-2 text-[0.8125rem] font-semibold">Access</p>
-                          <AccessSummary value={selected.permissions} />
+                          <p className="mb-2 text-[0.8125rem] font-semibold">{isOwnScopeRole(selected.role) ? "Access (own content only)" : "Access"}</p>
+                          <AccessSummary value={accessOf(selected)} role={selected.role} />
                           {selected.id !== user?.id && canEditAccess(selected) && (
                             <Button size="sm" variant="secondary" className="mt-3" onClick={() => setEditingAccessUser(selected)}>
                               Edit access
@@ -323,6 +350,14 @@ function UsersContent() {
       {showCreate && <CreateUserModal token={token} actorIsFullAdmin={actorIsFullAdmin} onClose={() => setShowCreate(false)} onCreated={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })} />}
 
       {resettingUser && <ResetPasswordModal token={token} targetUser={resettingUser} onClose={() => setResettingUser(null)} />}
+      {emailUser && (
+        <ChangeEmailModal
+          token={token}
+          targetUser={emailUser}
+          onClose={() => setEmailUser(null)}
+          onChanged={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })}
+        />
+      )}
 
       {editingAccessUser && (
         <EditAccessModal
@@ -362,13 +397,17 @@ function EditAccessModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const ownScope = isOwnScopeRole(targetUser.role);
   const [values, setValues] = useState<Permissions>(() => {
+    if (ownScope) return accessOf(targetUser);
     const current = targetUser.permissions;
     return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, current?.[k] ?? true])) as Permissions;
   });
 
+  // Own-scope roles: send only their own switches (anything else is a 400 on the server).
+  const payload = ownScope ? (Object.fromEntries((OWN_CAPABILITIES[targetUser.role] ?? []).map((k) => [k, values[k]])) as Partial<Permissions>) : values;
   const saveMutation = useMutation({
-    mutationFn: () => adminApi.updatePermissions(token, targetUser.id, values),
+    mutationFn: () => adminApi.updatePermissions(token, targetUser.id, payload as Permissions),
     onSuccess: onSaved,
   });
 
@@ -378,9 +417,9 @@ function EditAccessModal({
         <div>
           <h2 className="text-lg font-semibold">Edit access</h2>
           <p className="mt-1 text-[0.8125rem] text-text-muted">
-            What <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> can see and do. Checking a section grants
-            it, unchecking hides it and blocks its actions server-side, even if they still have the link. Check the section to see and toggle
-            its individual actions (edit, approve, pay…).
+            What <strong className="text-text">{personLabel(targetUser)}</strong> can see and do{ownScope ? " — with their own content only" : ""}. Unchecking a
+            section hides it and blocks it server-side, even if they still have the link.{" "}
+            {ownScope ? "Nothing here can open anyone else's data." : "Check the section to see and toggle its individual actions (edit, approve, pay…)."}
           </p>
         </div>
 
@@ -424,7 +463,7 @@ function ResetPasswordModal({ token, targetUser, onClose }: { token: string; tar
         {resetMutation.data ? (
           <div className="flex flex-col gap-3">
             <p className="text-[0.8125rem] text-text-muted">
-              New password for <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong>. Share it with them now
+              New password for <strong className="text-text">{personLabel(targetUser)}</strong>. Share it with them now
               — it&apos;s shown only this once and can&apos;t be retrieved again. They&apos;ve been signed out everywhere.
             </p>
             <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-semibold tracking-wide">
@@ -437,7 +476,7 @@ function ResetPasswordModal({ token, targetUser, onClose }: { token: string; tar
         ) : (
           <>
             <p className="text-[0.8125rem] text-text-muted">
-              This generates a new password for <strong className="text-text">{targetUser.name ?? targetUser.phoneNumber}</strong> and signs
+              This generates a new password for <strong className="text-text">{personLabel(targetUser)}</strong> and signs
               them out of every device. Their current password stops working immediately.
             </p>
             {resetMutation.isError && (
@@ -458,6 +497,65 @@ function ResetPasswordModal({ token, targetUser, onClose }: { token: string; tar
   );
 }
 
+/**
+ * Admin changes a user's email — their login (24 Sep: a typo at creation, or
+ * a new inbox). Same gate as Reset password. The new address is unverified
+ * until their next sign-in's emailed code, and they're signed out everywhere.
+ */
+function ChangeEmailModal({ token, targetUser, onClose, onChanged }: { token: string; targetUser: User; onClose: () => void; onChanged: () => void }) {
+  const [email, setEmail] = useState(targetUser.email ?? "");
+  const valid = /^\S+@\S+\.\S+$/.test(email.trim());
+  const unchanged = email.trim().toLowerCase() === (targetUser.email ?? "").toLowerCase();
+  const mutation = useMutation({
+    mutationFn: () => adminApi.updateUserEmail(token, targetUser.id, email.trim()),
+    onSuccess: onChanged,
+  });
+
+  return (
+    <Sheet onClose={onClose} panelClassName="md:max-w-[420px]">
+      <form
+        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid && !unchanged) mutation.mutate();
+        }}
+        data-testid="change-email-form"
+      >
+        <h2 className="text-lg font-semibold">Change email</h2>
+        {mutation.data ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-[0.8125rem] text-text-muted">
+              <strong className="text-text">{personLabel(targetUser)}</strong> now signs in with <strong className="text-text">{mutation.data.email}</strong>. They&apos;ve been
+              signed out everywhere; their next sign-in emails a code to the new address, which verifies it. Their password is unchanged.
+            </p>
+            <Button type="button" className="w-full" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        ) : (
+          <>
+            <p className="text-[0.8125rem] text-text-muted">
+              The email is how <strong className="text-text">{personLabel(targetUser)}</strong> signs in. Changing it signs them out of every device.
+            </p>
+            <Field label="Email">
+              <TextField type="email" value={email} onChange={setEmail} placeholder="name@gmail.com" aria-label="New email" autoComplete="off" />
+            </Field>
+            {mutation.isError && <ErrorNotice message={mutation.error instanceof ApiError ? mutation.error.message : "Couldn't change the email."} />}
+            <div className="flex gap-2.5">
+              <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" className="flex-1" disabled={!valid || unchanged || mutation.isPending}>
+                {mutation.isPending ? "Saving…" : "Change email"}
+              </Button>
+            </div>
+          </>
+        )}
+      </form>
+    </Sheet>
+  );
+}
+
 interface DraftPage {
   handle: string;
   category: string;
@@ -469,6 +567,9 @@ function emptyPage(): DraftPage {
 }
 
 function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { token: string; actorIsFullAdmin: boolean; onClose: () => void; onCreated: () => void }) {
+  // Email is required — it's the new account's login (24 Sep); phone is optional contact info.
+  const [email, setEmail] = useState("");
+  const [emailBlurred, setEmailBlurred] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("CREATOR");
@@ -484,9 +585,9 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
   // usual sections for those roles, all-off for Creator/Team member (whose
   // editor is hidden entirely). Reset whenever Role changes so a leftover
   // toggle from one role doesn't silently carry over as a grant on another.
-  const [permissions, setPermissions] = useState<Permissions>(() => ({ ...ROLE_DEFAULT_PERMISSIONS[role] }));
+  const [permissions, setPermissions] = useState<Permissions>(() => ({ ...accessBaseline(role) }));
   useEffect(() => {
-    setPermissions({ ...ROLE_DEFAULT_PERMISSIONS[role] });
+    setPermissions({ ...accessBaseline(role) });
   }, [role]);
   const [pages, setPages] = useState<DraftPage[]>([emptyPage()]);
   // Page creation happens after signup succeeds, one request per page — a
@@ -503,19 +604,16 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
   // both the mutation and the post-submit summary below so they can't
   // disagree about how many pages were attempted.
   const submittedPages = requiresPage ? validPages : [];
+  const emailValid = /^\S+@\S+\.\S+$/.test(email.trim());
+  const showEmailError = emailBlurred && !emailValid;
   const phoneDigits = phoneNumber.replace(/\D/g, "");
-  // Indian mobile numbers are 10 digits after the fixed +91 prefix (see
-  // system design.md's phone-only auth model). canSubmit used to only check
-  // "non-empty", so e.g. "123" silently reached the server as "+91123" and
-  // failed there with a generic error instead of a clear one here — see
-  // bugs.md #3.
+  // Optional — but if typed, it must be a full 10-digit Indian mobile
+  // number after the fixed +91 prefix (a partial "123" used to reach the
+  // server as "+91123", bugs.md #3). Error only once the field's been left.
   const [phoneBlurred, setPhoneBlurred] = useState(false);
-  const phoneValid = phoneDigits.length === 10;
-  // Only surface the error once the field's been left (blur), not on every
-  // keystroke — otherwise typing a correct number one digit at a time shows
-  // an "invalid" state for all 9 digits before it.
+  const phoneValid = phoneDigits.length === 0 || phoneDigits.length === 10;
   const showPhoneError = phoneBlurred && !phoneValid;
-  const canSubmit = phoneValid && (!requiresPage || validPages.length > 0);
+  const canSubmit = emailValid && phoneValid && (!requiresPage || validPages.length > 0);
 
   function updatePage(index: number, patch: Partial<DraftPage>) {
     setPages((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
@@ -530,15 +628,20 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
   // Only send `permissions` at all once it actually deviates from this
   // role's own baseline — see auth/service.js's signup for the matching
   // server-side default.
-  const hasCustomAccess = isGrantableRole(role) && PERMISSION_KEYS.some((k) => permissions[k] !== ROLE_DEFAULT_PERMISSIONS[role][k]);
+  const hasCustomAccess = PERMISSION_KEYS.some((k) => permissions[k] !== accessBaseline(role)[k]);
+  // Own-scope roles: only their own switches go to the server.
+  const permissionsPayload = isOwnScopeRole(role)
+    ? (Object.fromEntries((OWN_CAPABILITIES[role] ?? []).map((k) => [k, permissions[k]])) as Permissions)
+    : permissions;
 
   const createMutation = useMutation({
     mutationFn: async () => {
       const result = await authApi.signup(token, {
-        phoneNumber: `+91${phoneDigits}`,
+        email: email.trim(),
+        phoneNumber: phoneDigits ? `+91${phoneDigits}` : undefined,
         name: name || undefined,
         role,
-        permissions: hasCustomAccess ? permissions : undefined,
+        permissions: hasCustomAccess ? permissionsPayload : undefined,
       });
       const failures: string[] = [];
       for (const page of submittedPages) {
@@ -581,8 +684,8 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
         {created ? (
           <div className="flex flex-col gap-3">
             <p className="text-[0.8125rem] text-text-muted">
-              Account created for <strong className="text-text">{created.user.phoneNumber}</strong>. Share this password with them now —
-              it&apos;s shown only this once and can&apos;t be retrieved again.
+              Account created for <strong className="text-text">{created.user.email}</strong>. They sign in with that email and this
+              password, then confirm a code sent to the email. Share the password now — it&apos;s shown only this once.
             </p>
             <div className="rounded-md border border-border-strong bg-surface-2 px-3.5 py-3 text-center font-mono text-lg font-semibold tracking-wide">
               {created.generatedPassword}
@@ -598,11 +701,24 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
           </div>
         ) : (
           <>
-            <Field label="Phone number">
-              <PhoneField required value={phoneNumber} onChange={setPhoneNumber} onBlur={() => setPhoneBlurred(true)} placeholder="98765 43210" error={showPhoneError ? "Enter a valid 10-digit mobile number." : null} />
+            <Field label="Email">
+              <TextField
+                type="email"
+                required
+                value={email}
+                onChange={setEmail}
+                onBlur={() => setEmailBlurred(true)}
+                placeholder="name@gmail.com"
+                aria-label="Email"
+                autoComplete="off"
+              />
+              {showEmailError && <p className="text-[0.75rem] text-rose">Enter a valid email address — it&apos;s how they&apos;ll sign in.</p>}
             </Field>
             <Field label="Name (optional)">
               <TextField value={name} onChange={setName} placeholder="Their name" />
+            </Field>
+            <Field label="Phone (optional)">
+              <PhoneField value={phoneNumber} onChange={setPhoneNumber} onBlur={() => setPhoneBlurred(true)} placeholder="98765 43210" error={showPhoneError ? "Enter a valid 10-digit mobile number, or leave it empty." : null} />
             </Field>
             <Field label="Role">
               <Select value={role} onChange={(v) => setRole(v as Role)}>
@@ -616,19 +732,19 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
               </Select>
             </Field>
 
-            {isGrantableRole(role) && (
             <div className="flex flex-col gap-3 border-t border-border pt-4">
               <div>
-                <p className="text-[0.8125rem] font-semibold">{role === "ADMIN" ? "Access (Sub-admin)" : "Access"}</p>
+                <p className="text-[0.8125rem] font-semibold">{role === "ADMIN" ? "Access (Sub-admin)" : isOwnScopeRole(role) ? "Access (own content only)" : "Access"}</p>
                 <p className="text-[0.75rem] text-text-faint">
                   {role === "ADMIN"
                     ? "Leave everything checked for a full admin. Uncheck a section (or just one of its actions) to create a Sub-admin restricted to the rest."
-                    : `Starts at a plain ${roleLabel(role)}'s usual access. Check a section, or one of its actions, to grant more.`}
+                    : isOwnScopeRole(role)
+                      ? `Everything a ${roleLabel(role)} normally uses is on — uncheck anything they shouldn't have.`
+                      : `Starts at a plain ${roleLabel(role)}'s usual access. Check a section, or one of its actions, to grant more.`}
                 </p>
               </div>
               <AccessEditor value={permissions} onChange={setPermissions} role={role} />
             </div>
-            )}
 
             {requiresPage && (
               <div className="flex flex-col gap-3 border-t border-border pt-4">

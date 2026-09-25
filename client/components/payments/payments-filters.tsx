@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { SearchIcon, CloseIcon } from "@/components/icons";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { personLabel } from "@/lib/format";
 import type { PageOwner, PaymentsFilters } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
@@ -107,7 +108,7 @@ export function PaymentsFilterBar({
             aria-label="Page owner"
             value={state.ownerId}
             onChange={(ownerId) => onChange({ ...state, ownerId })}
-            options={owners.map((o) => ({ value: o.id, label: o.name ?? o.phoneNumber, hint: o.name ? o.phoneNumber : undefined, keywords: o.email ?? undefined }))}
+            options={owners.map((o) => ({ value: o.id, label: personLabel(o), hint: o.name ? (o.email ?? o.phoneNumber ?? undefined) : undefined, keywords: [o.email, o.phoneNumber].filter(Boolean).join(" ") || undefined }))}
             placeholder="All page owners"
             emptyText="No page owner matches."
             className="w-full sm:w-[260px]"

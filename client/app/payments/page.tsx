@@ -7,7 +7,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { ClientInvoicesPanel } from "@/components/invoices/client-invoices-panel";
 import { AdminPayouts } from "@/components/payments/admin-payouts";
 import { CreatorPayments } from "@/components/payments/creator-payments";
-import { hasAccess } from "@/lib/api-client";
+import { hasAccess, canUse } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -35,7 +35,8 @@ function PaymentsContent() {
   const [direction, setDirection] = useState<"internal" | "receivables">("internal");
 
   const canPay = hasAccess(user, "finance.pay");
-  const isCreator = user?.role === "CREATOR";
+  // A creator's own Payouts view — only while their Invoices & payouts section is on (24 Sep).
+  const isCreator = user?.role === "CREATOR" && canUse(user, "finance.view");
   const shellUser = {
     initials: initialsOf(user?.name),
     name: user?.name ?? "—",

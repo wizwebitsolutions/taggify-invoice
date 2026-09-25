@@ -608,10 +608,12 @@ describe("listAssignments — visibility (newTask.md, 8 Sep: \"visible to all cr
     );
   });
 
-  it("granting campaigns.view to a role that doesn't normally hold it opens the full sheet", async () => {
+  it("regression (24 Sep — own-scope roles never get global access): a TEAM_MEMBER with a stored campaigns.view grant still sees only their own rows of the sheet", async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "TEAM_MEMBER", permissions: { "campaigns.view": true } });
     await listAssignments("c1", { id: "tm-1", role: "TEAM_MEMBER" });
-    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: { in: ["c1"] } } }));
+    const { where } = mockPrisma.campaignAssignment.findMany.mock.calls.at(-1)[0];
+    expect(where.campaignId).toBe("c1");
+    expect(JSON.stringify(where)).toContain("tm-1");
   });
 });
 

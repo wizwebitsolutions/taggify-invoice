@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
+import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import { createBillingProfileSchema, updateBillingProfileSchema, approvalSchema } from "./schemas.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import * as billingService from "./service.js";
@@ -14,7 +15,7 @@ router.use(requireAuth);
 // the JWT (23 Sep, Step 3) — this used to be a bare ADMIN/FINANCE role
 // check, so restricting a Finance account's finance.view never actually
 // hid anyone else's bank details from them.
-router.get("/", async (req, res, next) => {
+router.get("/", requireOwnAccess("finance.view"), async (req, res, next) => {
   try {
     const effective = await loadEffectivePermissions(req.user.id);
     res.json(effective["finance.view"] ? await billingService.listAll() : await billingService.listOwn(req.user.id));
@@ -23,7 +24,7 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-router.post("/", validateBody(createBillingProfileSchema), async (req, res, next) => {
+router.post("/", requireOwnAccess("finance.edit"), validateBody(createBillingProfileSchema), async (req, res, next) => {
   try {
     res.status(201).json(await billingService.create(req.user.id, req.body));
   } catch (err) {
@@ -33,7 +34,7 @@ router.post("/", validateBody(createBillingProfileSchema), async (req, res, next
 
 // Edit details — owner, or Admin / finance.manage for anyone (22 Sep). Who
 // may is decided in the service, where the profile's owner is known.
-router.put("/:id", validateBody(updateBillingProfileSchema), async (req, res, next) => {
+router.put("/:id", requireOwnAccess("finance.edit"), validateBody(updateBillingProfileSchema), async (req, res, next) => {
   try {
     res.json(await billingService.update(req.params.id, req.user, req.body));
   } catch (err) {

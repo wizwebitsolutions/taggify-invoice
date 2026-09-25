@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
-import { TextField, PhoneField } from "@/components/ui/form-field";
+import { TextField } from "@/components/ui/form-field";
 import { Tag, type TagTone } from "@/components/ui/tag";
 import { Note } from "@/components/ui/note";
 import { ErrorNotice } from "@/components/ui/table-parts";
@@ -67,8 +67,8 @@ function useIsNarrow() {
   return narrow;
 }
 
-export function ownerLabel(owner: { name: string | null; phoneNumber: string } | null | undefined) {
-  return owner?.name?.trim() || owner?.phoneNumber || "—";
+export function ownerLabel(owner: { name: string | null; phoneNumber: string | null; email?: string | null } | null | undefined) {
+  return owner?.name?.trim() || owner?.email || owner?.phoneNumber || "—";
 }
 
 export function ImportPagesModal({ token, onClose, onImported }: { token: string; onClose: () => void; onImported: (result: ImportResult) => void }) {
@@ -751,22 +751,24 @@ function ImportAccountPicker({
   const { user } = useAuth();
   const canCreateUser = hasAccess(user, "users.edit");
   const [creating, setCreating] = useState(owners.length === 0 && canCreateUser);
+  // Inventory asks only name + email for a new account (24 Sep) — the
+  // email is their login; the password is generated.
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [phoneTouched, setPhoneTouched] = useState(false);
-  const phoneValid = phone.length === 10;
+  const [email, setEmail] = useState("");
+  const [emailTouched, setEmailTouched] = useState(false);
+  const emailValid = /^\S+@\S+\.\S+$/.test(email.trim());
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const phoneNumber = `+91${phone}`;
+      const normalized = email.trim().toLowerCase();
       try {
-        const { user, generatedPassword } = await authApi.signup(token, { phoneNumber, name: name.trim() || undefined, role: "CREATOR" });
-        return { owner: { id: user.id, name: user.name, phoneNumber: user.phoneNumber }, password: generatedPassword as string | null };
+        const { user, generatedPassword } = await authApi.signup(token, { email: normalized, name: name.trim() || undefined, role: "CREATOR" });
+        return { owner: { id: user.id, name: user.name, phoneNumber: user.phoneNumber, email: user.email }, password: generatedPassword as string | null };
       } catch (err) {
-        // That number is already a creator here — use them rather than failing.
-        const existing = owners.find((o) => o.phoneNumber === phoneNumber);
-        if (err instanceof ApiError && err.code === "PHONE_ALREADY_REGISTERED" && existing) return { owner: existing, password: null };
-        if (err instanceof ApiError && err.code === "PHONE_ALREADY_REGISTERED") throw new ApiError(409, err.code, "That phone number already belongs to an account that isn't a creator — use a different number.");
+        // That email is already a creator here — use them rather than failing.
+        const existing = owners.find((o) => o.email?.toLowerCase() === normalized);
+        if (err instanceof ApiError && err.code === "EMAIL_ALREADY_REGISTERED" && existing) return { owner: existing, password: null };
+        if (err instanceof ApiError && err.code === "EMAIL_ALREADY_REGISTERED") throw new ApiError(409, err.code, "That email already belongs to an account that isn't a creator — use a different email.");
         throw err;
       }
     },
@@ -774,8 +776,8 @@ function ImportAccountPicker({
       onUserCreated(owner, password);
       setCreating(false);
       setName("");
-      setPhone("");
-      setPhoneTouched(false);
+      setEmail("");
+      setEmailTouched(false);
     },
   });
 
@@ -812,8 +814,8 @@ function ImportAccountPicker({
           className="flex flex-wrap items-end gap-2.5"
           onSubmit={(e) => {
             e.preventDefault();
-            setPhoneTouched(true);
-            if (phoneValid) createMutation.mutate();
+            setEmailTouched(true);
+            if (emailValid) createMutation.mutate();
           }}
           data-testid="import-new-user-form"
         >
@@ -822,8 +824,9 @@ function ImportAccountPicker({
             <TextField value={name} onChange={setName} placeholder="Creator's name" aria-label="New user name" />
           </label>
           <label className="flex min-w-[200px] flex-1 flex-col gap-1">
-            <span className="text-[0.72rem] font-medium text-text-2">Phone number</span>
-            <PhoneField value={phone} onChange={setPhone} onBlur={() => setPhoneTouched(true)} aria-label="New user phone" error={phoneTouched && !phoneValid ? "Enter a 10-digit mobile number." : undefined} />
+            <span className="text-[0.72rem] font-medium text-text-2">Email</span>
+            <TextField type="email" value={email} onChange={setEmail} onBlur={() => setEmailTouched(true)} placeholder="name@gmail.com" aria-label="New user email" />
+            {emailTouched && !emailValid && <span className="text-[0.72rem] text-rose">Enter a valid email — it&apos;s their login.</span>}
           </label>
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={createMutation.isPending}>
@@ -944,7 +947,8 @@ function FollowersCell({ row, live, fetching }: { row: ImportPreviewRow; live: I
 
 function ownerOptionLabel(o: PageOwner | undefined) {
   if (!o) return "—";
-  return o.name?.trim() ? `${o.name} · ${o.phoneNumber}` : o.phoneNumber;
+  const contact = o.email ?? o.phoneNumber ?? "";
+  return o.name?.trim() ? (contact ? `${o.name} · ${contact}` : o.name) : contact || "—";
 }
 
 function ResultView({ result, onClose }: { result: ImportResult; onClose: () => void }) {

@@ -35,12 +35,15 @@ describe("update — who may edit a billing profile, and what it does to approva
     expect(mockPrisma.billingProfile.update.mock.calls[0][0].data).toEqual({ bankAccountNumber: "123456789", approvalStatus: "pending" });
   });
 
-  it("another creator is refused; a non-admin granted finance.manage is allowed", async () => {
+  it("another creator is refused, even with a stored finance grant (regression (24 Sep — own-scope roles never get global access)); a FINANCE account is allowed", async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ role: "CREATOR", permissions: null });
     await expect(update("bp-1", { id: "creator-2", role: "CREATOR" }, { name: "x" })).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     mockPrisma.user.findUnique.mockResolvedValue({ role: "TEAM_MEMBER", permissions: { "finance.manage": true } });
-    await expect(update("bp-1", { id: "tm-1", role: "TEAM_MEMBER" }, { name: "x" })).resolves.toBeTruthy();
+    await expect(update("bp-1", { id: "tm-1", role: "TEAM_MEMBER" }, { name: "x" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    mockPrisma.user.findUnique.mockResolvedValue({ role: "FINANCE", permissions: null });
+    await expect(update("bp-1", { id: "fin-1", role: "FINANCE" }, { name: "x" })).resolves.toBeTruthy();
   });
 
   it("a PAN already on another profile is refused; keeping the same PAN is fine", async () => {

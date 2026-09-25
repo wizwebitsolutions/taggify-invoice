@@ -43,3 +43,8 @@ export function roleLabel(role?: string) {
   if (!role) return "";
   return role.charAt(0) + role.slice(1).toLowerCase().replace("_", " ");
 }
+
+/** How to name a person in the UI (24 Sep — phone is optional now): name, else email, else phone. */
+export function personLabel(person: { name?: string | null; email?: string | null; phoneNumber?: string | null } | null | undefined, fallback = "—") {
+  return person?.name?.trim() || person?.email || person?.phoneNumber || fallback;
+}

@@ -3,6 +3,7 @@ import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { requirePermission } from "../../middleware/requirePermission.js";
 import { validateBody } from "../../middleware/validate.js";
+import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import { createCampaignSchema, updateCampaignSchema, resolveAssignmentSchema, importSheetUrlSchema, createPhaseSchema } from "./schemas.js";
 import * as campaignsService from "./service.js";
 
@@ -11,7 +12,7 @@ router.use(requireAuth);
 
 // req.user scopes what comes back for a Plan Maker (own plans' campaigns
 // only — see lib/campaignAccess.js); every other role is unaffected.
-router.get("/", async (req, res, next) => {
+router.get("/", requireOwnAccess("campaigns.view"), async (req, res, next) => {
   try {
     res.json(await campaignsService.listCampaigns({ search: req.query.search }, req.user));
   } catch (err) {
@@ -20,7 +21,7 @@ router.get("/", async (req, res, next) => {
 });
 
 // Full campaign detail — bugs.md #7's edit/view page.
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", requireOwnAccess("campaigns.view"), async (req, res, next) => {
   try {
     res.json(await campaignsService.getCampaignById(req.params.id, req.user));
   } catch (err) {
@@ -75,7 +76,7 @@ router.delete("/:id/phase", requireAccess("campaigns.edit"), async (req, res, ne
 // everyone else, so this never hands a creator another creator's phone
 // number. requirePermission("campaigns.view") only ever matters for the
 // ADMIN branch (a sub-admin with that key off) — a no-op for every other role.
-router.get("/:id/assignments", requirePermission("campaigns.view"), async (req, res, next) => {
+router.get("/:id/assignments", requireOwnAccess("campaigns.view"), requirePermission("campaigns.view"), async (req, res, next) => {
   try {
     res.json(await campaignsService.listAssignments(req.params.id, req.user));
   } catch (err) {

@@ -18,7 +18,7 @@ import { PlusIcon, ChevronRightIcon, HeartIcon, MessageIcon, CloseIcon } from "@
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { useAuth } from "@/lib/auth-context";
-import { links as linksApi, campaigns as campaignsApi, assets as assetsApi, invoices as invoicesApi, ApiError, INVOICEABLE_LINK_STATUSES, type Link as LinkRow } from "@/lib/api-client";
+import { links as linksApi, campaigns as campaignsApi, assets as assetsApi, invoices as invoicesApi, ApiError, INVOICEABLE_LINK_STATUSES, type Link as LinkRow, canUse } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -58,14 +58,17 @@ export function CreatorDashboard() {
   const [showSubmitForm, setShowSubmitForm] = useState(false);
   const token = accessToken!;
 
-  const allLinksQuery = useQuery({ queryKey: ["links", "all"], queryFn: () => linksApi.list(token, { pageSize: 100 }) });
+  // A section the admin switched off (24 Sep) isn't fetched at all — it would only 403.
+  const canSeeLinks = canUse(user, "links.view");
+  const allLinksQuery = useQuery({ queryKey: ["links", "all"], queryFn: () => linksApi.list(token, { pageSize: 100 }), enabled: canSeeLinks });
   const filteredLinksQuery = useQuery({
     queryKey: ["links", statusFilter ?? "all", assetFilter ?? "all", fromFilter, toFilter],
     queryFn: () => linksApi.list(token, { status: statusFilter, assetId: assetFilter, from: fromFilter || undefined, to: toFilter || undefined, pageSize: 100 }),
+    enabled: canSeeLinks,
   });
-  const invoicesQuery = useQuery({ queryKey: ["invoices", "creator-home"], queryFn: () => invoicesApi.list(token, { pageSize: 100 }) });
-  const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token) });
-  const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token) });
+  const invoicesQuery = useQuery({ queryKey: ["invoices", "creator-home"], queryFn: () => invoicesApi.list(token, { pageSize: 100 }), enabled: canUse(user, "finance.view") });
+  const campaignsQuery = useQuery({ queryKey: ["campaigns"], queryFn: () => campaignsApi.list(token), enabled: canUse(user, "campaigns.view") });
+  const assetsQuery = useQuery({ queryKey: ["assets"], queryFn: () => assetsApi.list(token), enabled: canUse(user, "inventory.view") });
 
   const kpis = useMemo(() => {
     const items = allLinksQuery.data?.items ?? [];
@@ -114,8 +117,9 @@ export function CreatorDashboard() {
     });
   }
 
-  const canBulkInvoice = user?.role === "CREATOR" || user?.role === "ADMIN";
-  const canSubmitLink = user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
+  // Own-content switches (24 Sep) — an admin can turn invoicing or link submission off for a creator.
+  const canBulkInvoice = (user?.role === "CREATOR" && canUse(user, "finance.edit")) || user?.role === "ADMIN";
+  const canSubmitLink = (user?.role === "CREATOR" || user?.role === "TEAM_MEMBER") && canUse(user, "links.edit");
   const firstName = (user?.name ?? "there").split(" ")[0];
   const selectedTotal = rows.filter((l) => selectedIds.has(l.id)).reduce((s, l) => s + Number(l.cost), 0);
   const isFiltered = statusFilter !== undefined || assetFilter !== undefined || fromFilter || toFilter;

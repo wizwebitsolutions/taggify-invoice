@@ -45,15 +45,16 @@ test.describe("input validation", () => {
     await expect(phone).toHaveAttribute("inputmode", "numeric");
   });
 
-  test("login phone stops at 10 digits and the button waits for a full number", async ({ page }) => {
+  test("login takes an email only — Sign in waits for a full address, a phone number never enables it (24 Sep)", async ({ page }) => {
     await page.goto("/login");
-    // One "Gmail address" field since email 2FA (21 Sep) — digit-only
-    // input still behaves like the old phone field.
-    const phone = page.getByLabel("Gmail address");
-    await phone.pressSequentially("12345");
+    const email = page.getByLabel("Email", { exact: true });
+    await expect(email).toHaveAttribute("type", "email");
+    await email.pressSequentially("1234567890");
     await expect(page.getByRole("button", { name: "Sign in" })).toBeDisabled();
-    await phone.pressSequentially("6789012345");
-    await expect(phone).toHaveValue("1234567890");
+    await email.fill("");
+    await email.pressSequentially("creator@gmail");
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeDisabled();
+    await email.pressSequentially(".com");
     await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
   });
 

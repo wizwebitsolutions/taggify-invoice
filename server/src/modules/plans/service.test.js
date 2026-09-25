@@ -467,16 +467,20 @@ describe("Plan Maker access scoping (newTask.md, 8 Sep — \"Plan Maker... appro
     expect(mockPrisma.plan.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
   });
 
-  it("also opens the full list to any role explicitly granted plans.edit or plans.approve (23 Sep)", async () => {
+  it("opens the full list to a staff account granted plans.edit or plans.approve — never to an own-scope role (23/24 Sep)", async () => {
     mockPrisma.plan.findMany.mockResolvedValue([]);
 
     mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "FINANCE", permissions: { "plans.edit": true } });
     await listPlans({ id: "fin-1", role: "FINANCE" });
     expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: {} }));
 
+    // regression (24 Sep — own-scope roles never get global access): a stored grant on a TEAM_MEMBER or PLAN_MAKER doesn't open other people's plans.
     mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "TEAM_MEMBER", permissions: { "plans.approve": true } });
     await listPlans({ id: "tm-1", role: "TEAM_MEMBER" });
-    expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: {} }));
+    expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: { createdById: "tm-1" } }));
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "PLAN_MAKER", permissions: { "plans.edit": true } });
+    await listPlans({ id: "pm-7", role: "PLAN_MAKER" });
+    expect(mockPrisma.plan.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: { createdById: "pm-7" } }));
 
     // A plain Finance account without the grant stays scoped to its own.
     mockPrisma.user.findUnique.mockResolvedValueOnce({ role: "FINANCE", permissions: null });

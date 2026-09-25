@@ -3,8 +3,11 @@ import { PERMISSION_KEYS } from "../../lib/permissions.js";
 
 const permissionsShape = Object.fromEntries(PERMISSION_KEYS.map((key) => [key, z.boolean().optional()]));
 
+// Email is required and is the new account's login (24 Sep); the password
+// is generated server-side. Phone is optional contact info.
 export const signupSchema = z.object({
-  phoneNumber: z.string().min(8).max(15),
+  email: z.string().trim().email("Enter a valid email address").max(254),
+  phoneNumber: z.string().min(8).max(15).optional(),
   name: z.string().min(1).max(100).optional(),
   role: z.enum(["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"]).default("CREATOR"),
   // Sub-admin creation (newTask.md, 8 Sep) for ADMIN; granted-access
@@ -12,15 +15,11 @@ export const signupSchema = z.object({
   permissions: z.object(permissionsShape).strict().optional(),
 });
 
-// Exactly one identifier: phone number (account with no verified email
-// yet) or email (after verification) — see auth/service.js's login.
-export const loginSchema = z
-  .object({
-    phoneNumber: z.string().min(8).max(15).optional(),
-    email: z.string().email().max(254).optional(),
-    password: z.string().min(1),
-  })
-  .refine((v) => Boolean(v.phoneNumber) !== Boolean(v.email), { message: "Provide either phoneNumber or email" });
+// Email + password only (24 Sep) — phone-number login is gone.
+export const loginSchema = z.object({
+  email: z.string().trim().email("Enter your email address").max(254),
+  password: z.string().min(1),
+});
 
 const otpCode = z.string().regex(/^\d{6}$/, "Enter the 6-digit code");
 

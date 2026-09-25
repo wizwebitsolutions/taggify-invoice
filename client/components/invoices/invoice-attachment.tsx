@@ -6,7 +6,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { CloseIcon, DownloadIcon, LinkIcon } from "@/components/icons";
-import { invoices as invoicesApi, ApiError, type Invoice } from "@/lib/api-client";
+import { invoices as invoicesApi, ApiError, hasOwnAccess, isOwnScopeRole, type Invoice } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 
 const ACCEPT = "application/pdf,image/jpeg,image/png,image/webp";
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -25,6 +26,9 @@ export function InvoiceAttachmentControl({ token, invoice, compact = false }: { 
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const frozen = invoice.status === "PAID";
+  // A creator / planner whose admin switched off their invoice editing (24 Sep) sees the file read-only.
+  const { user } = useAuth();
+  const readOnly = frozen || (isOwnScopeRole(user?.role) && !hasOwnAccess(user, "finance.edit"));
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["invoices"] });
 
   const uploadMutation = useMutation({
@@ -58,7 +62,7 @@ export function InvoiceAttachmentControl({ token, invoice, compact = false }: { 
       accept={ACCEPT}
       hidden
       aria-label={`Attach invoice file for ${invoice.invoiceNumber}`}
-      disabled={busy || frozen}
+      disabled={busy || readOnly}
       onChange={(e) => {
         const file = e.target.files?.[0];
         if (file) uploadMutation.mutate(file);
@@ -83,7 +87,7 @@ export function InvoiceAttachmentControl({ token, invoice, compact = false }: { 
             <span className="truncate">{attachment.name}</span>
           </a>
         ) : (
-          !frozen && (
+          !readOnly && (
             <button
               type="button"
               onClick={() => inputRef.current?.click()}
@@ -109,7 +113,7 @@ export function InvoiceAttachmentControl({ token, invoice, compact = false }: { 
             <DownloadIcon className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{attachment.name}</span>
           </a>
-          {!frozen && (
+          {!readOnly && (
             <>
               <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} className="text-[0.75rem] font-semibold text-text-faint hover:text-text disabled:opacity-50">
                 Replace
@@ -126,7 +130,7 @@ export function InvoiceAttachmentControl({ token, invoice, compact = false }: { 
             </>
           )}
         </div>
-      ) : frozen ? (
+      ) : readOnly ? (
         <p className="text-[0.8125rem] text-text-faint">None attached.</p>
       ) : (
         <button

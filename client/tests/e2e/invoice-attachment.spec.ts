@@ -101,4 +101,22 @@ test.describe("Invoice attachment — the creator's own invoice document", () =>
     await expect(panel.getByRole("button", { name: "Remove attached invoice" })).toHaveCount(0);
     await expect(panel.getByRole("button", { name: "Replace" })).toHaveCount(0);
   });
+
+  test("a CREATOR whose Raise invoices switch is off sees the file read-only (24 Sep)", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await page.addInitScript(() => {
+      const raw = window.localStorage.getItem("taggify_auth");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      s.user.ownAccess = { ...(s.user.ownAccess ?? {}), "finance.edit": false };
+      window.localStorage.setItem("taggify_auth", JSON.stringify(s));
+    });
+    await mockApi(page);
+    await page.route("**/invoices?**", (route) => route.fulfill({ json: { items: [invoice()], total: 1, page: 1, pageSize: 100 } }));
+
+    await page.goto("/invoices");
+    const panel = page.getByTestId("invoice-detail-panel");
+    await expect(panel.getByText("None attached.")).toBeVisible();
+    await expect(panel.getByRole("button", { name: /Attach the creator/ })).toHaveCount(0);
+  });
 });

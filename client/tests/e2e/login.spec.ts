@@ -11,7 +11,7 @@ const session = (userOver: Record<string, unknown> = {}) => ({
 
 async function submitCredentials(page: Page, identifier: string, password = "Passw0rd!") {
   await page.goto("/login");
-  await page.getByLabel("Gmail address").fill(identifier);
+  await page.getByLabel("Email", { exact: true }).fill(identifier);
   // exact: true — the bare substring also matches the "Show password"
   // toggle button's aria-label.
   await page.getByLabel("Password", { exact: true }).fill(password);
@@ -23,24 +23,24 @@ test.describe("login page", () => {
     await page.goto("/login");
 
     await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
-    await expect(page.getByLabel("Gmail address")).toBeVisible();
+    await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
   });
 
-  test("Sign in stays disabled until the identifier is a full email or 10-digit number", async ({ page }) => {
+  test("Sign in stays disabled until the email is a full address — a phone number is no longer a login (24 Sep)", async ({ page }) => {
     await page.goto("/login");
-    const identifier = page.getByLabel("Gmail address");
+    const email = page.getByLabel("Email", { exact: true });
     const button = page.getByRole("button", { name: "Sign in" });
     await page.getByLabel("Password", { exact: true }).fill("x");
 
-    await identifier.fill("98765");
+    await email.fill("98765 43210");
     await expect(button).toBeDisabled();
-    await identifier.fill("someone@");
+    await email.fill("someone@");
     await expect(button).toBeDisabled();
-    await identifier.fill("98765 43210");
+    await email.fill("someone@gmail.com");
     await expect(button).toBeEnabled();
-    await identifier.fill("someone@gmail.com");
+    await email.fill("someone@company.in");
     await expect(button).toBeEnabled();
   });
 
@@ -52,7 +52,7 @@ test.describe("login page", () => {
       })
     );
 
-    await submitCredentials(page, "9876543210", "wrong-password");
+    await submitCredentials(page, "creator@gmail.com", "wrong-password");
 
     await expect(page.getByText("Invalid credentials")).toBeVisible();
     // Didn't navigate away on a failed login.
@@ -67,30 +67,12 @@ test.describe("login page", () => {
     await expect(page).toHaveURL(/\/dashboard$/);
   });
 
-  // Copy change (23 Sep) — verified accounts already must sign in by email;
-  // the field now says so plainly instead of the generic phone-or-email wording.
-  test("the identifier field is labelled and placeholder'd for Gmail, with the phone number as the secondary path", async ({ page }) => {
+  test("the field asks for the email the admin registered, with no phone-number path (24 Sep)", async ({ page }) => {
     await page.goto("/login");
 
-    await expect(page.getByLabel("Gmail address")).toHaveAttribute("placeholder", "you@gmail.com");
-    await expect(page.getByText(/Sign in with your Gmail address/)).toBeVisible();
-    await expect(page.getByText(/the phone number your admin registered/)).toBeVisible();
-  });
-
-  // "This account signs in with its Gmail address, not the phone number"
-  // (USE_EMAIL_LOGIN, server-side wording updated 23 Sep to match) — a
-  // verified account's owner typing their phone number by habit.
-  test("a verified account's phone number shows the server's Gmail-specific message, not a generic one", async ({ page }) => {
-    await page.route(`${API_URL}/auth/login`, (route) =>
-      route.fulfill({
-        status: 401,
-        json: { error: { code: "USE_EMAIL_LOGIN", message: "This account signs in with its Gmail address, not the phone number" } },
-      })
-    );
-
-    await submitCredentials(page, "9876543210");
-
-    await expect(page.getByText("This account signs in with its Gmail address, not the phone number")).toBeVisible();
+    await expect(page.getByLabel("Email", { exact: true })).toHaveAttribute("placeholder", "you@gmail.com");
+    await expect(page.getByText(/Sign in with the email your admin registered/)).toBeVisible();
+    await expect(page.getByText(/phone number/i)).toHaveCount(0);
   });
 });
 
@@ -173,30 +155,9 @@ test.describe("login — trusted device (skip OTP for 7 days)", () => {
   });
 });
 
-// Email 2FA (21 Sep) — what /auth/login answers decides the next step.
+// Email 2FA (21 Sep; email-only since 24 Sep) — what /auth/login answers decides the next step.
 test.describe("login — email 2FA steps", () => {
-  test("unverified account: phone number is sent as +91…, lands on the dashboard, and is nagged to verify", async ({ page }) => {
-    await mockApi(page);
-    let loginBody: Record<string, unknown> | null = null;
-    await page.route(`${API_URL}/auth/login`, (route) => {
-      loginBody = route.request().postDataJSON();
-      return route.fulfill({ json: { ...session({ emailVerified: false }), unverifiedLoginsLeft: 1 } });
-    });
-
-    await submitCredentials(page, "9876543210");
-
-    await expect(page).toHaveURL(/\/dashboard$/);
-    expect(loginBody).toEqual({ phoneNumber: "+919876543210", password: "Passw0rd!" });
-    await expect(page.getByText("Verify your email to keep access.")).toBeVisible();
-
-    // The banner's link goes to the in-app verify page, which doesn't repeat the banner.
-    await page.getByRole("link", { name: "Verify email" }).click();
-    await expect(page).toHaveURL(/\/verify-email$/);
-    await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
-    await expect(page.getByText("Verify your email to keep access.")).toHaveCount(0);
-  });
-
-  test("verified account: email + password → OTP step → dashboard; no session exists until the code is verified", async ({ page }) => {
+  test("email + password → OTP step → dashboard (also a new account's first login, which verifies its email); no session until the code is verified", async ({ page }) => {
     await mockApi(page);
     let loginBody: Record<string, unknown> | null = null;
     let verifyBody: Record<string, unknown> | null = null;
@@ -254,54 +215,6 @@ test.describe("login — email 2FA steps", () => {
     await expect(page.getByLabel("Password", { exact: true })).toHaveValue("");
   });
 
-  test("locked-out account: forced through add email → code, using the challenge token, then in", async ({ page }) => {
-    await mockApi(page);
-    let startBody: Record<string, unknown> | null = null;
-    let confirmBody: Record<string, unknown> | null = null;
-    await page.route(`${API_URL}/auth/login`, (route) => route.fulfill({ json: { step: "EMAIL_VERIFICATION_REQUIRED", challengeToken: "setup-xyz" } }));
-    await page.route(`${API_URL}/auth/email/start`, (route) => {
-      startBody = route.request().postDataJSON();
-      return route.fulfill({ json: { emailHint: "ne***@gmail.com" } });
-    });
-    await page.route(`${API_URL}/auth/email/confirm`, (route) => {
-      confirmBody = route.request().postDataJSON();
-      return route.fulfill({ json: session({ email: "new@gmail.com", emailVerified: true }) });
-    });
-
-    await submitCredentials(page, "9876543210");
-
-    await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
-    await expect(page).toHaveURL(/\/login$/);
-    expect(await page.evaluate(() => localStorage.getItem("taggify_auth"))).toBeNull();
-
-    await page.getByLabel("Email address").fill("new@gmail.com");
-    await page.getByRole("button", { name: "Send verification code" }).click();
-    expect(startBody).toEqual({ email: "new@gmail.com", challengeToken: "setup-xyz" });
-
-    // Shows the full address they typed (so a typo is catchable), with a way back.
-    await expect(page.getByText("new@gmail.com")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Use a different email" })).toBeVisible();
-
-    await page.getByLabel("Verification code").fill("654321");
-    await page.getByRole("button", { name: "Verify email" }).click();
-
-    await expect(page).toHaveURL(/\/dashboard$/);
-    expect(confirmBody).toEqual({ code: "654321", challengeToken: "setup-xyz" });
-  });
-
-  test("locked-out account: an email someone else verified shows the server's error and stays on the email step", async ({ page }) => {
-    await page.route(`${API_URL}/auth/login`, (route) => route.fulfill({ json: { step: "EMAIL_VERIFICATION_REQUIRED", challengeToken: "setup-xyz" } }));
-    await page.route(`${API_URL}/auth/email/start`, (route) =>
-      route.fulfill({ status: 409, json: { error: { code: "EMAIL_ALREADY_REGISTERED", message: "This email is already in use" } } })
-    );
-
-    await submitCredentials(page, "9876543210");
-    await page.getByLabel("Email address").fill("taken@gmail.com");
-    await page.getByRole("button", { name: "Send verification code" }).click();
-
-    await expect(page.getByText("This email is already in use")).toBeVisible();
-    await expect(page.getByLabel("Email address")).toBeVisible();
-  });
 });
 
 test.describe("/verify-email (signed in, grace period)", () => {

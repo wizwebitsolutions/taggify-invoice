@@ -42,13 +42,13 @@ describe("invoiceAgingSweepJob — who gets notified (23 Sep, Step 3: finance.vi
     expect(notify.mock.calls.map((c) => c[0])).not.toContain("fin-restricted");
   });
 
-  it("a role granted finance.view outside its baseline (e.g. a Plan Maker) now does get notified", async () => {
+  it("regression (24 Sep — own-scope roles never get global access): a Plan Maker with a stored finance.view grant is not notified about everyone's overdue invoices", async () => {
     mockPrisma.invoice.findMany.mockResolvedValue([overdueInvoice]);
     mockPrisma.user.findMany.mockResolvedValue([{ id: "pm-granted", role: "PLAN_MAKER", permissions: { "finance.view": true } }]);
 
     await invoiceAgingSweepJob();
 
-    expect(notify.mock.calls.map((c) => c[0])).toContain("pm-granted");
+    expect(notify.mock.calls.map((c) => c[0])).not.toContain("pm-granted");
   });
 
   it("does nothing when there are no overdue invoices — no user query, no notifications", async () => {

@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { hasPermission } from "../lib/permissions.js";
+import { hasPermission, hasOwnCapability, isOwnScopeRole } from "../lib/permissions.js";
 
 /**
  * Section guard for the six admin-page clusters lib/permissions.js defines
@@ -25,14 +25,23 @@ import { hasPermission } from "../lib/permissions.js";
  * granted) the moment an admin edits it — not up to 15 minutes later when
  * their token would otherwise expire.
  */
+// 24 Sep: a bare role that is own-scope (CREATOR, TEAM_MEMBER, PLAN_MAKER) no
+// longer passes unconditionally — it passes if its *own-content* switch for
+// `key` is on (default on; an admin can remove it). The route's service still
+// scopes it to its own rows, exactly as before.
 export function requireAccess(key, ...bareRoles) {
   return async (req, res, next) => {
     try {
-      if (bareRoles.includes(req.user.role)) return next();
+      const bare = bareRoles.includes(req.user.role);
+      if (bare && !isOwnScopeRole(req.user.role)) return next();
 
       const user = await prisma.user.findUnique({ where: { id: req.user.id }, select: { role: true, permissions: true } });
       if (!user) {
         return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "User no longer exists" } });
+      }
+      if (bare) {
+        if (hasOwnCapability(user, key)) return next();
+        return res.status(403).json({ error: { code: "ACCESS_REMOVED", message: "Your admin has turned this off for your account" } });
       }
       if (!hasPermission(user, key)) {
         return res.status(403).json({ error: { code: "FORBIDDEN", message: "Your access has been restricted for this section" } });

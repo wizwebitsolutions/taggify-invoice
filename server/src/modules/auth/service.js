@@ -13,18 +13,19 @@ import {
 import { issueOtp, consumeOtp } from "../../lib/auth/emailOtp.js";
 import { issueTrustedDevice, verifyTrustedDevice, revokeTrustedDevices } from "../../lib/auth/trustedDevice.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getEffectivePermissions, sanitizePermissionsInput, computeNewAccountOverlay, assertGrantableRole, isFullAdmin } from "../../lib/permissions.js";
+import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, computeNewAccountOverlay, isFullAdmin, isOwnScopeRole, ownOverlayFor } from "../../lib/permissions.js";
 
 const BCRYPT_ROUNDS = 12;
-// Phone+password logins an account gets before verifying an email becomes
-// the only way forward (email 2FA, 21 Sep).
-export const MAX_UNVERIFIED_LOGINS = 2;
+// A valid bcrypt hash of a random string nobody knows — compared against
+// when a login's email has no account, so both paths cost the same.
+const DUMMY_PASSWORD_HASH = "$2a$12$Tw8/cvMQ0UV4BMJXRV3Or.Z.StoaN8RRQOzlCmlRMlVKsz2ZrIqf.";
 
 /**
- * No OTP: the caller only ever supplies a phone number. The system
- * generates the password itself and returns it once in the response for
- * the caller to relay to the new user (WhatsApp/SMS delivery channel is a
- * later integration, not required for this to function).
+ * The caller supplies an email (required — it's the account's login, 24 Sep)
+ * and optionally a phone number. The system generates the password itself
+ * and returns it once in the response for the caller to relay to the new
+ * user. The email isn't verified yet: the first login's emailed code does
+ * that (see verifyLoginOtp).
  *
  * `actor` is the admin performing the creation. `permissions` makes this
  * doubly the sub-admin/granted-access creation flow newTask.md (and its
@@ -51,9 +52,12 @@ export const MAX_UNVERIFIED_LOGINS = 2;
  * before this phase existed), so this never limits what a real admin can
  * hand out and never grants more than what's explicitly requested.
  */
-export async function signup({ phoneNumber, name, role, permissions }, actor) {
-  const existing = await prisma.user.findUnique({ where: { phoneNumber } });
-  if (existing) {
+export async function signup({ email, phoneNumber, name, role, permissions }, actor) {
+  const normalizedEmail = normalizeEmail(email);
+  if (await prisma.user.findUnique({ where: { email: normalizedEmail } })) {
+    throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists");
+  }
+  if (phoneNumber && (await prisma.user.findUnique({ where: { phoneNumber } }))) {
     throw new ApiError(409, "PHONE_ALREADY_REGISTERED", "This phone number is already registered");
   }
 
@@ -61,16 +65,17 @@ export async function signup({ phoneNumber, name, role, permissions }, actor) {
   const passwordHash = await bcrypt.hash(plaintextPassword, BCRYPT_ROUNDS);
 
   const requested = sanitizePermissionsInput(permissions) ?? {};
-  // CREATOR / TEAM_MEMBER can't carry an overlay at all (23 Sep) — see
-  // lib/permissions.js's NON_GRANTABLE_ROLES for why.
-  assertGrantableRole(role, requested);
+  // CREATOR / TEAM_MEMBER / PLAN_MAKER (24 Sep): their overlay is own-content
+  // switches only — any global key is a 400 (lib/permissions.js ownOverlayFor).
+  const ownScope = isOwnScopeRole(role);
+  const ownOverlay = ownScope ? ownOverlayFor(role, requested) : null;
   const defaultGrant = role === "ADMIN";
   // For ADMIN, always compute — even an empty request must still clamp a
   // restricted actor's own missing keys (the escalation computeNewAccountOverlay
   // guards against). For any other role, skip the extra actor lookup entirely
   // when nothing was actually requested — an ordinary signup stays a single query.
-  let overlay = null;
-  if (defaultGrant || Object.keys(requested).length > 0) {
+  let overlay = ownOverlay;
+  if (!ownScope && (defaultGrant || Object.keys(requested).length > 0)) {
     const actorRecord = actor?.id ? await prisma.user.findUnique({ where: { id: actor.id } }) : null;
     if (!actorRecord) throw new ApiError(401, "UNAUTHENTICATED", "Acting user no longer exists");
     // Creating an ADMIN-role account needs a full admin (23 Sep) — the
@@ -87,16 +92,29 @@ export async function signup({ phoneNumber, name, role, permissions }, actor) {
   }
   const hasOverlay = overlay != null;
 
-  const user = await prisma.user.create({
+  const user = await prisma.user
+    .create({
     data: {
-      phoneNumber,
+      email: normalizedEmail,
+      phoneNumber: phoneNumber || null,
       name,
       role,
       passwordHash,
       permissions: hasOverlay ? overlay : undefined,
       createdByAdminId: actor?.id,
     },
-  });
+  })
+    .catch((err) => {
+      // Two admins creating the same email/phone at once: both passed the
+      // checks above, the second insert trips the unique index.
+      if (err?.code === "P2002") {
+        const field = String(err.meta?.target ?? "");
+        throw field.includes("phone")
+          ? new ApiError(409, "PHONE_ALREADY_REGISTERED", "This phone number is already registered")
+          : new ApiError(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists");
+      }
+      throw err;
+    });
 
   if (hasOverlay) {
     await prisma.permissionAuditLog.create({
@@ -105,87 +123,63 @@ export async function signup({ phoneNumber, name, role, permissions }, actor) {
   }
 
   return {
-    user: { ...toPublicUser(user), permissions: getEffectivePermissions(user) },
+    user: { ...toPublicUser(user), permissions: getEffectivePermissions(user), ownAccess: getOwnCapabilities(user) },
     generatedPassword: plaintextPassword, // shown once — never persisted in plaintext, never logged
   };
 }
 
 /**
- * Email 2FA (21 Sep). Password is only ever step one; what comes back is a
- * `step`, and only "AUTHENTICATED" carries a session:
+ * Email + password, then an emailed code (24 Sep — "on login only email
+ * verification will be required"). Password is only ever step one; what
+ * comes back is a `step`, and only "AUTHENTICATED" carries a session:
  *
- * - Verified account → must sign in with its *email* (the phone number
- *   stops working as an identifier once an email is verified). A code is
- *   emailed and the client gets "OTP_REQUIRED" + a challenge token to
- *   redeem at verifyLoginOtp — unless `trustedDeviceToken` (the browser's
- *   httpOnly cookie, read by routes.js) proves this same browser already
- *   passed an OTP within the last 7 days (user decision, 23 Sep — "skip
- *   OTP for 7 days"), in which case this goes straight to AUTHENTICATED,
- *   no email sent. Either way the password check above already ran, so a
- *   stolen/replayed cookie alone still isn't enough to sign in.
- * - Unverified account → still signs in by phone number. The first
- *   MAX_UNVERIFIED_LOGINS times that's a normal session (the client nags
- *   from `user.emailVerified` / `unverifiedLoginsLeft`); after that it's
- *   "EMAIL_VERIFICATION_REQUIRED" + a challenge token that only the
- *   email-setup endpoints accept — no session until an email is verified.
+ * - The account's email (set by the admin at creation) is the only login
+ *   identifier — phone-number login and the old "2 logins, then add an
+ *   email" grace period are gone.
+ * - A code is emailed and the client gets "OTP_REQUIRED" + a challenge token
+ *   to redeem at verifyLoginOtp. Redeeming it also marks the email verified
+ *   the first time, since the code proves the inbox is theirs.
+ * - A browser that passed a code within the last 7 days (trustedDeviceToken,
+ *   the httpOnly cookie routes.js reads — user decision, 23 Sep) skips the
+ *   code. Only for an already-verified email, and only after the password
+ *   check, so a stolen/replayed cookie alone still isn't enough.
  *
- * Every identifier/password/state mismatch is the same INVALID_CREDENTIALS
- * until the password itself has checked out, so this can't be used to probe
- * which numbers/emails exist or which are verified.
+ * Every identifier/password mismatch is the same INVALID_CREDENTIALS, so
+ * this can't be used to probe which emails exist.
  */
-export async function login({ phoneNumber, email, password, trustedDeviceToken }) {
+export async function login({ email, password, trustedDeviceToken }) {
   const invalid = () => new ApiError(401, "INVALID_CREDENTIALS", "Invalid credentials");
 
-  const user = email
-    ? await prisma.user.findUnique({ where: { email: normalizeEmail(email) } })
-    : await prisma.user.findUnique({ where: { phoneNumber } });
-  if (!user) throw invalid();
-  // An unverified profile email isn't a login identifier.
-  if (email && !user.emailVerifiedAt) throw invalid();
+  const user = await prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
+  // Same bcrypt cost whether or not the email exists, so response time
+  // doesn't reveal which emails have accounts.
+  const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+  if (!user?.email || !valid) throw invalid();
 
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) throw invalid();
-
-  if (user.emailVerifiedAt) {
-    if (!email) {
-      throw new ApiError(401, "USE_EMAIL_LOGIN", "This account signs in with its Gmail address, not the phone number");
-    }
-    if (await verifyTrustedDevice(user.id, trustedDeviceToken)) {
-      return { step: "AUTHENTICATED", ...(await issueTokenPair(user)) };
-    }
-    try {
-      await issueOtp({ userId: user.id, purpose: "LOGIN", email: user.email });
-    } catch (err) {
-      // Signing in again inside the resend cooldown (a reload or Back lost
-      // the challenge token, which only lives in the login page's state):
-      // a live code is already in their inbox, so hand out a new challenge
-      // for it rather than a 429 that strands them for a minute.
-      if (err?.code !== "OTP_RESEND_TOO_SOON") throw err;
-    }
-    return { step: "OTP_REQUIRED", challengeToken: signChallengeToken(user, "login-otp"), emailHint: maskEmail(user.email) };
+  if (user.emailVerifiedAt && (await verifyTrustedDevice(user.id, trustedDeviceToken))) {
+    return { step: "AUTHENTICATED", ...(await issueTokenPair(user)) };
   }
-
-  // Conditional increment, so parallel logins can't each read "1 used" and
-  // all squeeze through — whichever loses the race gets the lock-out path.
-  const { count } = await prisma.user.updateMany({
-    where: { id: user.id, emailVerifiedAt: null, unverifiedLoginCount: { lt: MAX_UNVERIFIED_LOGINS } },
-    data: { unverifiedLoginCount: { increment: 1 } },
-  });
-  if (count === 0) {
-    return { step: "EMAIL_VERIFICATION_REQUIRED", challengeToken: signChallengeToken(user, "email-setup") };
+  try {
+    await issueOtp({ userId: user.id, purpose: "LOGIN", email: user.email });
+  } catch (err) {
+    // Signing in again inside the resend cooldown (a reload or Back lost
+    // the challenge token, which only lives in the login page's state):
+    // a live code is already in their inbox, so hand out a new challenge
+    // for it rather than a 429 that strands them for a minute.
+    if (err?.code !== "OTP_RESEND_TOO_SOON") throw err;
   }
-
-  const updated = { ...user, unverifiedLoginCount: user.unverifiedLoginCount + 1 };
-  return {
-    step: "AUTHENTICATED",
-    ...(await issueTokenPair(updated)),
-    unverifiedLoginsLeft: Math.max(0, MAX_UNVERIFIED_LOGINS - updated.unverifiedLoginCount),
-  };
+  return { step: "OTP_REQUIRED", challengeToken: signChallengeToken(user, "login-otp"), emailHint: maskEmail(user.email) };
 }
 
 export async function verifyLoginOtp({ challengeToken, code, remember = true }) {
-  const user = await userFromChallenge(challengeToken, "login-otp");
-  await consumeOtp({ userId: user.id, purpose: "LOGIN", code });
+  let user = await userFromChallenge(challengeToken, "login-otp");
+  const otp = await consumeOtp({ userId: user.id, purpose: "LOGIN", code });
+  // The code reached their inbox — that's the email verified (first login
+  // of an admin-created account). Only if it's still the address the code
+  // was sent to: an email changed in between proves nothing about the new one.
+  if (!user.emailVerifiedAt && otp?.email && otp.email === user.email) {
+    user = await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: new Date() } });
+  }
   // This browser just proved it — routes.js turns trustedDeviceToken into
   // an httpOnly cookie and strips it from the JSON body before responding;
   // it never reaches client JS. `remember` is the login page's "Remember
@@ -201,7 +195,7 @@ export async function verifyLoginOtp({ challengeToken, code, remember = true }) 
 
 export async function resendLoginOtp({ challengeToken }) {
   const user = await userFromChallenge(challengeToken, "login-otp");
-  if (!user.emailVerifiedAt) throw new ApiError(401, "INVALID_CHALLENGE", "This sign-in attempt has expired — start again");
+  if (!user.email) throw new ApiError(401, "INVALID_CHALLENGE", "This sign-in attempt has expired — start again");
   await issueOtp({ userId: user.id, purpose: "LOGIN", email: user.email });
 }
 
@@ -217,9 +211,10 @@ export async function startEmailVerification({ userId, challengeToken, email }) 
 
   const normalized = normalizeEmail(email);
   const holder = await prisma.user.findUnique({ where: { email: normalized } });
-  // Only a *verified* holder blocks the claim — an unverified profile email
-  // on someone else's account proves nothing about who owns the inbox.
-  if (holder && holder.id !== user.id && holder.emailVerifiedAt) {
+  // Any holder blocks the claim (24 Sep): since email became the login, an
+  // unverified address is an admin-created account's only way in — taking it
+  // over would lock that account out.
+  if (holder && holder.id !== user.id) {
     throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "This email is already in use");
   }
   await issueOtp({ userId: user.id, purpose: "VERIFY_EMAIL", email: normalized });
@@ -242,10 +237,9 @@ export async function confirmEmailVerification({ userId, challengeToken, code })
   try {
     updated = await prisma.$transaction(async (tx) => {
       const holder = await tx.user.findUnique({ where: { email: otp.email } });
-      if (holder && holder.id !== user.id) {
-        if (holder.emailVerifiedAt) throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "This email is already in use");
-        await tx.user.update({ where: { id: holder.id }, data: { email: null } });
-      }
+      // Never clear another account's address (24 Sep) — it may be an
+      // admin-created account's only login.
+      if (holder && holder.id !== user.id) throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "This email is already in use");
       // Every session from before 2FA was enrolled ends here — otherwise
       // someone already signed in with just the password keeps a
       // refreshable session that never sees an OTP.
@@ -362,7 +356,7 @@ async function issueTokenPair(user) {
     },
   });
 
-  return { user: { ...toPublicUser(user), permissions: getEffectivePermissions(user) }, accessToken, refreshToken: refreshTokenValue };
+  return { user: { ...toPublicUser(user), permissions: getEffectivePermissions(user), ownAccess: getOwnCapabilities(user) }, accessToken, refreshToken: refreshTokenValue };
 }
 
 function toPublicUser(user) {

@@ -1,5 +1,6 @@
 "use client";
 
+import { OwnSectionGate } from "@/components/auth/own-section-gate";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -24,7 +25,7 @@ import { CompletePlanSteps } from "@/components/plans/complete-plan-steps";
 import { parsePlanSheet } from "@/lib/parseAssignmentSheet";
 import { planMissing } from "@/lib/plan-missing";
 import { useAuth } from "@/lib/auth-context";
-import { plans as plansApi, ApiError, hasAccess, type Plan } from "@/lib/api-client";
+import { plans as plansApi, ApiError, hasAccess, type Plan, canUse } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -38,10 +39,12 @@ import { cn } from "@/lib/utils";
 export default function PlansPage() {
   return (
     <RequireAuth>
+      <OwnSectionGate ownKey="plans.view" active="plans">
       {/* useSearchParams() requires a Suspense boundary for static export */}
       <Suspense fallback={null}>
         <PlansContent />
       </Suspense>
+      </OwnSectionGate>
     </RequireAuth>
   );
 }
@@ -60,7 +63,7 @@ function PlansContent() {
   // approve/reject); the UI treats "can act on any plan" as one flag since
   // both are ADMIN-only baselines today.
   const isAdmin = hasAccess(user, "plans.edit") || hasAccess(user, "plans.approve");
-  const canManagePlans = isAdmin || user?.role === "PLAN_MAKER";
+  const canManagePlans = isAdmin || (user?.role === "PLAN_MAKER" && canUse(user, "plans.edit"));
 
   const [editingPlan, setEditingPlan] = useState<Plan | "new" | null>(null);
   const [pendingPlanAssetIds, setPendingPlanAssetIds] = useState<string[]>([]);
@@ -313,6 +316,8 @@ function PlansSection({
   setCompletingPlanId: (id: string | null) => void;
   onUploadPlan: () => void;
 }) {
+  // Plan Maker own-content switches (24 Sep) decide which actions show.
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [deletingPlan, setDeletingPlan] = useState<Plan | null>(null);
   // "Generate invoice" popup (user request, 13 Sep) — see ClientInvoiceModal.
@@ -548,7 +553,9 @@ function PlansSection({
               // mirrors plans/service.js's assertCanAccessPlan so the
               // buttons shown here never promise an action the server
               // would reject.
-              ownsPlan={isAdmin || plan.createdBy?.id === currentUserId}
+              // …and, for a Plan Maker, only while the admin hasn't switched Plans → Edit / Approve off (24 Sep).
+              ownsPlan={isAdmin || (plan.createdBy?.id === currentUserId && canUse(user, "plans.edit"))}
+              canDecide={isAdmin || (plan.createdBy?.id === currentUserId && canUse(user, "plans.approve"))}
               onEdit={() => setEditingPlan(plan)}
               onDelete={() => setDeletingPlan(plan)}
               onGenerateInvoice={() => setInvoicingPlan(plan)}
@@ -633,6 +640,7 @@ function PlanCard({
   token,
   plan,
   ownsPlan,
+  canDecide,
   onEdit,
   onDelete,
   onGenerateInvoice,
@@ -654,6 +662,8 @@ function PlanCard({
   token: string;
   plan: Plan;
   ownsPlan: boolean;
+  /** May approve/reject this plan (own plan + Plans → Approve on, or admin). */
+  canDecide: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onGenerateInvoice: () => void;
@@ -865,7 +875,7 @@ function PlanCard({
             built it decides directly) — only ever shown to someone the
             server would actually let act: Admin on anything, a Plan Maker
             only on their own plan. */}
-        {ownsPlan && plan.status === "DRAFT" && (
+        {canDecide && plan.status === "DRAFT" && (
           <div className="flex gap-2">
             <Button size="sm" className="flex-1" onClick={onApprove} disabled={workflowBusy}>
               Approve

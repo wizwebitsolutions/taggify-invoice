@@ -40,10 +40,10 @@ describe("listInvoices — finance.view scoping is read fresh, not just role", (
     expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { creatorId: "fin-1" } }));
   });
 
-  it("granting finance.view to a role that doesn't normally hold it opens the full list", async () => {
+  it("regression (24 Sep — own-scope roles never get global access): a TEAM_MEMBER with a stored finance.view grant still sees only their own invoices", async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ role: "TEAM_MEMBER", permissions: { "finance.view": true } });
     await listInvoices({ id: "tm-1", role: "TEAM_MEMBER" }, {});
-    expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+    expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { creatorId: "tm-1" } }));
   });
 
   it("a Plan Maker's own-plans scope is unaffected by the finance.view overlay", async () => {

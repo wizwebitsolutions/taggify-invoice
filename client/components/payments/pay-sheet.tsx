@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { CheckCircleIcon, CloseIcon, UploadIcon } from "@/components/icons";
 import { payments as paymentsApi, ApiError, type PageOwner, type Payout, type PendingLink } from "@/lib/api-client";
-import { money, initialsOf } from "@/lib/format";
+import { money, initialsOf, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // Mirrors server/src/modules/payments/service.js's computePayoutTotals — the
@@ -79,7 +79,7 @@ export function PaySheet(
   const [dragging, setDragging] = useState(false);
   const [paid, setPaid] = useState<Payout | null>(null);
 
-  const vendorName = props.mode === "new" ? props.vendor.name ?? props.vendor.phoneNumber : props.payout.creator?.name ?? props.payout.creator?.phoneNumber ?? "vendor";
+  const vendorName = props.mode === "new" ? personLabel(props.vendor, "vendor") : personLabel(props.payout.creator, "vendor");
   const totals =
     props.mode === "new"
       ? computeTotals(props.links.map((l) => Number(l.cost)), isGst, tds)

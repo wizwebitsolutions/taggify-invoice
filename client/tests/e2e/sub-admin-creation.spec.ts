@@ -16,13 +16,12 @@ import { signIn, mockApi, API_URL } from "./fixtures";
 test.describe("Add user — access editor", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
-  test("the access editor only appears once Role=Admin is selected, with every section expanded", async ({ page }) => {
+  test("Role=Admin shows the full editor with every section expanded", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.goto("/users");
     await page.getByRole("button", { name: "Add user" }).click();
 
-    await expect(page.getByTestId("access-editor")).toHaveCount(0);
     await page.getByRole("combobox").selectOption("ADMIN");
     await expect(page.getByTestId("access-editor")).toBeVisible();
     // Every section starts checked and expanded for a full admin.
@@ -37,13 +36,13 @@ test.describe("Add user — access editor", () => {
     let sentBody: Record<string, unknown> | null = null;
     await page.route(`${API_URL}/auth/signup`, (route) => {
       sentBody = route.request().postDataJSON();
-      return route.fulfill({ json: { user: { id: "new-admin-1", phoneNumber: "+919876543210", name: null, role: "ADMIN" }, generatedPassword: "Abcdefg1!" } });
+      return route.fulfill({ json: { user: { id: "new-admin-1", phoneNumber: null, email: "new.user@gmail.com", name: null, role: "ADMIN" }, generatedPassword: "Abcdefg1!" } });
     });
 
     await page.goto("/users");
     await page.getByRole("button", { name: "Add user" }).click();
     await page.getByRole("combobox").selectOption("ADMIN");
-    await page.getByPlaceholder("98765 43210").fill("9876543210");
+    await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
     await page.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByText(/Account created for/)).toBeVisible();
@@ -57,14 +56,14 @@ test.describe("Add user — access editor", () => {
     let sentBody: Record<string, unknown> | null = null;
     await page.route(`${API_URL}/auth/signup`, (route) => {
       sentBody = route.request().postDataJSON();
-      return route.fulfill({ json: { user: { id: "new-admin-2", phoneNumber: "+919876543210", name: null, role: "ADMIN" }, generatedPassword: "Abcdefg1!" } });
+      return route.fulfill({ json: { user: { id: "new-admin-2", phoneNumber: null, email: "new.user@gmail.com", name: null, role: "ADMIN" }, generatedPassword: "Abcdefg1!" } });
     });
 
     await page.goto("/users");
     await page.getByRole("button", { name: "Add user" }).click();
     await page.getByRole("combobox").selectOption("ADMIN");
     await page.getByLabel("Campaigns access").click();
-    await page.getByPlaceholder("98765 43210").fill("9876543210");
+    await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
     await page.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByText(/Account created for/)).toBeVisible();
@@ -80,14 +79,14 @@ test.describe("Add user — access editor", () => {
     let sentBody: Record<string, unknown> | null = null;
     await page.route(`${API_URL}/auth/signup`, (route) => {
       sentBody = route.request().postDataJSON();
-      return route.fulfill({ json: { user: { id: "new-admin-3", phoneNumber: "+919876543210", name: null, role: "ADMIN" }, generatedPassword: "Abcdefg1!" } });
+      return route.fulfill({ json: { user: { id: "new-admin-3", phoneNumber: null, email: "new.user@gmail.com", name: null, role: "ADMIN" }, generatedPassword: "Abcdefg1!" } });
     });
 
     await page.goto("/users");
     await page.getByRole("button", { name: "Add user" }).click();
     await page.getByRole("combobox").selectOption("ADMIN");
     await page.getByLabel("Finance: Approve").click();
-    await page.getByPlaceholder("98765 43210").fill("9876543210");
+    await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
     await page.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByText(/Account created for/)).toBeVisible();
@@ -99,59 +98,66 @@ test.describe("Add user — access editor", () => {
 });
 
 /**
- * 23 Sep — Creator / Team member accounts can't carry an access overlay at
- * all (server: lib/permissions.js NON_GRANTABLE_ROLES → 400
- * ROLE_NOT_GRANTABLE), so the editor must not be offered for them; Finance
- * and Planner keep it, starting at their own baseline sections.
+ * 24 Sep — every role gets the access editor. Creator / Team member / Planner
+ * see own-content switches only (server: lib/permissions.js
+ * OWN_CAPABILITIES — never a global key), all ON by default; Finance keeps
+ * the global editor at its baseline.
  */
-test.describe("Add user — access editor is hidden for non-grantable roles", () => {
+test.describe("Add user — access editor per role", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
-  test("no editor for Creator or Team member; Planner and Finance keep it, pre-checked at their baseline", async ({ page }) => {
+  test("Creator, Team member and Planner get own-content sections, all on; Finance keeps its baseline", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.goto("/users");
     await page.getByRole("button", { name: "Add user" }).click();
 
     // Default role is Creator.
-    await expect(page.getByTestId("access-editor")).toHaveCount(0);
+    await expect(page.getByTestId("access-editor")).toBeVisible();
+    await expect(page.getByTestId("access-own-note")).toBeVisible();
+    await expect(page.getByLabel("Invoices & payouts access")).toBeChecked();
+    await expect(page.getByLabel("Invoices & payouts: Raise invoices")).toBeChecked();
+    await expect(page.getByLabel("Links: Submit")).toBeChecked();
+    // No approve / pay, and no Plans section, for a creator.
+    await expect(page.getByTestId("access-section-plans")).toHaveCount(0);
+    await expect(page.getByLabel(/: (Approve|Pay)$/)).toHaveCount(0);
+
     await page.getByRole("combobox").selectOption("TEAM_MEMBER");
-    await expect(page.getByTestId("access-editor")).toHaveCount(0);
+    await expect(page.getByTestId("access-own-note")).toBeVisible();
+    await expect(page.getByTestId("access-section-users")).toHaveCount(0);
+    await expect(page.getByLabel("Links: Submit")).toBeChecked();
 
     await page.getByRole("combobox").selectOption("PLAN_MAKER");
-    await expect(page.getByTestId("access-editor")).toBeVisible();
-    // Planner's baseline is inventory.view only — that section starts
-    // checked, every other section starts collapsed/unchecked.
-    await expect(page.getByTestId("access-section-inventory").getByRole("checkbox").first()).toBeChecked();
-    await expect(page.getByTestId("access-section-finance").getByRole("checkbox").first()).not.toBeChecked();
+    await expect(page.getByTestId("access-own-note")).toBeVisible();
+    await expect(page.getByLabel("Plans: Approve")).toBeChecked();
+    await expect(page.getByLabel("Campaigns: Add phases")).toBeChecked();
+    // The one exception: the full catalogue, read-only — no edit action.
+    await expect(page.getByTestId("access-section-inventory")).toContainText("Browse the full page catalogue (read-only)");
+    await expect(page.getByTestId("access-section-inventory").getByRole("checkbox")).toHaveCount(1);
 
     await page.getByRole("combobox").selectOption("FINANCE");
-    await expect(page.getByTestId("access-editor")).toBeVisible();
-    // Finance's baseline: approves and pays by default (invoices/routes.js,
-    // 23 Sep — "Finance approves and pays"), plus reading
-    // campaigns/inventory/links.
+    await expect(page.getByTestId("access-own-note")).toHaveCount(0);
     await expect(page.getByLabel("Finance: Pay")).toBeChecked();
     await expect(page.getByLabel("Finance: Approve")).toBeChecked();
     await expect(page.getByTestId("access-section-campaigns").getByRole("checkbox").first()).toBeChecked();
   });
 
-  test("a Creator is created without any permissions field even after toggling boxes under another role", async ({ page }) => {
+  test("an untouched Creator is created with no permissions field", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     let sentBody: Record<string, unknown> | null = null;
     await page.route(`${API_URL}/auth/signup`, (route) => {
       sentBody = route.request().postDataJSON();
-      return route.fulfill({ json: { user: { id: "new-c-1", phoneNumber: "+919876543210", name: null, role: "CREATOR" }, generatedPassword: "Abcdefg1!" } });
+      return route.fulfill({ json: { user: { id: "new-c-1", phoneNumber: null, email: "new.user@gmail.com", name: null, role: "CREATOR" }, generatedPassword: "Abcdefg1!" } });
     });
 
     await page.goto("/users");
     await page.getByRole("button", { name: "Add user" }).click();
-    // Check something as a Planner, then switch back to Creator — the
-    // leftover check must not travel with the role change.
+    // Toggle something as a Planner, then switch back — the leftover must not travel with the role change.
     await page.getByRole("combobox").selectOption("PLAN_MAKER");
-    await page.getByLabel("Link review access").click();
+    await page.getByLabel("Plans: Approve").click();
     await page.getByRole("combobox").selectOption("CREATOR");
-    await page.getByPlaceholder("98765 43210").fill("9876543210");
+    await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
     await page.getByPlaceholder("Instagram handle (without @)").fill("somepage");
     await page.getByRole("button", { name: "Create user" }).click();
 
@@ -159,6 +165,87 @@ test.describe("Add user — access editor is hidden for non-grantable roles", ()
     expect(sentBody).not.toBeNull();
     expect(sentBody!.role).toBe("CREATOR");
     expect(sentBody!.permissions).toBeUndefined();
+  });
+
+  test("switching off a Creator's Invoices sends only own-content keys", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    let sentBody: Record<string, unknown> | null = null;
+    await page.route(`${API_URL}/auth/signup`, (route) => {
+      sentBody = route.request().postDataJSON();
+      return route.fulfill({ json: { user: { id: "new-c-2", phoneNumber: null, email: "new.user@gmail.com", name: null, role: "CREATOR" }, generatedPassword: "Abcdefg1!" } });
+    });
+
+    await page.goto("/users");
+    await page.getByRole("button", { name: "Add user" }).click();
+    await page.getByLabel("Invoices & payouts access").click();
+    await expect(page.getByTestId("access-summary-finance")).toHaveText("Off");
+    await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
+    await page.getByPlaceholder("Instagram handle (without @)").fill("somepage");
+    await page.getByRole("button", { name: "Create user" }).click();
+
+    await expect(page.getByText(/Account created for/)).toBeVisible();
+    const perms = sentBody!.permissions as Record<string, boolean>;
+    expect(perms["finance.view"]).toBe(false);
+    expect(perms["finance.edit"]).toBe(false);
+    expect(perms["links.edit"]).toBe(true);
+    // Never a global key for an own-scope role.
+    for (const k of ["finance.approve", "finance.pay", "links.approve", "inventory.approve", "plans.view", "campaigns.edit"]) {
+      expect(perms[k]).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * 24 Sep — a creator whose admin switched a section off: the nav item goes
+ * away and the page's URL shows a plain notice instead of 403ing.
+ */
+test.describe("Creator with a section switched off", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("Invoices off hides the nav item and blocks the page; Payouts goes too", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await page.addInitScript(() => {
+      const raw = window.localStorage.getItem("taggify_auth");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      s.user.ownAccess = { ...(s.user.ownAccess ?? {}), "finance.view": false, "finance.edit": false };
+      window.localStorage.setItem("taggify_auth", JSON.stringify(s));
+    });
+    await mockApi(page);
+    await page.goto("/invoices");
+
+    await expect(page.getByTestId("access-removed")).toBeVisible();
+    const nav = page.getByRole("complementary");
+    await expect(nav.getByRole("link", { name: "Invoices", exact: true })).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Payouts", exact: true })).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Campaigns", exact: true })).toBeVisible();
+  });
+
+  test("on a phone, the bottom tab bar drops Invoices too", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await signIn(page, "CREATOR");
+    await page.addInitScript(() => {
+      const raw = window.localStorage.getItem("taggify_auth");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      s.user.ownAccess = { ...(s.user.ownAccess ?? {}), "finance.view": false, "finance.edit": false };
+      window.localStorage.setItem("taggify_auth", JSON.stringify(s));
+    });
+    await mockApi(page);
+    await page.goto("/dashboard");
+
+    const tabs = page.getByRole("navigation");
+    await expect(tabs.getByRole("link", { name: "Campaigns", exact: true })).toBeVisible();
+    await expect(tabs.getByRole("link", { name: "Invoices", exact: true })).toHaveCount(0);
+  });
+
+  test("with everything on, the same creator gets the Invoices page", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    await page.goto("/invoices");
+    await expect(page.getByTestId("access-removed")).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Invoices", exact: true })).toBeVisible();
   });
 });
 
@@ -229,11 +316,11 @@ test.describe("People — role dropdown guards for a restricted sub-admin", () =
     const creatorSelect = page.getByLabel("Role for Some Creator");
     await expect(creatorSelect).toBeEnabled();
     await expect(creatorSelect.locator('option[value="ADMIN"]')).toBeDisabled();
-    // Neither row offers "Edit access": the Creator can't carry a grant, and
-    // a restricted sub-admin may not edit an ADMIN's overlay. Password
+    // Only the Creator row offers "Edit access" (own-content switches, 24
+    // Sep) — a restricted sub-admin may not edit an ADMIN's overlay. Password
     // reset is offered only for the Creator (the one role a non-full-admin
     // can't out-rank by signing in as).
-    await expect(page.getByRole("button", { name: "Edit access" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit access" })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Reset password" })).toHaveCount(1);
 
     // And the Add user form won't offer Admin to a restricted sub-admin.

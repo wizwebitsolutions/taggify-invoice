@@ -18,8 +18,14 @@
  *
  * Every role has its own baseline (ROLE_DEFAULTS); an overlay only stores
  * deviations from it. A plain account (permissions === null) behaves exactly
- * as its role always did. Two roles can't carry an overlay at all —
- * NON_GRANTABLE_ROLES below.
+ * as its role always did.
+ *
+ * Own-scope roles (24 Sep — CREATOR, TEAM_MEMBER, PLAN_MAKER): the same key
+ * names mean *their own content only* ("whatever access we give, they'll
+ * have access to their own content, not every"). They never hold a global
+ * key — getEffectivePermissions is all-false for them no matter what's
+ * stored — and their overlay toggles OWN_CAPABILITIES instead (see
+ * getOwnCapabilities), all ON by default.
  *
  * Old six-key overlays (`users.manage`, …) still stored on rows are expanded
  * on read by expandLegacyOverlay(), so nothing breaks before the one-off
@@ -63,10 +69,109 @@ const allFalse = () => Object.fromEntries(PERMISSION_KEYS.map((key) => [key, fal
 export const ROLE_DEFAULTS = {
   ADMIN: allTrue(),
   FINANCE: { ...allFalse(), "finance.view": true, "finance.edit": true, "finance.approve": true, "finance.pay": true, "campaigns.view": true, "inventory.view": true, "links.view": true },
-  PLAN_MAKER: { ...allFalse(), "inventory.view": true },
+  // Own-scope roles hold no global key at all — see OWN_CAPABILITIES.
+  PLAN_MAKER: allFalse(),
   CREATOR: allFalse(),
   TEAM_MEMBER: allFalse(),
 };
+
+/**
+ * Own-scope roles (24 Sep): accounts whose access only ever covers their own
+ * content. Their overlay is a set of on/off switches over OWN_CAPABILITIES
+ * (default ON — user decision: nothing changes until an admin removes
+ * something), never a global grant.
+ */
+export const OWN_SCOPE_ROLES = ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"];
+
+export function isOwnScopeRole(role) {
+  return OWN_SCOPE_ROLES.includes(role);
+}
+
+/**
+ * What each own-scope role can be given/removed, and what the key means for it:
+ *
+ * CREATOR
+ *   campaigns.view  — campaigns one of their pages is in
+ *   inventory.view  — their own pages;  inventory.edit — add own pages (start pending)
+ *   links.view      — their own links;  links.edit — submit links + screenshots on own pages
+ *   finance.view    — own invoices, payouts, billing profiles
+ *   finance.edit    — raise invoices on own links, manage own billing profiles, invoice files
+ *   users.view/edit — see / manage their own team
+ * TEAM_MEMBER — like a creator's worker: campaigns.view, inventory.view, links.view/edit, finance.view
+ * PLAN_MAKER
+ *   plans.view/edit/approve — own plans (client invoice + attachments are plan actions)
+ *   campaigns.view/edit     — campaigns created from own plans / add phases to them
+ *   links.view              — links on those campaigns
+ *   finance.view            — invoices on own plans' campaigns + own plans' receivables
+ *   finance.edit            — attach / remove the invoice file on those invoices
+ *   inventory.view          — the full page catalogue, read-only (the one exception —
+ *                             planners pick pages for clients from it)
+ */
+export const OWN_CAPABILITIES = {
+  CREATOR: ["campaigns.view", "inventory.view", "inventory.edit", "links.view", "links.edit", "finance.view", "finance.edit", "users.view", "users.edit"],
+  TEAM_MEMBER: ["campaigns.view", "inventory.view", "links.view", "links.edit", "finance.view"],
+  PLAN_MAKER: ["plans.view", "plans.edit", "plans.approve", "campaigns.view", "campaigns.edit", "links.view", "finance.view", "finance.edit", "inventory.view"],
+};
+
+/**
+ * The own-content switches for an own-scope role: every key in the role's
+ * OWN_CAPABILITIES list defaults ON, the stored overlay can turn any off
+ * (or back on); keys outside the list are always false. Turning a section's
+ * view off takes its actions with it. Staff roles get all-false here — their
+ * access is getEffectivePermissions.
+ */
+export function getOwnCapabilities(user) {
+  const out = allFalse();
+  const allowed = OWN_CAPABILITIES[user?.role];
+  if (!allowed) return out;
+  const overlay = ownStoredOverlay(user.role, user.permissions);
+  for (const key of allowed) out[key] = typeof overlay[key] === "boolean" ? overlay[key] : true;
+  for (const [section, actions] of Object.entries(SECTIONS)) {
+    if (out[`${section}.view`] === false) for (const a of actions) out[`${section}.${a}`] = false;
+  }
+  return out;
+}
+
+export function hasOwnCapability(user, key) {
+  return getOwnCapabilities(user)[key] === true;
+}
+
+/**
+ * The own-content switches actually stored for an own-scope user. An overlay
+ * written by ownOverlayFor is only ever {ownKey: false, ...}; anything else —
+ * legacy six-key entries, a `true`, a key outside the role's list — was
+ * written by the old global-grant model, where `false` meant "not granted
+ * globally", not "switched off". Such an overlay is ignored (everything on)
+ * rather than silently taking a planner's own sections away.
+ */
+export function ownStoredOverlay(role, stored) {
+  const allowed = OWN_CAPABILITIES[role] ?? [];
+  if (!stored || typeof stored !== "object") return {};
+  const entries = Object.entries(stored);
+  const ownShape = entries.every(([k, v]) => allowed.includes(k) && v === false);
+  return ownShape ? Object.fromEntries(entries) : {};
+}
+
+/**
+ * An own-scope role's stored overlay may only name that role's own
+ * capabilities (true or false) — anything else would be an attempt to hand
+ * out global access (400 OWN_SCOPE_ONLY). Returns the minimal overlay to
+ * store: only keys switched OFF (ON is the default), or null.
+ */
+export function ownOverlayFor(role, requested, existing = null) {
+  const allowed = OWN_CAPABILITIES[role] ?? [];
+  const bad = Object.keys(requested ?? {}).filter((k) => !allowed.includes(k) && requested[k] === true);
+  if (bad.length > 0) {
+    throw new ApiError(400, "OWN_SCOPE_ONLY", `These can't be given to this role: ${bad.join(", ")}. A ${role.toLowerCase().replace("_", " ")} only ever gets access to their own content.`);
+  }
+  const current = ownStoredOverlay(role, existing);
+  const merged = {};
+  for (const key of allowed) {
+    const value = typeof requested?.[key] === "boolean" ? requested[key] : typeof current[key] === "boolean" ? current[key] : true;
+    if (value === false) merged[key] = false;
+  }
+  return Object.keys(merged).length > 0 ? merged : null;
+}
 
 export function roleDefaults(role) {
   return ROLE_DEFAULTS[role] ?? allFalse();
@@ -99,6 +204,9 @@ export function applyViewImplication(map) {
  * granted anything, not open.
  */
 export function getEffectivePermissions(user) {
+  // Own-scope roles never hold a global key, whatever an old or tampered
+  // overlay says — their switches are getOwnCapabilities.
+  if (isOwnScopeRole(user?.role)) return allFalse();
   const effective = { ...roleDefaults(user?.role) };
   const overlay = expandLegacyOverlay(user?.permissions);
   if (overlay) {
@@ -132,28 +240,11 @@ export function isFullAdmin(user) {
 }
 
 /**
- * Roles an overlay may be stored on. CREATOR and TEAM_MEMBER are excluded
- * (user decision, 23 Sep): every list they can reach is scoped to their own
- * rows, so any section grant only ever let them approve/price/pay *their
- * own* links, pages and invoices. A Creator who needs ops access gets a
- * different role, not a grant.
+ * Roles that can hold *global* keys (staff). Own-scope roles are the rest —
+ * they get own-content switches instead (see ownOverlayFor).
  */
-export const NON_GRANTABLE_ROLES = ["CREATOR", "TEAM_MEMBER"];
-
 export function isGrantableRole(role) {
-  return !NON_GRANTABLE_ROLES.includes(role);
-}
-
-/**
- * 400 when a caller tries to *grant* (any key true) on a CREATOR/TEAM_MEMBER
- * account. All-false is tolerated as the no-op it is — their baseline is
- * already every key false, so an all-false overlay changes nothing.
- */
-export function assertGrantableRole(role, requestedOverlay) {
-  if (isGrantableRole(role)) return;
-  if (requestedOverlay && Object.values(requestedOverlay).some((v) => v === true)) {
-    throw new ApiError(400, "ROLE_NOT_GRANTABLE", "Creator and Team member accounts can't be given admin sections — change their role instead.");
-  }
+  return !isOwnScopeRole(role);
 }
 
 /**

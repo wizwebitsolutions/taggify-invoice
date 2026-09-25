@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../../lib/prisma.js";
 import { generatePassword } from "../../lib/auth/passwordGenerator.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getEffectivePermissions, sanitizePermissionsInput, clampPatchToActor, isFullAdmin, isGrantableRole, assertGrantableRole } from "../../lib/permissions.js";
+import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, clampPatchToActor, isFullAdmin, isOwnScopeRole, ownOverlayFor } from "../../lib/permissions.js";
 
 const BCRYPT_ROUNDS = 12;
 export const ROLES = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
@@ -36,9 +36,14 @@ function assertActorMayTouchAdmin(actor, { target, newRole }) {
  * reset a FINANCE account, or a Planner granted finance.manage, and sign in
  * as them — the same class of hole as the ADMIN case, one role down).
  */
+// Kept explicit (24 Sep) rather than derived from "grantable": creators and
+// team members are the accounts a non-full admin may take over; PLAN_MAKER
+// stays full-admin-only even though it's now an own-scope role.
+const SUB_ADMIN_RESETTABLE_ROLES = ["CREATOR", "TEAM_MEMBER"];
+
 function assertActorMayResetPassword(actor, target) {
   if (isFullAdmin(actor)) return;
-  if (isGrantableRole(target.role)) {
+  if (!SUB_ADMIN_RESETTABLE_ROLES.includes(target.role)) {
     throw new ApiError(403, "ADMIN_ACCOUNT_RESTRICTED", "Only a full admin can reset an admin, finance or planner account's password.");
   }
 }
@@ -71,6 +76,39 @@ export async function resetUserPassword(actorId, userId) {
   ]);
 
   return { generatedPassword: plaintextPassword };
+}
+
+/**
+ * Admin changes an account's email (24 Sep — email is the login, so a typo at
+ * creation, or a creator switching inboxes, needs an admin fix). The new
+ * address starts unverified: the next login emails a code to it, which
+ * verifies it. Sessions and remembered devices are revoked so nothing keeps
+ * working on the old identity. Same guard as a password reset — changing
+ * someone's login is a takeover-class action — and audit-logged.
+ */
+export async function updateUserEmail(actorId, userId, email) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  const actor = await loadActor(actorId);
+  assertActorMayResetPassword(actor, user);
+
+  const normalized = email.trim().toLowerCase();
+  if (normalized === user.email) return { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) };
+  const holder = await prisma.user.findUnique({ where: { email: normalized } });
+  if (holder && holder.id !== userId) throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists");
+
+  try {
+    const [updated] = await prisma.$transaction([
+      prisma.user.update({ where: { id: userId }, data: { email: normalized, emailVerifiedAt: null } }),
+      prisma.refreshToken.updateMany({ where: { userId, revoked: false }, data: { revoked: true } }),
+      prisma.trustedDevice.deleteMany({ where: { userId } }),
+      prisma.permissionAuditLog.create({ data: { targetId: userId, actorId, action: "email_change", before: { email: user.email }, after: { email: normalized } } }),
+    ]);
+    return { id: updated.id, email: updated.email, emailVerified: false };
+  } catch (err) {
+    if (err?.code === "P2002") throw new ApiError(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists");
+    throw err;
+  }
 }
 
 /**
@@ -107,15 +145,15 @@ export async function updateUserRole(actorId, targetId, role) {
   // Never echo the hash back (the old inline route did) — the Users page
   // only needs the row's public fields plus its new effective permissions.
   const { passwordHash: _omit, ...updated } = row;
-  return { ...updated, permissions: getEffectivePermissions(updated) };
+  return { ...updated, permissions: getEffectivePermissions(updated), ownAccess: getOwnCapabilities(updated) };
 }
 
 /**
  * Sets/edits a user's permission overlay (newTask.md, 8 Sep for the ADMIN
  * sub-admin case; extended 15 Sep so any grantable role can be given the
- * same sections — "admin can give any user access permissions"; narrowed 23
- * Sep so CREATOR/TEAM_MEMBER can't carry one at all — see
- * lib/permissions.js's NON_GRANTABLE_ROLES). `patch` only carries the keys
+ * same sections — "admin can give any user access permissions"; since 24 Sep
+ * CREATOR/TEAM_MEMBER/PLAN_MAKER get own-content switches instead — see
+ * lib/permissions.js ownOverlayFor). `patch` only carries the keys
  * the caller actually sent (schemas.js's updatePermissionsSchema makes every
  * key optional) — merged onto the target's *existing* overlay rather than
  * replacing it, so toggling one key off in the UI can't silently reset every
@@ -145,11 +183,12 @@ export async function updateUserPermissions(actorId, targetId, patch) {
   assertActorMayTouchAdmin(actor, { target });
 
   const requested = sanitizePermissionsInput(patch) ?? {};
-  assertGrantableRole(target.role, requested);
-
   const before = target.permissions && typeof target.permissions === "object" ? target.permissions : null;
-  const clampedPatch = clampPatchToActor(actor, requested);
-  const merged = { ...(before ?? {}), ...clampedPatch };
+  // Own-scope roles (24 Sep): own-content switches only (400 on any global
+  // key); stored minimally — only what's switched off.
+  const merged = isOwnScopeRole(target.role)
+    ? ownOverlayFor(target.role, requested, before)
+    : { ...(before ?? {}), ...clampPatchToActor(actor, requested) };
 
   const [row] = await prisma.$transaction([
     prisma.user.update({ where: { id: targetId }, data: { permissions: merged } }),
@@ -157,5 +196,5 @@ export async function updateUserPermissions(actorId, targetId, patch) {
   ]);
 
   const { passwordHash: _omit, ...updated } = row;
-  return { ...updated, permissions: getEffectivePermissions(updated) };
+  return { ...updated, permissions: getEffectivePermissions(updated), ownAccess: getOwnCapabilities(updated) };
 }

@@ -25,7 +25,7 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
     mockPrisma.user.create.mockResolvedValue({ id: "u1", phoneNumber: "+911234567890", name: "New Creator", role: "CREATOR", whatsappVerified: false });
 
-    const result = await signup({ phoneNumber: "+911234567890", name: "New Creator", role: "CREATOR" }, actor);
+    const result = await signup({ email: "user7890@example.com", name: "New Creator", role: "CREATOR" }, actor);
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ permissions: undefined, createdByAdminId: "actor-1" }) })
@@ -47,7 +47,7 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
     });
 
     const result = await signup(
-      { phoneNumber: "+919999999999", name: "Sub Admin", role: "ADMIN", permissions: { "campaigns.edit": false } },
+      { email: "user9999@example.com", name: "Sub Admin", role: "ADMIN", permissions: { "campaigns.edit": false } },
       actor
     );
 
@@ -73,7 +73,7 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
     const grantedPlanner = { id: "actor-2", role: "PLAN_MAKER", permissions: { "users.edit": true } };
     for (const who of [restrictedActor, grantedPlanner]) {
       mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(who);
-      const err = await signup({ phoneNumber: "+919999999997", name: "New Admin", role: "ADMIN" }, who).catch((e) => e);
+      const err = await signup({ email: "user9997@example.com", name: "New Admin", role: "ADMIN" }, who).catch((e) => e);
       expect(err).toBeInstanceOf(ApiError);
       expect(err.statusCode).toBe(403);
       expect(err.code).toBe("ADMIN_ACCOUNT_RESTRICTED");
@@ -84,47 +84,46 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
   it("still lets a restricted sub-admin create non-admin accounts, clamped to their own keys", async () => {
     const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "campaigns.edit": false } };
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(restrictedActor);
-    mockPrisma.user.create.mockResolvedValue({ id: "pm-3", phoneNumber: "+919999999997", name: "Planner", role: "PLAN_MAKER", whatsappVerified: false });
+    mockPrisma.user.create.mockResolvedValue({ id: "pm-3", phoneNumber: "+919999999997", name: "Planner", role: "FINANCE", whatsappVerified: false });
 
-    await signup({ phoneNumber: "+919999999997", name: "Planner", role: "PLAN_MAKER", permissions: { "campaigns.edit": true, "inventory.edit": true } }, restrictedActor);
+    await signup({ email: "user9997@example.com", name: "Planner", role: "FINANCE", permissions: { "campaigns.edit": true, "inventory.edit": true } }, restrictedActor);
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(
-      // campaigns.edit is clamped away (the actor lacks it) but the view it
-      // implied stays — the actor does hold campaigns.view.
-      expect.objectContaining({ data: expect.objectContaining({ role: "PLAN_MAKER", permissions: { "campaigns.view": true, "inventory.edit": true } }) })
+      // campaigns.edit is clamped away (the actor lacks it); inventory.edit passes.
+      expect.objectContaining({ data: expect.objectContaining({ role: "FINANCE", permissions: { "inventory.edit": true } }) })
     );
   });
 
   it("401s if the acting admin's own account no longer exists", async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
 
-    await expect(signup({ phoneNumber: "+919999999996", role: "ADMIN" }, actor)).rejects.toBeInstanceOf(ApiError);
+    await expect(signup({ email: "user9996@example.com", role: "ADMIN" }, actor)).rejects.toBeInstanceOf(ApiError);
     expect(mockPrisma.user.create).not.toHaveBeenCalled();
   });
 
   it("stores nothing for a non-ADMIN role when the payload only restates that role's own false baseline", async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
-    mockPrisma.user.create.mockResolvedValue({ id: "pm-1", phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", whatsappVerified: false });
+    mockPrisma.user.create.mockResolvedValue({ id: "pm-1", phoneNumber: "+918888888888", name: "Planner", role: "FINANCE", whatsappVerified: false });
 
-    await signup({ phoneNumber: "+918888888888", name: "Planner", role: "PLAN_MAKER", permissions: { "plans.edit": false } }, actor);
+    await signup({ email: "user8888@example.com", name: "Planner", role: "FINANCE", permissions: { "plans.edit": false } }, actor);
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ permissions: undefined }) }));
     expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
   });
 
-  it("grants a grantable non-ADMIN role one of the six sections (15 Sep — admin can give any user access permissions)", async () => {
+  it("grants a staff (FINANCE) account a section outside its baseline (15 Sep — admin can give any user access permissions)", async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
     mockPrisma.user.create.mockResolvedValue({
       id: "tm-1",
       phoneNumber: "+918888888887",
       name: "Teammate",
-      role: "PLAN_MAKER",
+      role: "FINANCE",
       whatsappVerified: false,
       permissions: { "inventory.edit": true },
     });
 
     const result = await signup(
-      { phoneNumber: "+918888888887", name: "Teammate", role: "PLAN_MAKER", permissions: { "inventory.edit": true } },
+      { email: "user8887@example.com", name: "Teammate", role: "FINANCE", permissions: { "inventory.edit": true } },
       actor
     );
 
@@ -141,10 +140,10 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
   it("a restricted actor can't grant a non-ADMIN role a section they don't hold themselves", async () => {
     const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "inventory.edit": false } };
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(restrictedActor);
-    mockPrisma.user.create.mockResolvedValue({ id: "tm-1", phoneNumber: "+918888888886", name: "Teammate", role: "PLAN_MAKER", whatsappVerified: false });
+    mockPrisma.user.create.mockResolvedValue({ id: "tm-1", phoneNumber: "+918888888886", name: "Teammate", role: "FINANCE", whatsappVerified: false });
 
     await signup(
-      { phoneNumber: "+918888888886", name: "Teammate", role: "PLAN_MAKER", permissions: { "inventory.edit": true } },
+      { email: "user8886@example.com", name: "Teammate", role: "FINANCE", permissions: { "inventory.edit": true } },
       restrictedActor
     );
 
@@ -152,29 +151,68 @@ describe("signup — sub-admin creation (newTask.md, 8 Sep)", () => {
     expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
   });
 
-  it("400s a CREATOR or TEAM_MEMBER created with any permission key (23 Sep — those roles can't carry an overlay)", async () => {
-    for (const role of ["CREATOR", "TEAM_MEMBER"]) {
+  it("own-scope roles at signup (24 Sep): only their own-content switches can be set — anything else is 400 OWN_SCOPE_ONLY", async () => {
+    for (const [role, key] of [["CREATOR", "links.approve"], ["TEAM_MEMBER", "finance.edit"], ["PLAN_MAKER", "finance.pay"]]) {
       mockPrisma.user.findUnique.mockResolvedValueOnce(null);
-      const err = await signup({ phoneNumber: "+918888888885", role, permissions: { "links.approve": true } }, actor).catch((e) => e);
+      const err = await signup({ email: "user8885@example.com", role, permissions: { [key]: true } }, actor).catch((e) => e);
       expect(err).toBeInstanceOf(ApiError);
-      expect(err.code).toBe("ROLE_NOT_GRANTABLE");
+      expect(err.code).toBe("OWN_SCOPE_ONLY");
     }
     expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it("own-scope roles at signup: a switched-off section is stored (e.g. a creator created without invoicing)", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.user.create.mockImplementation(async ({ data }) => ({ id: "c-8", phoneNumber: null, whatsappVerified: false, ...data }));
+
+    const result = await signup({ email: "c8@example.com", role: "CREATOR", permissions: { "finance.edit": false } }, actor);
+
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ permissions: { "finance.edit": false } }) }));
+    expect(result.user.ownAccess["finance.edit"]).toBe(false);
+    expect(result.user.ownAccess["links.edit"]).toBe(true);
+    expect(Object.values(result.user.permissions).every((v) => v === false)).toBe(true);
   });
 
   it("still creates a plain CREATOR when permissions is omitted or all-false", async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(actor);
     mockPrisma.user.create.mockResolvedValue({ id: "c-9", phoneNumber: "+918888888884", name: null, role: "CREATOR", whatsappVerified: false });
 
-    await signup({ phoneNumber: "+918888888884", role: "CREATOR", permissions: { "links.approve": false } }, actor);
+    await signup({ email: "user8884@example.com", role: "CREATOR", permissions: { "links.approve": false } }, actor);
 
     expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ role: "CREATOR", permissions: undefined }) }));
   });
 
-  it("409s when the phone number is already registered", async () => {
+  it("409s when the email already belongs to an account (24 Sep — email is the login)", async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ id: "existing" });
 
-    await expect(signup({ phoneNumber: "+911234567890", role: "CREATOR" }, actor)).rejects.toBeInstanceOf(ApiError);
+    await expect(signup({ email: "Taken@Example.com", role: "CREATOR" }, actor)).rejects.toMatchObject({ code: "EMAIL_ALREADY_REGISTERED" });
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { email: "taken@example.com" } });
     expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it("409s when an optional phone number is already registered", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "existing" });
+
+    await expect(signup({ email: "new@example.com", phoneNumber: "+911234567890", role: "CREATOR" }, actor)).rejects.toMatchObject({ code: "PHONE_ALREADY_REGISTERED" });
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it("stores the email lower-cased and unverified, and no phone when none is given (24 Sep)", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockPrisma.user.create.mockResolvedValue({ id: "u2", phoneNumber: null, email: "amit@gmail.com", emailVerifiedAt: null, name: "Amit", role: "CREATOR", whatsappVerified: false });
+
+    const result = await signup({ email: "  Amit@Gmail.com ", name: "Amit", role: "CREATOR" }, actor);
+
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ email: "amit@gmail.com", phoneNumber: null }) }));
+    expect(mockPrisma.user.create.mock.calls[0][0].data.emailVerifiedAt).toBeUndefined();
+    expect(result.generatedPassword).toBe("Gen3rated!Pw");
+    expect(result.user).toMatchObject({ email: "amit@gmail.com", emailVerified: false, phoneNumber: null });
+  });
+
+  it("regression (24 Sep review): two admins creating the same email at once — the losing insert is a 409, not a 500", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockPrisma.user.create.mockRejectedValue(Object.assign(new Error("unique"), { code: "P2002", meta: { target: ["email"] } }));
+
+    await expect(signup({ email: "race@gmail.com", role: "CREATOR" }, actor)).rejects.toMatchObject({ code: "EMAIL_ALREADY_REGISTERED", statusCode: 409 });
   });
 });

@@ -6,14 +6,21 @@ import { seedSampleData } from "./seedSample.js";
 
 const prisma = new PrismaClient();
 
-async function upsertUser({ phoneNumber, name, role }) {
+// Email is the login (24 Sep). Dev seeds get *.taggify.test addresses; with
+// no RESEND_API_KEY outside production the login code prints to the server
+// console (lib/mailer.js), so these can still sign in locally.
+async function upsertUser({ phoneNumber, email, name, role }) {
   const existing = await prisma.user.findUnique({ where: { phoneNumber } });
-  if (existing) return { user: existing, password: null };
+  if (existing) {
+    // A DB seeded before email became the login (24 Sep) — backfill it.
+    if (!existing.email) return { user: await prisma.user.update({ where: { id: existing.id }, data: { email } }), password: null };
+    return { user: existing, password: null };
+  }
 
   const password = generatePassword();
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await prisma.user.create({ data: { phoneNumber, name, role, passwordHash } });
-  console.log(`Created ${role} ${name} (${phoneNumber}) — password: ${password}`);
+  const user = await prisma.user.create({ data: { phoneNumber, email, name, role, passwordHash } });
+  console.log(`Created ${role} ${name} (${email}) — password: ${password}`);
   return { user, password };
 }
 
@@ -22,10 +29,10 @@ async function main() {
   // which always sends the fixed "+91" prefix plus whatever digits the
   // user types (system design.md's auth flow never splits country code
   // from the rest of the number).
-  const { user: admin } = await upsertUser({ phoneNumber: "+919000000001", name: "Ops Admin", role: "ADMIN" });
-  const { user: finance } = await upsertUser({ phoneNumber: "+919000000002", name: "Finance User", role: "FINANCE" });
-  const { user: creator } = await upsertUser({ phoneNumber: "+919000000003", name: "Demo Creator", role: "CREATOR" });
-  const { user: teamMember } = await upsertUser({ phoneNumber: "+919000000004", name: "Team Member", role: "TEAM_MEMBER" });
+  const { user: admin } = await upsertUser({ phoneNumber: "+919000000001", email: "admin@taggify.test", name: "Ops Admin", role: "ADMIN" });
+  const { user: finance } = await upsertUser({ phoneNumber: "+919000000002", email: "finance@taggify.test", name: "Finance User", role: "FINANCE" });
+  const { user: creator } = await upsertUser({ phoneNumber: "+919000000003", email: "creator@taggify.test", name: "Demo Creator", role: "CREATOR" });
+  const { user: teamMember } = await upsertUser({ phoneNumber: "+919000000004", email: "team@taggify.test", name: "Team Member", role: "TEAM_MEMBER" });
 
   await prisma.teamMembership.upsert({
     where: { userId_creatorId: { userId: teamMember.id, creatorId: creator.id } },

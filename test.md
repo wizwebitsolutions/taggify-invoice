@@ -83,6 +83,18 @@ costs, and the conventions for extending it. The short policy version lives in
     view/edit/approve/pay on finance plus read campaigns/inventory/links,
     PLAN_MAKER inventory.view only); `computeNewAccountOverlay` /
     `clampPatchToActor` updated for the wider key set.
+  - Own-content access (24 Sep) — Creator / Team member / Planner never hold
+    a global key (`getEffectivePermissions` all-false); their switches are
+    `OWN_CAPABILITIES` in `lib/permissions.js`, enforced per route by
+    `middleware/requireOwnAccess.js` (`requireOwnAccess.test.js`) and
+    `requireAccess`'s bare-role path. `lib/permissions.test.js` covers
+    defaults, switching off, `OWN_SCOPE_ONLY`, and that an overlay left by the
+    old global-grant model (e.g. `campaigns.manage: false`) doesn't switch a
+    planner's sections off (`ownStoredOverlay`). Page ownership + "booked
+    campaigns only" for link submission: `links/service.test.js`
+    (`NOT_YOUR_PAGE`, `PAGE_NOT_BOOKED`, link timeline 404); creator campaign
+    scoping: `lib/campaignAccess.test.js`, `campaigns/phases.test.js`
+    (`bookedAssetIds`).
   - Step 3 (23 Sep, "permission-scoped reads") — every list/detail endpoint
     that used to decide "sees everything vs. own rows only" with a bare
     `["ADMIN","FINANCE",...].includes(role)` check now reads the caller's
@@ -145,7 +157,24 @@ costs, and the conventions for extending it. The short policy version lives in
     range); the Paid list filters and sorts by paid date; the creator's
     `/me/pending` and `/me/payouts` force the owner/creator to the caller
     whatever the query says, and `/pending` is finance.pay only.
+  - `src/modules/auth/service.test.js` + `service.2fa.test.js` — email-only
+    login (24 Sep): signup requires an email (lower-cased, unverified, phone
+    optional, 409 on a taken email/phone incl. a concurrent-insert race);
+    login takes email + password only (the schema rejects a phone), always
+    emails a code (a trusted-device cookie never skips it for an unverified
+    email), the code verifies the email only if it's the address it was sent
+    to, an unknown email still runs a bcrypt compare (no timing leak), and
+    email setup never takes or clears another account's address.
+    `src/modules/admin/service.test.js` — admin "Change email": lower-cased,
+    unverified, sessions + remembered devices revoked, audit-logged, 409 on a
+    taken address, same sub-admin guard as a password reset.
 - **`client/tests/e2e/`** — Playwright. What's covered so far:
+  - `create-user-validation.spec.ts`, `people-change-email.spec.ts`,
+    `pending-assignment-validation.spec.ts` — email required / phone optional
+    when creating a user (People, pending assignments; Inventory's New
+    account and Import pages ask only name + email), admin "Change email",
+    and a pending-assignment phone that belongs to someone else is an error,
+    never a silent re-home. `login.spec.ts` covers email-only sign-in.
   - `payments-payouts.spec.ts` — Payments redesign (24 Sep): the Internal /
     Client receivables toggle; Pending grouped by vendor; one-vendor-per-
     payout selection; the one-screen pay sheet (GST + TDS preview, receipt
@@ -170,11 +199,21 @@ costs, and the conventions for extending it. The short policy version lives in
     expands its per-action checkboxes beneath it with a live "View · Edit …"
     summary chip, unchecking the section collapses it and clears every
     action; leaving Admin's editor fully checked sends no `permissions`
-    field at all; the editor is hidden entirely for Creator/Team member and
-    pre-checked at role baseline for Finance/Planner; a restricted
+    field at all; Finance starts pre-checked at its baseline; a restricted
     sub-admin's role dropdown locks ADMIN rows and disables the Admin option
-    for everyone else, and offers neither "Edit access" on an ADMIN row nor
-    on a Creator row (non-grantable), only "Reset password" on the Creator.
+    for everyone else, offers "Edit access" on the Creator row only, and
+    "Reset password" only on the Creator.
+    Own-content access (24 Sep): Creator / Team member / Planner get their
+    own sections only (all on, `access-own-note`; no approve/pay; planner
+    Inventory is the read-only catalogue); an untouched creator sends no
+    `permissions`, switching one off sends only own keys; a creator with
+    Invoices off loses the Invoices + Payouts nav (sidebar and phone tab bar)
+    and `/invoices` shows `access-removed`.
+  - `campaign-phases.spec.ts` also covers "booked campaigns only" (24 Sep):
+    Upload links offers only rows with `bookedAssetIds`, and only those
+    pages; with nothing booked it says so and can't submit.
+  - `invoice-attachment.spec.ts` also covers a creator with "Raise invoices"
+    off seeing the attachment read-only.
   - `login.spec.ts` — the login form renders, a failed login shows the server's error
     message, an already-signed-in visitor is redirected off `/login`.
   - `plan-client-invoice.spec.ts` — Plans → "Generate invoice" popup: prefilled
@@ -360,4 +399,7 @@ guards them:
 | A link already paid out by Finance could still be put on a creator invoice (billed twice) — `assertLinksInvoiceable` never checked `payoutItem` | `server/src/modules/invoices/service.js` | Independent review (24 Sep) → `invoices/service.test.js` "rejects a link Finance already paid out" |
 | Removing the last link inside the pay sheet unmounted it but left the page stuck in "paying" (bar hidden, next tick reopened the sheet) | `client/components/payments/admin-payouts.tsx` | Independent review (24 Sep) → `payments-payouts.spec.ts` "removing every link in the pay sheet…" |
 | Inventory "Create page" → "+ New user" created the account immediately and showed its password mid-form; "Create page" then closed the modal (password gone), an abandoned form left an orphan account, and the created-state row (password box + name/phone select + button) crowded the 420px modal | `client/app/inventory/page.tsx` (`NewAssetModal`, 24 Sep: Existing/New account toggle, account created with the page on one submit, password on a success screen with Copy) | User report (24 Sep) → `inventory-create-page.spec.ts` (new-account flow, abandon creates nothing, page-fails-after-account retry, no overflow at 360px) |
+| Email-only login review (24 Sep): a login code could verify an email changed after it was sent; the old email-setup path could clear an admin-created account's unverified email (its only login); a sheet phone owned by someone else silently re-homed a pending page | `server/src/modules/auth/service.js`, `client/components/campaigns/resolve-pending-assignments-modal.tsx` | Independent review → `service.2fa.test.js` regressions, `people-change-email.spec.ts` |
+| Own-content switches read old-model overlays (`campaigns.manage: false` meant "no global grant") as "switched off", so existing planners silently lost Campaigns/Links/Invoices/Inventory | `server/src/lib/permissions.js` (`ownStoredOverlay`) | Driving People → Edit access for a real planner against a local DB (24 Sep) → `permissions.test.js` "an overlay left by the old global-grant model…" |
+| Own-content review (24 Sep): planners' invoice attachments started 403ing (no `finance.edit` own switch); a creator could post a link with any campaign id and thereby open that campaign; any own-scope user could read any link's timeline | `lib/permissions.js`, `lib/pageOwnership.js` (`assertPageBooked`), `links/service.js` | Independent review → `links/service.test.js`, `invoice-attachment.spec.ts`, `campaign-phases.spec.ts` |
 | "New invoice" preview step's scrollable link list got squeezed to near-zero visible height on a short viewport — GST toggle + totals card were added below it without reserving the list any minimum space | `client/app/invoices/page.tsx` (`NewInvoiceModal`) | Driving the real flow in an actual (short) browser window — the DOM/data was correct, only the layout was broken, which no unit test would have caught. Fixed with a `min-h-[160px]` on the list container. |

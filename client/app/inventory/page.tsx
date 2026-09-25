@@ -1,5 +1,6 @@
 "use client";
 
+import { OwnSectionGate } from "@/components/auth/own-section-gate";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +9,7 @@ import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
-import { Field, TextField, MoneyField, IntegerField, FieldError, PhoneField } from "@/components/ui/form-field";
+import { Field, TextField, MoneyField, IntegerField, FieldError } from "@/components/ui/form-field";
 import { ComboInput } from "@/components/ui/combo-input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Chip, Chips } from "@/components/ui/chips";
@@ -20,8 +21,8 @@ import { PlusIcon, AssetIcon, SearchIcon, CloseIcon, RefreshIcon, TeamIcon, Chev
 import { ImportPagesModal } from "@/components/inventory/import-pages-modal";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/lib/auth-context";
-import { assets as assetsApi, auth as authApi, LINK_FORMATS as FORMATS, ApiError, hasAccess, type Asset } from "@/lib/api-client";
-import { money, count, roleLabel, initialsOf, compactNumber } from "@/lib/format";
+import { assets as assetsApi, auth as authApi, LINK_FORMATS as FORMATS, ApiError, hasAccess, type Asset, canUse } from "@/lib/api-client";
+import { money, count, roleLabel, initialsOf, compactNumber, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -34,7 +35,9 @@ import { cn } from "@/lib/utils";
 export default function InventoryPage() {
   return (
     <RequireAuth>
-      <InventoryContent />
+      <OwnSectionGate ownKey="inventory.view" active="inventory">
+        <InventoryContent />
+      </OwnSectionGate>
     </RequireAuth>
   );
 }
@@ -54,8 +57,8 @@ function InventoryContent() {
   // their sub-admin overlay turns it off, or — 15 Sep — a non-admin role
   // was granted it) registers pages under any creator account, one at a
   // time or from a sheet (user request, 14 Sep).
-  const canAddPage = user?.role === "CREATOR";
-  const canManagePlans = hasAccess(user, "plans.edit") || user?.role === "PLAN_MAKER";
+  const canAddPage = user?.role === "CREATOR" && canUse(user, "inventory.edit");
+  const canManagePlans = hasAccess(user, "plans.edit") || (user?.role === "PLAN_MAKER" && canUse(user, "plans.edit"));
 
   function onCreatePlanFromSelection() {
     const ids = [...selectedAssetIds];
@@ -180,7 +183,7 @@ function PagesSection({
   }, [allItems]);
   const owners = useMemo(() => {
     const byId = new Map<string, string>();
-    for (const a of allItems) if (a.owner) byId.set(a.owner.id, a.owner.name ?? a.owner.phoneNumber);
+    for (const a of allItems) if (a.owner) byId.set(a.owner.id, personLabel(a.owner));
     return [...byId.entries()];
   }, [allItems]);
 
@@ -537,7 +540,7 @@ function AssetRow({ asset, index, token, editable, selectable, selected, onToggl
             </div>
           )}
         </TD>
-        <TD className="hidden whitespace-nowrap text-text-2 md:table-cell">{asset.owner?.name ?? asset.owner?.phoneNumber ?? "—"}</TD>
+        <TD className="hidden whitespace-nowrap text-text-2 md:table-cell">{personLabel(asset.owner)}</TD>
         <TD right>
           <div className="flex items-center justify-end gap-1 whitespace-nowrap">
             {editable && asset.approvalStatus === "pending" && (
@@ -690,13 +693,13 @@ function NewAssetModal({
   // Copy button), never mid-form. That way an abandoned form leaves no orphan
   // account behind, and the password can't vanish when the modal closes.
   const [accountMode, setAccountMode] = useState<"existing" | "new">("existing");
+  // Only name + email for a new account (24 Sep) — the email is their login.
   const [newUserName, setNewUserName] = useState("");
-  const [newUserPhone, setNewUserPhone] = useState("");
-  const newUserPhoneDigits = newUserPhone.replace(/\D/g, "");
-  const newUserPhoneValid = newUserPhoneDigits.length === 10;
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const newUserEmailValid = /^\S+@\S+\.\S+$/.test(newUserEmail.trim());
   // Set once signup succeeds — kept so a failed page create can be retried
   // without creating the account twice, and so its password is never lost.
-  const [createdAccount, setCreatedAccount] = useState<{ id: string; name: string | null; phoneNumber: string; password: string } | null>(null);
+  const [createdAccount, setCreatedAccount] = useState<{ id: string; name: string | null; email: string; password: string } | null>(null);
   const [created, setCreated] = useState<{ handle: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -708,7 +711,7 @@ function NewAssetModal({
   const cleanHandle = normalizeHandleInput(handle);
   const handleError = !handle.trim() ? "Enter the page's Instagram handle." : !cleanHandle ? "That doesn't look like an Instagram handle or profile link." : !HANDLE_PATTERN.test(cleanHandle) ? "Handles use letters, digits, dots and underscores only (up to 30 characters)." : null;
   const usingNewAccount = isAdmin && accountMode === "new" && !createdAccount;
-  const ownerError = !isAdmin || createdAccount ? null : accountMode === "new" ? (newUserPhoneValid ? null : "Enter the new account's 10-digit mobile number.") : !ownerId ? "Pick the creator account this page belongs to." : null;
+  const ownerError = !isAdmin || createdAccount ? null : accountMode === "new" ? (newUserEmailValid ? null : "Enter the new account's email — it's their login.") : !ownerId ? "Pick the creator account this page belongs to." : null;
 
   const rateCards = [
     { format: "reel", amount: Number(reelRate) },
@@ -719,8 +722,8 @@ function NewAssetModal({
     mutationFn: async () => {
       let owner = isAdmin ? (createdAccount?.id ?? (accountMode === "existing" ? ownerId : null)) : null;
       if (usingNewAccount) {
-        const result = await authApi.signup(token, { phoneNumber: `+91${newUserPhoneDigits}`, name: newUserName.trim() || undefined, role: "CREATOR" });
-        setCreatedAccount({ id: result.user.id, name: result.user.name, phoneNumber: result.user.phoneNumber, password: result.generatedPassword });
+        const result = await authApi.signup(token, { email: newUserEmail.trim(), name: newUserName.trim() || undefined, role: "CREATOR" });
+        setCreatedAccount({ id: result.user.id, name: result.user.name, email: result.user.email ?? newUserEmail.trim(), password: result.generatedPassword });
         owner = result.user.id;
       }
       return assetsApi.create(token, cleanHandle as string, "instagram", { ...(category ? { category } : {}), ...(isAdmin && owner ? { ownerId: owner } : {}), ...(rateCards.length > 0 ? { rateCards } : {}) });
@@ -733,13 +736,13 @@ function NewAssetModal({
     },
     onSettled: () => ownersQuery.refetch(),
   });
-  const ownerOptions = owners.map((o) => ({ value: o.id, label: o.name?.trim() || o.phoneNumber, hint: o.name?.trim() ? o.phoneNumber : undefined, keywords: o.email ?? undefined }));
+  const ownerOptions = owners.map((o) => ({ value: o.id, label: personLabel(o), hint: o.name?.trim() ? (o.email ?? o.phoneNumber ?? undefined) : undefined, keywords: [o.email, o.phoneNumber].filter(Boolean).join(" ") || undefined }));
   const categorySuggestions = existingCategories.map((c) => ({ key: c, label: c }));
 
   async function copyCredentials() {
     if (!createdAccount) return;
     try {
-      await navigator.clipboard.writeText(`Phone: ${createdAccount.phoneNumber}\nPassword: ${createdAccount.password}`);
+      await navigator.clipboard.writeText(`Email: ${createdAccount.email}\nPassword: ${createdAccount.password}`);
       setCopied(true);
     } catch {
       setCopied(false);
@@ -750,11 +753,11 @@ function NewAssetModal({
     <div className="flex flex-col gap-3 rounded-lg border border-border-strong bg-surface-2 p-4" data-testid="new-account-credentials">
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface text-[0.75rem] font-semibold text-text-2 ring-1 ring-inset ring-border">
-          {initialsOf(createdAccount.name ?? createdAccount.phoneNumber)}
+          {initialsOf(createdAccount.name ?? createdAccount.email)}
         </span>
         <div className="min-w-0">
           <p className="truncate text-[0.875rem] font-semibold">{createdAccount.name ?? "New creator"}</p>
-          <p className="truncate text-[0.75rem] text-text-muted">{createdAccount.phoneNumber}</p>
+          <p className="truncate text-[0.75rem] text-text-muted">{createdAccount.email}</p>
         </div>
       </div>
       <div className="flex flex-col gap-1">
@@ -769,7 +772,7 @@ function NewAssetModal({
           </Button>
         </div>
       </div>
-      <p className="text-[0.75rem] text-accent-2">Share it with the creator now — it won&rsquo;t be shown again.</p>
+      <p className="text-[0.75rem] text-accent-2">Share it with the creator now — it won&rsquo;t be shown again. They sign in with this email and confirm a code we email them.</p>
     </div>
   );
 
@@ -841,7 +844,8 @@ function NewAssetModal({
             ) : accountMode === "new" ? (
               <div className="flex flex-col gap-2.5 rounded-lg border border-border bg-surface-2 p-3" data-testid="new-account-fields">
                 <TextField value={newUserName} onChange={setNewUserName} placeholder="Creator name (optional)" aria-label="New user name" />
-                <PhoneField required value={newUserPhone} onChange={setNewUserPhone} placeholder="98765 43210" aria-label="New user phone" error={submitted ? (newUserPhoneValid ? null : "Enter a valid 10-digit mobile number.") : null} />
+                <TextField type="email" value={newUserEmail} onChange={setNewUserEmail} placeholder="Email — their login (e.g. name@gmail.com)" aria-label="New user email" />
+                {submitted && !newUserEmailValid && <FieldError message="Enter a valid email address — it's their login." />}
                 <p className="text-[0.72rem] text-text-muted">The account is created together with the page. Its login password is shown once, right after.</p>
               </div>
             ) : ownersQuery.isError ? (

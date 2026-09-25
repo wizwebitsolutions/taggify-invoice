@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
+import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import {
   createPayoutSchema,
   confirmPayoutReceiptSchema,
@@ -19,7 +20,7 @@ router.use(requireAuth);
 // the service forces ownerId/creatorId to the caller, so this only ever
 // returns links on pages they own and payouts made to them. Registered
 // before the finance.pay gate below so it isn't caught by it.
-router.get("/me/pending", validateQuery(listMyPendingQuerySchema), async (req, res, next) => {
+router.get("/me/pending", requireOwnAccess("finance.view"), validateQuery(listMyPendingQuerySchema), async (req, res, next) => {
   try {
     res.json(await paymentsService.listMyPendingLinks(req.user, req.query));
   } catch (err) {
@@ -27,7 +28,7 @@ router.get("/me/pending", validateQuery(listMyPendingQuerySchema), async (req, r
   }
 });
 
-router.get("/me/payouts", validateQuery(listMyPayoutsQuerySchema), async (req, res, next) => {
+router.get("/me/payouts", requireOwnAccess("finance.view"), validateQuery(listMyPayoutsQuerySchema), async (req, res, next) => {
   try {
     res.json(await paymentsService.listMyPayouts(req.user, req.query));
   } catch (err) {

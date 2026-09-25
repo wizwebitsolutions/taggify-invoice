@@ -9,7 +9,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { DownloadIcon } from "@/components/icons";
 import { invoices as invoicesApi, ApiError, hasAccess, type Campaign, type Invoice, type Permissions, type Role } from "@/lib/api-client";
-import { money } from "@/lib/format";
+import { money, personLabel } from "@/lib/format";
 import { InvoiceAttachmentControl } from "@/components/invoices/invoice-attachment";
 
 /**
@@ -95,7 +95,7 @@ function CampaignInvoiceRow({ token, inv, isAdmin, canMarkPaid }: { token: strin
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[0.75rem] text-text-faint">{inv.invoiceNumber}</span>
-            <span className="truncate text-[0.875rem] font-semibold">{inv.creator?.name ?? inv.creator?.phoneNumber ?? "Creator"}</span>
+            <span className="truncate text-[0.875rem] font-semibold">{personLabel(inv.creator, "Creator")}</span>
           </p>
           <p className="text-[0.6875rem] text-text-faint">
             {(inv.items?.length ?? 0) > 0 && `${inv.items!.length} post${inv.items!.length === 1 ? "" : "s"} · `}

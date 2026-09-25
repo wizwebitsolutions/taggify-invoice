@@ -22,7 +22,7 @@ import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-pa
 import { ArrowRightIcon, CheckIcon, DownloadIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { links as linksApi, invoices as invoicesApi, assets as assetsApi, campaigns as campaignsApi, billing as billingApi, admin as adminApi, ApiError, type Invoice } from "@/lib/api-client";
-import { money, count, initialsOf, roleLabel } from "@/lib/format";
+import { money, count, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { lastNMonths } from "@/lib/dates";
 import { useState } from "react";
 
@@ -104,7 +104,7 @@ export function FinanceDashboard() {
     const map = new Map<string, { label: string; sub: string; amount: number; count: number; overdue: number }>();
     for (const inv of queue) {
       const key = groupBy === "page" ? inv.creator?.id ?? inv.creatorId : inv.campaign?.id ?? "none";
-      const label = groupBy === "page" ? inv.creator?.name ?? inv.creator?.phoneNumber ?? "—" : inv.campaign?.title ?? "No campaign";
+      const label = groupBy === "page" ? personLabel(inv.creator, "—") : inv.campaign?.title ?? "No campaign";
       const sub = groupBy === "page" ? "creator" : inv.campaign?.brandName ?? "";
       const e = map.get(key) ?? { label, sub, amount: 0, count: 0, overdue: 0 };
       e.amount += Number(inv.amount);
@@ -252,7 +252,7 @@ export function FinanceDashboard() {
                     return (
                       <TR key={inv.id} interactive onClick={() => router.push(`/invoices?search=${encodeURIComponent(inv.invoiceNumber)}&status=${inv.status}`)} style={{ animationDelay: `${0.2 + i * 0.04}s` }}>
                         <TD className="font-semibold">{inv.invoiceNumber}</TD>
-                        <TD className="hidden md:table-cell">{inv.creator?.name ?? inv.creator?.phoneNumber ?? "—"}</TD>
+                        <TD className="hidden md:table-cell">{personLabel(inv.creator, "—")}</TD>
                         <TD className="hidden text-text-muted lg:table-cell">{inv.campaign?.title ?? "—"}</TD>
                         <TD right className="font-semibold">
                           {money(inv.amount)}
@@ -362,7 +362,7 @@ export function FinanceDashboard() {
               <div className="flex flex-col gap-2">
                 {pendingBillingProfiles.map((bp) => (
                   <div key={bp.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5">
-                    <Cell2 primary={bp.name} secondary={`${bp.user?.name ?? bp.user?.phoneNumber ?? "—"} · PAN ${bp.pan}`} />
+                    <Cell2 primary={bp.name} secondary={`${personLabel(bp.user, "—")} · PAN ${bp.pan}`} />
                     <div className="flex shrink-0 gap-1.5">
                       <Button size="sm" onClick={() => approveBillingMutation.mutate({ id: bp.id, approvalStatus: "approved" })} disabled={approveBillingMutation.isPending}>
                         Approve

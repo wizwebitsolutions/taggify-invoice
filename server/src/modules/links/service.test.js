@@ -6,7 +6,8 @@ const mockPrisma = {
   linkCostRevision: { create: vi.fn(), findMany: vi.fn() },
   linkStatusEvent: { create: vi.fn() },
   campaign: { findMany: vi.fn() },
-  asset: { findMany: vi.fn() },
+  asset: { findMany: vi.fn(), findUnique: vi.fn() },
+  teamMembership: { findUnique: vi.fn() },
   user: { findUnique: vi.fn() },
   $transaction: vi.fn(async (ops) => Promise.all(ops)),
 };
@@ -15,7 +16,7 @@ vi.mock("../../lib/cloudinaryClient.js", () => ({ publicUrlFor: vi.fn((id) => `h
 vi.mock("../scraping/service.js", () => ({ refreshLinkMetrics: vi.fn(async () => ({ ok: true })) }));
 vi.mock("../notifications/service.js", () => ({ notify: vi.fn() }));
 
-const { reviseLinkCost, getLinkCostRevisions, bulkImportLinks, markLinkInvalid, autoAttachLink, reviewScreenshot, listLinks } = await import("./service.js");
+const { reviseLinkCost, getLinkCostRevisions, bulkImportLinks, markLinkInvalid, autoAttachLink, reviewScreenshot, listLinks, createLink, bulkCreateLink, getLinkTimeline } = await import("./service.js");
 const { transitionLinkStatus } = await import("./statusTimeline.js");
 const { notify } = await import("../notifications/service.js");
 
@@ -104,10 +105,10 @@ describe("listLinks — links.view scoping is read fresh, not just role (23 Sep,
     expect(mockPrisma.link.findMany.mock.calls.at(-1)[0].where).toEqual({ asset: { ownerId: "fin-1" } });
   });
 
-  it("granting links.view to a role that doesn't normally hold it opens the full list", async () => {
+  it("regression (24 Sep — own-scope roles never get global access): a TEAM_MEMBER with a stored links.view grant still sees only their own pages' links", async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ role: "TEAM_MEMBER", permissions: { "links.view": true } });
     await listLinks({ id: "tm-1", role: "TEAM_MEMBER" }, { page: 1, pageSize: 100 });
-    expect(mockPrisma.link.findMany.mock.calls.at(-1)[0].where).toEqual({});
+    expect(mockPrisma.link.findMany.mock.calls.at(-1)[0].where).toEqual({ asset: { ownerId: "tm-1" } });
   });
 });
 
@@ -373,5 +374,71 @@ describe("bulkImportLinks — admin sheet import of already-done work (newTask.m
 
     expect(result.skipped[0].reason).toBe("Already submitted for this page");
     expect(mockPrisma.link.create).not.toHaveBeenCalled();
+  });
+});
+
+// 24 Sep — link submission only checked the role, so a creator could submit
+// links (and get paid) against anyone's page.
+describe("createLink / bulkCreateLink — only on your own pages (24 Sep)", () => {
+  const someoneElsesPage = { id: "asset-9", ownerId: "creator-9", rateCards: [{ format: "reel", amount: 5000 }] };
+
+  it("a creator submitting to another creator's page gets 403 NOT_YOUR_PAGE and nothing is created", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue(someoneElsesPage);
+    mockPrisma.link.create = vi.fn();
+    const creator = { id: "creator-1", role: "CREATOR" };
+
+    await expect(createLink(creator, { campaignId: "c1", assetId: "asset-9", url: "https://ig/p/1", format: "reel" })).rejects.toMatchObject({ code: "NOT_YOUR_PAGE", statusCode: 403 });
+    await expect(bulkCreateLink(creator, { campaignId: "c1", assetId: "asset-9", format: "reel", urls: ["https://ig/p/1"] })).rejects.toMatchObject({ code: "NOT_YOUR_PAGE" });
+    expect(mockPrisma.link.create).not.toHaveBeenCalled();
+  });
+
+  it("a team member may submit for the creator they work for, not for anyone else", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue(someoneElsesPage);
+    mockPrisma.link.create = vi.fn(async ({ data }) => ({ id: "new-link", ...data }));
+    mockPrisma.linkStatusEvent.create = vi.fn();
+    const member = { id: "tm-1", role: "TEAM_MEMBER" };
+
+    mockPrisma.campaign.findUnique = vi.fn(async () => ({ id: "c1" }));
+    mockPrisma.campaignAssignment = { findFirst: vi.fn(async () => ({ id: "booking-1" })) };
+    mockPrisma.teamMembership.findUnique.mockResolvedValueOnce({ id: "m-1" });
+    await expect(createLink(member, { campaignId: "c1", assetId: "asset-9", url: "https://ig/p/2", format: "reel" })).resolves.toMatchObject({ id: "new-link" });
+
+    mockPrisma.teamMembership.findUnique.mockResolvedValueOnce(null);
+    await expect(createLink(member, { campaignId: "c1", assetId: "asset-9", url: "https://ig/p/3", format: "reel" })).rejects.toMatchObject({ code: "NOT_YOUR_PAGE" });
+  });
+
+  it("booked campaigns only: a link on a campaign row the page isn't booked on is refused with 403 PAGE_NOT_BOOKED", async () => {
+    const ownPage = { id: "asset-1", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }] };
+    mockPrisma.asset.findUnique.mockResolvedValue(ownPage);
+    mockPrisma.campaign.findUnique = vi.fn(async () => ({ id: "someone-elses-campaign" }));
+    mockPrisma.campaignAssignment = { findFirst: vi.fn(async () => null) };
+    mockPrisma.link.create = vi.fn();
+    const creator = { id: "creator-1", role: "CREATOR" };
+
+    await expect(createLink(creator, { campaignId: "someone-elses-campaign", assetId: "asset-1", url: "https://ig/p/4", format: "reel" })).rejects.toMatchObject({ code: "PAGE_NOT_BOOKED", statusCode: 403 });
+    await expect(bulkCreateLink(creator, { campaignId: "someone-elses-campaign", assetId: "asset-1", format: "reel", urls: ["https://ig/p/4"] })).rejects.toMatchObject({ code: "PAGE_NOT_BOOKED" });
+    expect(mockPrisma.campaignAssignment.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "someone-elses-campaign", assetId: "asset-1" } }));
+    expect(mockPrisma.link.create).not.toHaveBeenCalled();
+
+    // An unknown campaign is a 404, not a booking question.
+    mockPrisma.campaign.findUnique = vi.fn(async () => null);
+    await expect(createLink(creator, { campaignId: "nope", assetId: "asset-1", url: "https://ig/p/5", format: "reel" })).rejects.toMatchObject({ code: "CAMPAIGN_NOT_FOUND" });
+  });
+});
+
+describe("getLinkTimeline — only for a link the caller can see (24 Sep)", () => {
+  it("a creator gets 404 for a link that isn't on their page; staff with links.view read any", async () => {
+    mockPrisma.linkStatusEvent.findMany = vi.fn(async () => [{ status: "SUBMITTED" }]);
+    mockPrisma.link.findFirst.mockResolvedValueOnce(null);
+    await expect(getLinkTimeline("someone-elses-link", { id: "creator-1", role: "CREATOR" })).rejects.toMatchObject({ code: "LINK_NOT_FOUND", statusCode: 404 });
+    expect(mockPrisma.link.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "someone-elses-link", asset: { ownerId: "creator-1" } } }));
+    expect(mockPrisma.linkStatusEvent.findMany).not.toHaveBeenCalled();
+
+    mockPrisma.link.findFirst.mockResolvedValueOnce({ id: "own-link" });
+    await expect(getLinkTimeline("own-link", { id: "creator-1", role: "CREATOR" })).resolves.toEqual([{ status: "SUBMITTED" }]);
+
+    mockPrisma.link.findFirst.mockClear();
+    await expect(getLinkTimeline("any-link", { id: "admin-1", role: "ADMIN" })).resolves.toHaveLength(1);
+    expect(mockPrisma.link.findFirst).not.toHaveBeenCalled();
   });
 });

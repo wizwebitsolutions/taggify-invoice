@@ -38,12 +38,14 @@ const CREATORS = [
   ] },
 ];
 
+// Email is the login (24 Sep) — sample accounts get <name>@taggify.test.
 async function upsertUser(prisma, { id, phoneNumber, name, role }) {
+  const email = `${id.replace(/^sample-user-/, "")}@taggify.test`;
   const existing = await prisma.user.findFirst({ where: { OR: [{ id }, { phoneNumber }] } });
-  if (existing) return existing;
+  if (existing) return existing.email ? existing : prisma.user.update({ where: { id: existing.id }, data: { email } });
   const password = generatePassword();
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await prisma.user.create({ data: { id, phoneNumber, name, role, passwordHash } });
+  const user = await prisma.user.create({ data: { id, phoneNumber, email, name, role, passwordHash } });
   console.log(`Created ${role} ${name} (${phoneNumber}) — password: ${password}`);
   return user;
 }

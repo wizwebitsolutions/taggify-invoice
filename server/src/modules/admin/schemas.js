@@ -9,3 +9,8 @@ const permissionsShape = Object.fromEntries(PERMISSION_KEYS.map((key) => [key, z
 export const updatePermissionsSchema = z.object({
   permissions: z.object(permissionsShape).strict(),
 });
+
+// Admin sets a user's email — their login (24 Sep).
+export const updateUserEmailSchema = z.object({
+  email: z.string().trim().email("Enter a valid email address").max(254),
+});

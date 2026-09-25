@@ -171,6 +171,45 @@ test.describe("Campaign phases (22 Sep)", () => {
     await expect(cards.filter({ hasText: "Diwali — Phase 3" }).locator("td").nth(1)).toHaveText("Phase 3");
     await expect(cards.first().locator("td").nth(1)).toHaveText("Phase 1");
   });
+
+  // Booked campaigns only (24 Sep): each entry carries the creator's pages
+  // booked on that exact row; the picker offers only those.
+  test("creator: Upload links offers only rows a page is booked on, and only those pages", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    const assetB = { ...asset, id: "asset-b", handle: "page.b" };
+    const entry = (id: string, n: number, booked: string[]) => ({
+      ...campaign({ id, title: n > 1 ? `Diwali — Phase ${n}` : "Diwali", phases: undefined, parentCampaignId: n > 1 ? "root" : null }),
+      creatorPhaseNumber: n,
+      phaseCount: 1,
+      bookedAssetIds: booked,
+    });
+    await page.route(`${API_URL}/campaigns`, (route) => route.fulfill({ json: [entry("root", 1, ["asset-b"]), entry("p1-post2", 2, []), entry("phase2", 3, ["asset-a", "asset-b"])] }));
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [asset, assetB] }));
+    await page.goto("/dashboard");
+
+    await page.getByRole("button", { name: /Upload links/i }).first().click();
+    const modal = page.locator("form").filter({ has: page.getByRole("heading", { name: "Upload links" }) });
+    const [campaignSelect, pageSelect] = [modal.locator("select").nth(0), modal.locator("select").nth(1)];
+    await expect(campaignSelect.locator("option")).toHaveText(["Diwali", "Diwali — Phase 3"]);
+    await expect(pageSelect.locator("option")).toHaveText(["@page.b"]);
+    await campaignSelect.selectOption("phase2");
+    await expect(pageSelect.locator("option")).toHaveText(["@page.a", "@page.b"]);
+  });
+
+  test("creator with no booked page: Upload links says so and can't submit", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    await page.route(`${API_URL}/campaigns`, (route) => route.fulfill({ json: [] }));
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [asset] }));
+    await page.goto("/dashboard");
+
+    await page.getByRole("button", { name: /Upload links/i }).first().click();
+    const modal = page.locator("form").filter({ has: page.getByRole("heading", { name: "Upload links" }) });
+    await expect(modal.getByTestId("upload-not-booked")).toContainText("None of your pages is booked on a campaign yet");
+    await modal.locator("textarea").fill("https://instagram.com/reel/abc");
+    await expect(modal.getByRole("button", { name: /^Submit/ })).toBeDisabled();
+  });
 });
 
 test.describe("Campaign phases — creator view and direct links (22 Sep)", () => {

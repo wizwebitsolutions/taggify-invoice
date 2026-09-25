@@ -126,7 +126,7 @@ export function CompletePlanSteps({ token, plan, onClose }: { token: string; pla
                   <option value="">My own account</option>
                   {(ownersQuery.data ?? []).map((o) => (
                     <option key={o.id} value={o.id}>
-                      {o.name ? `${o.name} · ${o.phoneNumber}` : o.phoneNumber}
+                      {o.name ? [o.name, o.email ?? o.phoneNumber].filter(Boolean).join(" · ") : (o.email ?? o.phoneNumber ?? "—")}
                     </option>
                   ))}
                 </select>

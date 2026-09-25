@@ -1,5 +1,5 @@
 import { prisma } from "./prisma.js";
-import { getEffectivePermissions } from "./permissions.js";
+import { getEffectivePermissions, getOwnCapabilities } from "./permissions.js";
 
 /**
  * Fresh-from-DB effective permissions for a user id (23 Sep, Step 3 —
@@ -19,4 +19,10 @@ import { getEffectivePermissions } from "./permissions.js";
 export async function loadEffectivePermissions(userId) {
   const user = userId ? await prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } }) : null;
   return getEffectivePermissions(user);
+}
+
+/** Fresh-from-DB own-content switches (24 Sep) — for CREATOR/TEAM_MEMBER/PLAN_MAKER; all-false for staff. */
+export async function loadOwnCapabilities(userId) {
+  const user = userId ? await prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } }) : null;
+  return getOwnCapabilities(user);
 }

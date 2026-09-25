@@ -1,5 +1,6 @@
 "use client";
 
+import { OwnSectionGate } from "@/components/auth/own-section-gate";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -24,16 +25,18 @@ import { ResolvePendingAssignmentsModal } from "@/components/campaigns/resolve-p
 import { CampaignInvoicesPanel } from "@/components/campaigns/campaign-invoices-panel";
 import { ChevronRightIcon, HeartIcon, AlertIcon, PlusIcon, EditIcon, CloseIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { campaigns as campaignsApi, links as linksApi, invoices as invoicesApi, ApiError, hasAccess, type Campaign, type Link as LinkRow } from "@/lib/api-client";
+import { campaigns as campaignsApi, links as linksApi, invoices as invoicesApi, ApiError, hasAccess, type Campaign, type Link as LinkRow, canUse } from "@/lib/api-client";
 import { initialsOf, roleLabel, money, count, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default function CampaignDetailPage() {
   return (
     <RequireAuth>
+      <OwnSectionGate ownKey="campaigns.view" active="campaigns">
       <Suspense fallback={null}>
         <CampaignDetailContent />
       </Suspense>
+      </OwnSectionGate>
     </RequireAuth>
   );
 }
@@ -76,7 +79,7 @@ function CampaignDetailContent() {
   const isPrivileged = user?.role === "ADMIN" || user?.role === "FINANCE" || user?.role === "PLAN_MAKER";
   // 22 Sep — a Plan Maker can add a real phase to their own plans' campaigns
   // (the server scopes which); deleting one stays an admin action.
-  const canAddPhase = isAdmin || user?.role === "PLAN_MAKER";
+  const canAddPhase = isAdmin || (user?.role === "PLAN_MAKER" && canUse(user, "campaigns.edit"));
   const canDeletePhase = isAdmin;
 
   const [detailId, setDetailId] = useState<string | null>(null);

@@ -4,12 +4,13 @@ import { ApiError } from "../../middleware/errorHandler.js";
 const mockPrisma = {
   user: { findUnique: vi.fn(), update: vi.fn() },
   refreshToken: { updateMany: vi.fn() },
+  trustedDevice: { deleteMany: vi.fn() },
   permissionAuditLog: { create: vi.fn() },
   $transaction: vi.fn(async (ops) => Promise.all(ops)),
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
-const { resetUserPassword, updateUserPermissions, updateUserRole } = await import("./service.js");
+const { resetUserPassword, updateUserPermissions, updateUserRole, updateUserEmail } = await import("./service.js");
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -222,18 +223,18 @@ describe("updateUserPermissions — sub-admin overlay (newTask.md, 8 Sep)", () =
     });
   });
 
-  it("grants a section to a grantable non-ADMIN account (15 Sep — admin can give any user access permissions)", async () => {
+  it("grants a section to a staff (FINANCE) account (15 Sep — admin can give any user access permissions)", async () => {
     mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: "pm-1", role: "PLAN_MAKER", permissions: null })
+      .mockResolvedValueOnce({ id: "fin-9", role: "FINANCE", permissions: null })
       .mockResolvedValueOnce(unrestrictedActor);
-    mockPrisma.user.update.mockResolvedValue({ id: "pm-1", role: "PLAN_MAKER", permissions: { "inventory.edit": true } });
+    mockPrisma.user.update.mockResolvedValue({ id: "fin-9", role: "FINANCE", permissions: { "inventory.edit": true } });
     mockPrisma.permissionAuditLog.create.mockResolvedValue({});
 
-    const result = await updateUserPermissions("actor-1", "pm-1", { "inventory.edit": true });
+    const result = await updateUserPermissions("actor-1", "fin-9", { "inventory.edit": true });
 
     // `edit` implies `view` (23 Sep per-action keys) — both are stored.
     expect(mockPrisma.user.update).toHaveBeenCalledWith({
-      where: { id: "pm-1" },
+      where: { id: "fin-9" },
       data: { permissions: { "inventory.edit": true, "inventory.view": true } },
     });
     expect(result.permissions["inventory.edit"]).toBe(true);
@@ -249,10 +250,35 @@ describe("updateUserPermissions — sub-admin overlay (newTask.md, 8 Sep)", () =
     expect(mockPrisma.user.update).not.toHaveBeenCalled();
   });
 
-  it("400s a grant on a CREATOR or TEAM_MEMBER — every list they reach is their own rows, so a grant is self-approval (23 Sep)", async () => {
-    for (const role of ["CREATOR", "TEAM_MEMBER"]) {
+  it("own-scope roles (24 Sep): removing a creator's own-content switch stores just that, and never opens a global key", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "c-1", role: "CREATOR", permissions: null }).mockResolvedValueOnce(unrestrictedActor);
+    mockPrisma.user.update.mockImplementation(async ({ data }) => ({ id: "c-1", role: "CREATOR", ...data }));
+    mockPrisma.permissionAuditLog.create.mockResolvedValue({});
+
+    const result = await updateUserPermissions("actor-1", "c-1", { "finance.edit": false });
+
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({ where: { id: "c-1" }, data: { permissions: { "finance.edit": false } } });
+    expect(result.ownAccess["finance.edit"]).toBe(false);
+    expect(result.ownAccess["finance.view"]).toBe(true);
+    expect(Object.values(result.permissions).every((v) => v === false)).toBe(true);
+  });
+
+  it("own-scope roles: switching a section back on merges with what was already off", async () => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: "pm-1", role: "PLAN_MAKER", permissions: { "plans.edit": false, "finance.view": false } })
+      .mockResolvedValueOnce(unrestrictedActor);
+    mockPrisma.user.update.mockImplementation(async ({ data }) => ({ id: "pm-1", role: "PLAN_MAKER", ...data }));
+    mockPrisma.permissionAuditLog.create.mockResolvedValue({});
+
+    await updateUserPermissions("actor-1", "pm-1", { "plans.edit": true });
+
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({ where: { id: "pm-1" }, data: { permissions: { "finance.view": false } } });
+  });
+
+  it("400s giving a creator, team member or planner anything outside their own content (OWN_SCOPE_ONLY)", async () => {
+    for (const [role, key] of [["CREATOR", "links.approve"], ["TEAM_MEMBER", "finance.edit"], ["PLAN_MAKER", "finance.pay"]]) {
       mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "c-1", role, permissions: null }).mockResolvedValueOnce(unrestrictedActor);
-      await expectApiError(updateUserPermissions("actor-1", "c-1", { "links.approve": true }), "ROLE_NOT_GRANTABLE", 400);
+      await expectApiError(updateUserPermissions("actor-1", "c-1", { [key]: true }), "OWN_SCOPE_ONLY", 400);
     }
     expect(mockPrisma.user.update).not.toHaveBeenCalled();
   });
@@ -260,18 +286,18 @@ describe("updateUserPermissions — sub-admin overlay (newTask.md, 8 Sep)", () =
   it("a restricted actor can't grant a non-ADMIN account a section they don't hold themselves", async () => {
     const restrictedActor = { id: "actor-1", role: "ADMIN", permissions: { "inventory.edit": false } };
     mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: "pm-1", role: "PLAN_MAKER", permissions: null })
+      .mockResolvedValueOnce({ id: "fin-9", role: "FINANCE", permissions: null })
       .mockResolvedValueOnce(restrictedActor);
-    mockPrisma.user.update.mockResolvedValue({ id: "pm-1", role: "PLAN_MAKER", permissions: { "inventory.edit": false } });
+    mockPrisma.user.update.mockResolvedValue({ id: "fin-9", role: "FINANCE", permissions: { "inventory.edit": false } });
     mockPrisma.permissionAuditLog.create.mockResolvedValue({});
 
-    await updateUserPermissions("actor-1", "pm-1", { "inventory.edit": true });
+    await updateUserPermissions("actor-1", "fin-9", { "inventory.edit": true });
 
     // clampPatchToActor forces the patched `true` down to `false` since the
     // actor themselves doesn't hold inventory.edit — same guard as the
     // ADMIN case above, just now reachable on a non-ADMIN target too.
     expect(mockPrisma.user.update).toHaveBeenCalledWith({
-      where: { id: "pm-1" },
+      where: { id: "fin-9" },
       data: { permissions: { "inventory.edit": false, "inventory.view": true } },
     });
   });
@@ -296,16 +322,69 @@ describe("updateUserPermissions — sub-admin overlay (newTask.md, 8 Sep)", () =
     // tries to grant a planner finance.pay=true. (An ADMIN target is a
     // 403 for them outright — see the test above.)
     mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: "pm-1", role: "PLAN_MAKER", permissions: null })
+      .mockResolvedValueOnce({ id: "fin-9", role: "FINANCE", permissions: null })
       .mockResolvedValueOnce({ id: "actor-1", role: "ADMIN", permissions: { "finance.pay": false } });
-    mockPrisma.user.update.mockResolvedValue({ id: "pm-1", role: "PLAN_MAKER", permissions: {} });
+    mockPrisma.user.update.mockResolvedValue({ id: "fin-9", role: "FINANCE", permissions: {} });
     mockPrisma.permissionAuditLog.create.mockResolvedValue({});
 
-    await updateUserPermissions("actor-1", "pm-1", { "finance.pay": true, "inventory.edit": true });
+    await updateUserPermissions("actor-1", "fin-9", { "finance.pay": true, "inventory.edit": true });
 
     expect(mockPrisma.user.update).toHaveBeenCalledWith({
-      where: { id: "pm-1" },
+      where: { id: "fin-9" },
       data: { permissions: expect.objectContaining({ "finance.pay": false, "inventory.edit": true }) },
     });
+  });
+});
+
+describe("updateUserEmail — admin fixes a user's login email (24 Sep)", () => {
+  beforeEach(() => {
+    mockPrisma.user.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.trustedDevice.deleteMany.mockResolvedValue({ count: 1 });
+    mockPrisma.permissionAuditLog.create.mockResolvedValue({});
+  });
+
+  it("sets the new address lower-cased and unverified, ends every session and remembered device, and audit-logs old → new", async () => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: "u1", role: "CREATOR", email: "typo@gmial.com", emailVerifiedAt: null })
+      .mockResolvedValueOnce(fullAdmin)
+      .mockResolvedValueOnce(null);
+
+    const result = await updateUserEmail("actor-1", "u1", "  Real@Gmail.com ");
+
+    expect(result).toEqual({ id: "u1", email: "real@gmail.com", emailVerified: false });
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({ where: { id: "u1" }, data: { email: "real@gmail.com", emailVerifiedAt: null } });
+    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({ where: { userId: "u1", revoked: false }, data: { revoked: true } });
+    expect(mockPrisma.trustedDevice.deleteMany).toHaveBeenCalledWith({ where: { userId: "u1" } });
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith({
+      data: { targetId: "u1", actorId: "actor-1", action: "email_change", before: { email: "typo@gmial.com" }, after: { email: "real@gmail.com" } },
+    });
+  });
+
+  it("409s when another account already has that email", async () => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: "u1", role: "CREATOR", email: "a@gmail.com" })
+      .mockResolvedValueOnce(fullAdmin)
+      .mockResolvedValueOnce({ id: "someone-else" });
+
+    await expectApiError(updateUserEmail("actor-1", "u1", "taken@gmail.com"), "EMAIL_ALREADY_REGISTERED", 409);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("same guard as a password reset: a sub-admin can't change a Finance/Planner/Admin account's login", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "f1", role: "FINANCE", email: "f@gmail.com" }).mockResolvedValueOnce(subAdminWithUsers);
+
+    await expectApiError(updateUserEmail("actor-2", "f1", "mine@gmail.com"), "ADMIN_ACCOUNT_RESTRICTED", 403);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("unchanged email is a no-op — verification and sessions are kept", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "u1", role: "CREATOR", email: "same@gmail.com", emailVerifiedAt: new Date() }).mockResolvedValueOnce(fullAdmin);
+
+    const result = await updateUserEmail("actor-1", "u1", "Same@Gmail.com");
+
+    expect(result.emailVerified).toBe(true);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
   });
 });
