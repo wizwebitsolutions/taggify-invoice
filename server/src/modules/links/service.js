@@ -245,7 +245,8 @@ export async function listLinks(user, filters) {
       // apart (a re-seeded status, a manual fix-up) instead of offering it
       // as billable and failing on submit.
       include: {
-        campaign: true,
+        // No costCap: a creator reads their own links and must not get the deal's budget (25 Sep).
+        campaign: { select: { id: true, brandName: true, title: true, deadline: true, sheetLink: true, parentCampaignId: true, phaseNumber: true, postNumber: true, createdAt: true, updatedAt: true } },
         asset: { include: { owner: { select: { id: true, name: true, phoneNumber: true, email: true } } } },
         screenshot: true,
         invoiceItem: { select: { invoiceId: true, invoice: { select: { invoiceNumber: true, status: true } } } },

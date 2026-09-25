@@ -70,7 +70,9 @@ function CampaignsContent() {
   const items = campaignsQuery.data ?? [];
   // A plain ADMIN by default, or (15 Sep) any other role explicitly granted campaigns.manage.
   const canCreate = hasAccess(user, "campaigns.edit");
-  const canUploadLinks = (user?.role === "CREATOR" || user?.role === "TEAM_MEMBER") && canUse(user, "links.edit");
+  // Creators never see the deal's budget — only what their own pages earn (server sends `yourEarnings`).
+  const isCreatorSide = user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
+  const canUploadLinks = isCreatorSide && canUse(user, "links.edit");
 
   // Only phase-1 rows are listed; a later phase's posts/spend already roll
   // up into its parent server-side (annotateCampaign). Except a creator's own
@@ -161,10 +163,12 @@ function CampaignsContent() {
                   <TH className="hidden md:table-cell">Phase</TH>
                   <TH className="hidden sm:table-cell">Posts</TH>
                   <TH className="hidden lg:table-cell">Likes</TH>
-                  <TH className="w-[220px]">Budget used</TH>
-                  <TH right className="hidden md:table-cell">
-                    Remaining
-                  </TH>
+                  <TH className={isCreatorSide ? undefined : "w-[220px]"}>{isCreatorSide ? "Your earnings" : "Budget used"}</TH>
+                  {!isCreatorSide && (
+                    <TH right className="hidden md:table-cell">
+                      Remaining
+                    </TH>
+                  )}
                   <TH right className="hidden sm:table-cell">
                     Ends
                   </TH>
@@ -179,6 +183,7 @@ function CampaignsContent() {
                     index={i}
                     canCreate={canCreate}
                     canUploadLinks={canUploadLinks}
+                    creatorView={isCreatorSide}
                     onOpen={() => router.push(`/campaigns/view?id=${c.id}`)}
                     onResolvePending={() => setPendingResolution({ campaignId: c.id, campaignTitle: c.title })}
                     onUploadLinks={() => setUploadCampaign(c)}
@@ -237,7 +242,7 @@ function CampaignsContent() {
   );
 }
 
-function CampaignRow({ campaign: c, index, canCreate, canUploadLinks, onOpen, onResolvePending, onUploadLinks }: { campaign: Campaign; index: number; canCreate: boolean; canUploadLinks: boolean; onOpen: () => void; onResolvePending: () => void; onUploadLinks: () => void }) {
+function CampaignRow({ campaign: c, index, canCreate, canUploadLinks, creatorView, onOpen, onResolvePending, onUploadLinks }: { campaign: Campaign; index: number; canCreate: boolean; canUploadLinks: boolean; creatorView: boolean; onOpen: () => void; onResolvePending: () => void; onUploadLinks: () => void }) {
   const costCapNum = c.costCap != null ? Number(c.costCap) : null;
   const spentPct = costCapNum && costCapNum > 0 ? ((c.spent ?? 0) / costCapNum) * 100 : null;
   const isOver = spentPct != null && spentPct > 100;
@@ -304,7 +309,9 @@ function CampaignRow({ campaign: c, index, canCreate, canUploadLinks, onOpen, on
       <TD className="hidden tabular-nums sm:table-cell">{c.postCount ?? 0}</TD>
       <TD className="hidden tabular-nums lg:table-cell">{c.totalLikes ? compactNumber(c.totalLikes) : "0"}</TD>
       <TD>
-        {costCapNum != null && spentPct != null ? (
+        {creatorView ? (
+          <b className="font-semibold tabular-nums" data-testid="your-earnings">{money(c.yourEarnings ?? 0)}</b>
+        ) : costCapNum != null && spentPct != null ? (
           <div className="flex flex-col gap-1.5">
             <ProgressBar pct={spentPct} tone={tone} />
             <span className={cn("text-[0.75rem] tabular-nums text-text-muted", isOver && "font-semibold text-rose")}>
@@ -315,9 +322,11 @@ function CampaignRow({ campaign: c, index, canCreate, canUploadLinks, onOpen, on
           <span className="text-[0.78rem] text-text-muted">{money(c.spent ?? 0)} · no cap</span>
         )}
       </TD>
+      {!creatorView && (
       <TD right className="hidden md:table-cell">
         {c.remainingBudget != null ? <b className={cn("font-semibold", c.remainingBudget < 0 && "text-rose")}>{money(c.remainingBudget)}</b> : <span className="text-text-muted">—</span>}
       </TD>
+      )}
       <TD right className={cn("hidden text-[0.8125rem] text-text-muted sm:table-cell", ended && c.deadline && "text-rose")}>
         {shortDate(c.deadline)}
       </TD>

@@ -22,6 +22,7 @@ const LINK_SELECT_FOR_CAMPAIGN = {
   campaignId: true,
   cost: true,
   status: true,
+  asset: { select: { ownerId: true } },
   postedAt: true,
   createdAt: true,
   postSnapshots: {
@@ -38,6 +39,20 @@ const LINK_SELECT_FOR_CAMPAIGN = {
 // computed two different ways.
 function computeSpent(links) {
   return links.filter((l) => l.status !== "SCREENSHOT_REJECTED" && l.status !== "INVALID").reduce((sum, l) => sum + Number(l.cost), 0);
+}
+
+const isCreatorSide = (user) => user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
+
+/**
+ * Creators / team members never see the deal's budget (25 Sep — "budget &
+ * remaining shouldn't be shown to creator, only their part"): the cap,
+ * group spend and what's left are dropped, replaced by `yourEarnings` — the
+ * cost of links on their own pages only. Done here, not just in the UI, so
+ * the numbers never reach a creator's browser at all.
+ */
+function toCreatorMoneyView(row, links, ownerIds) {
+  const { costCap: _cap, remainingBudget: _rem, spent: _spent, ...rest } = row;
+  return { ...rest, yourEarnings: computeSpent(links.filter((l) => ownerIds.includes(l.asset?.ownerId))) };
 }
 
 /** Shared by listCampaigns (batched, many campaigns at once) and
@@ -158,7 +173,11 @@ export async function listCampaigns({ search } = {}, requester) {
   // Fresh from the DB (23 Sep, Step 3) — restricting or granting
   // campaigns.view now actually changes the shape of what comes back.
   const effective = requester ? await loadEffectivePermissions(requester.id) : null;
-  if (!requester || effective["campaigns.view"] || requester.role === "PLAN_MAKER") return annotatedRoots;
+  if (!requester || effective["campaigns.view"] || requester.role === "PLAN_MAKER") {
+    if (!isCreatorSide(requester)) return annotatedRoots;
+    const ownerIds = await ownerIdsFor(requester);
+    return annotatedRoots.map((r) => toCreatorMoneyView(r, (groupIdsByRoot.get(r.id) ?? []).flatMap((id) => linksByCampaign.get(id) ?? []), ownerIds));
+  }
   return withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampaign, pendingByCampaign });
 }
 
@@ -192,7 +211,7 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
   for (const root of annotatedRoots) {
     const group = groups.get(root.id) ?? [];
     // To the creator, Phase 1 is just the root row — its extra posts are their own entries below.
-    out.push({ ...annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), phaseCount: root.phaseCount, creatorPhaseNumber: 1, bookedAssetIds: bookedAssetIds(root.id) });
+    out.push({ ...toCreatorMoneyView(annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), linksByCampaign.get(root.id) ?? [], ownerIds), phaseCount: root.phaseCount, creatorPhaseNumber: 1, bookedAssetIds: bookedAssetIds(root.id) });
     // Numbered over this creator's own rows only (root + what they're booked on).
     const theirs = creatorRowsOf(group, mine);
     for (const row of [...theirs].sort(byPhaseThenPost)) {
@@ -200,7 +219,7 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
       if (!child) continue;
       const n = creatorPhaseNumberIn(theirs, row.id);
       const annotated = annotateCampaign({ ...child, title: creatorPhaseTitle(root.title, n), phaseNumber: n }, linksByCampaign.get(child.id) ?? [], pendingByCampaign.get(child.id) ?? 0);
-      out.push({ ...annotated, costCap: root.costCap, creatorPhaseNumber: n, phaseCount: 1, bookedAssetIds: bookedAssetIds(child.id) });
+      out.push({ ...toCreatorMoneyView(annotated, linksByCampaign.get(child.id) ?? [], ownerIds), creatorPhaseNumber: n, phaseCount: 1, bookedAssetIds: bookedAssetIds(child.id) });
     }
   }
   return out;
@@ -254,7 +273,7 @@ export async function getCampaignById(id, requester) {
     const n = creatorPhaseNumberIn(visible, id);
     const pending = await prisma.campaignAssignment.count({ where: { campaignId: id, status: "pending" } });
     const annotated = annotateCampaign({ ...campaign, title: creatorPhaseTitle(root.title, n), phaseNumber: n }, groupLinks.filter((l) => l.campaignId === id), pending);
-    return { ...annotated, creatorPhaseNumber: n, costCap: root.costCap, phases: phases.length > 1 ? phases : phases.slice(0, 1) };
+    return { ...toCreatorMoneyView(annotated, groupLinks.filter((l) => l.campaignId === id), await ownerIdsFor(requester)), creatorPhaseNumber: n, phases: phases.length > 1 ? phases : phases.slice(0, 1) };
   }
 
   // Admin / Finance / Plan Maker: a phase's extra posts are part of that
@@ -275,6 +294,7 @@ export async function getCampaignById(id, requester) {
   const ownLinks = groupLinks.filter((l) => thisPhaseIds.includes(l.campaignId));
 
   const annotated = annotateCampaign(campaign, ownLinks, pendingAssignmentCount);
+  if (isCreatorSide(requester)) return { ...toCreatorMoneyView(annotated, ownLinks, await ownerIdsFor(requester)), phases: group };
   if (fullGroup.length <= 1) return { ...annotated, phases: group };
 
   const groupSpent = computeSpent(groupLinks);

@@ -734,3 +734,28 @@ describe("fetchSheetTabs — every tab of a sheet as CSV (plan upload, 22 Sep)",
     await expect(fetchSheetTabs("https://docs.google.com/spreadsheets/d/abc123/edit")).rejects.toMatchObject({ code: "SHEET_NOT_SHARED" });
   });
 });
+
+describe("creator money view (25 Sep — budget/remaining hidden from creators)", () => {
+  const root = { id: "c1", parentCampaignId: null, title: "Wave", brandName: "B", costCap: 100000, phaseNumber: 1, postNumber: 1, createdAt: new Date() };
+  const link = (over) => ({ campaignId: "c1", cost: 1000, status: "APPROVED", createdAt: new Date(), postedAt: null, postSnapshots: [], asset: { ownerId: "creator-1" }, ...over });
+
+  it("listCampaigns strips costCap/remainingBudget/spent and returns only the creator's own earnings", async () => {
+    mockPrisma.campaign.findMany.mockImplementation(async ({ where }) => (where.parentCampaignId === null ? [root] : []));
+    mockPrisma.link.findMany.mockResolvedValue([link({ cost: 1000 }), link({ cost: 5000, asset: { ownerId: "someone-else" } })]);
+    mockPrisma.campaignAssignment.findMany.mockResolvedValue([{ campaignId: "c1", assetId: "a1" }]);
+    const [row] = await listCampaigns({}, { id: "creator-1", role: "CREATOR" });
+    expect(row).not.toHaveProperty("costCap");
+    expect(row).not.toHaveProperty("remainingBudget");
+    expect(row).not.toHaveProperty("spent");
+    expect(row.yourEarnings).toBe(1000);
+  });
+
+  it("listCampaigns still returns the full budget to an admin", async () => {
+    mockPrisma.campaign.findMany.mockImplementation(async ({ where }) => (where.parentCampaignId === null ? [root] : []));
+    mockPrisma.link.findMany.mockResolvedValue([link({ cost: 1000 })]);
+    const [row] = await listCampaigns({}, { id: "admin-1", role: "ADMIN" });
+    expect(row.costCap).toBe(100000);
+    expect(row.remainingBudget).toBe(99000);
+    expect(row).not.toHaveProperty("yourEarnings");
+  });
+});

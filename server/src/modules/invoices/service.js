@@ -412,7 +412,7 @@ export async function getInvoiceDetail(invoiceId, user) {
       creator: true,
       campaign: { select: { id: true, title: true, brandName: true } },
       raisedBy: { select: { id: true, name: true, role: true } },
-      items: { include: { link: { include: { asset: true, campaign: true } } } },
+      items: { include: { link: { include: { asset: true, campaign: { select: { id: true, brandName: true, title: true, deadline: true, sheetLink: true, parentCampaignId: true, phaseNumber: true, postNumber: true, createdAt: true, updatedAt: true } } } } } },
     },
   });
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");

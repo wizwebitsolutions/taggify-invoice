@@ -375,8 +375,10 @@ export interface Campaign {
   totalLikes?: number;
   /** Sum of every non-screenshot-rejected link's cost. */
   spent?: number;
-  /** costCap - spent, or null if no cap was set. */
+  /** costCap - spent, or null if no cap was set. Not sent to creators. */
   remainingBudget?: number | null;
+  /** Creators only: cost of links on their own pages — the only money they see. */
+  yourEarnings?: number;
   /** Rows from an attached sheet still waiting on a page/creator to be created for them. */
   pendingAssignmentCount?: number;
   /** Set when this campaign is a phase (2+) of another — points at phase 1's id. Null/undefined for a standalone campaign or phase 1 itself. */

@@ -251,12 +251,18 @@ function CampaignDetailContent() {
               </Note>
             )}
 
+            {isPrivileged ? (
             <div className={cn("grid grid-cols-2 gap-3 md:gap-4", isPrivileged ? "md:grid-cols-4" : "md:grid-cols-3")}>
-              <KpiCard label="Budget cap" value={costCapNum != null ? money(costCapNum) : "No cap"} foot={costCapNum != null ? `${money(spent)} / ${money(costCapNum)} · ${Math.round(spentPct ?? 0)}% used` : "Set one in Edit campaign"} />
-              <KpiCard label="Committed" value={money(spent)} foot={`${campaign.postCount ?? items.length} posts · ${counts.invoiced} invoiced`} />
-              <KpiCard label="Remaining" value={campaign.remainingBudget != null ? money(campaign.remainingBudget) : "—"} tone={isOver ? "rose" : undefined} foot={isOver ? `Over cap by ${money(spent - (costCapNum ?? 0))}` : campaign.remainingBudget != null ? "Left for more posts or a phase" : "No cap set"} />
-              {isPrivileged && <KpiCard label="Paid out" value={money(paidOut)} foot={invoicedNotPaid > 0 ? `${money(invoicedNotPaid)} invoiced, awaiting payout` : "Nothing awaiting payout"} />}
-            </div>
+                <KpiCard label="Budget cap" value={costCapNum != null ? money(costCapNum) : "No cap"} foot={costCapNum != null ? `${money(spent)} / ${money(costCapNum)} · ${Math.round(spentPct ?? 0)}% used` : "Set one in Edit campaign"} />
+                <KpiCard label="Committed" value={money(spent)} foot={`${campaign.postCount ?? items.length} posts · ${counts.invoiced} invoiced`} />
+                <KpiCard label="Remaining" value={campaign.remainingBudget != null ? money(campaign.remainingBudget) : "—"} tone={isOver ? "rose" : undefined} foot={isOver ? `Over cap by ${money(spent - (costCapNum ?? 0))}` : campaign.remainingBudget != null ? "Left for more posts or a phase" : "No cap set"} />
+                {isPrivileged && <KpiCard label="Paid out" value={money(paidOut)} foot={invoicedNotPaid > 0 ? `${money(invoicedNotPaid)} invoiced, awaiting payout` : "Nothing awaiting payout"} />}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4">
+                <KpiCard label="Your earnings" value={money(campaign.yourEarnings ?? 0)} foot={`${campaign.postCount ?? items.length} posts · ${counts.invoiced} invoiced`} />
+              </div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
               <Card className="flex min-w-0 flex-col" data-testid="campaign-posts">
