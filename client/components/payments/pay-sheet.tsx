@@ -7,7 +7,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { CheckCircleIcon, CloseIcon, UploadIcon } from "@/components/icons";
-import { payments as paymentsApi, ApiError, type PageOwner, type Payout, type PendingLink } from "@/lib/api-client";
+import { payments as paymentsApi, ApiError, type Invoice, type PageOwner, type PaymentInvoice, type Payout, type PayoutItemLink, type PendingLink } from "@/lib/api-client";
 import { money, initialsOf, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -19,9 +19,11 @@ type TdsRate = (typeof TDS_RATES)[number] | null;
 
 const paise = (n: number) => Math.round(n * 100) / 100;
 
-export function computeTotals(costs: number[], isGst: boolean, tds: TdsRate) {
-  const subtotal = paise(costs.reduce((sum, c) => sum + c, 0));
-  const gstAmount = isGst ? paise(subtotal * GST_RATE) : 0;
+/** `invoices` are raised invoices being paid off (25 Sep): they bring their own subtotal and GST, and only unbilled links take the 18% toggle. */
+export function computeTotals(costs: number[], isGst: boolean, tds: TdsRate, invoices: Pick<PaymentInvoice, "subtotal" | "gstAmount">[] = []) {
+  const linksSubtotal = paise(costs.reduce((sum, c) => sum + c, 0));
+  const subtotal = paise(linksSubtotal + invoices.reduce((sum, inv) => sum + Number(inv.subtotal), 0));
+  const gstAmount = paise((isGst ? linksSubtotal * GST_RATE : 0) + invoices.reduce((sum, inv) => sum + Number(inv.gstAmount), 0));
   const tdsAmount = tds ? paise(subtotal * (tds / 100)) : 0;
   return { subtotal, gstAmount, tdsAmount, netAmount: paise(subtotal + gstAmount - tdsAmount) };
 }
@@ -48,6 +50,19 @@ async function uploadReceipt(token: string, payoutId: string, file: File, extra:
   return paymentsApi.confirmReceipt(token, payoutId, params.publicId, file.name, { ...extra, paidOn });
 }
 
+/**
+ * Adapts a full Invoice (as the Invoices page, campaign panel, and finance
+ * dashboard see it) into the lighter PaymentInvoice shape this sheet expects,
+ * for paying one off directly (28 Sep — replaces the old no-TDS/no-receipt
+ * direct mark-paid) without going through the Payments tab's Pending list.
+ * `selectable: true` since these callers only ever offer this once an invoice
+ * is already APPROVED — the same gate PaySheet's own eligibility check accepts.
+ */
+export function toPaymentInvoice(inv: Invoice): PaymentInvoice {
+  // Callers only ever invoke this on an APPROVED invoice (the "Mark paid" gate) — narrow past Invoice's wider DRAFT/REJECTED statuses PaymentInvoice doesn't model.
+  return { ...inv, status: inv.status as PaymentInvoice["status"], links: (inv.items ?? []).map((i) => i.link as PayoutItemLink), selectable: true };
+}
+
 function errorText(err: unknown, fallback: string) {
   return err instanceof ApiError || err instanceof Error ? err.message : fallback;
 }
@@ -65,7 +80,7 @@ function errorText(err: unknown, fallback: string) {
  */
 export function PaySheet(
   props: { token: string; onClose: () => void; onPaid: () => void } & (
-    | { mode: "new"; vendor: PageOwner; links: PendingLink[]; onRemoveLink: (id: string) => void }
+    | { mode: "new"; vendor: PageOwner; links: PendingLink[]; invoices?: PaymentInvoice[]; onRemoveLink: (id: string) => void; onRemoveInvoice?: (id: string) => void }
     | { mode: "draft"; payout: Payout }
   )
 ) {
@@ -82,16 +97,18 @@ export function PaySheet(
   const vendorName = props.mode === "new" ? personLabel(props.vendor, "vendor") : personLabel(props.payout.creator, "vendor");
   const totals =
     props.mode === "new"
-      ? computeTotals(props.links.map((l) => Number(l.cost)), isGst, tds)
+      ? computeTotals(props.links.map((l) => Number(l.cost)), isGst, tds, props.invoices ?? [])
       : {
           subtotal: Number(props.payout.subtotal),
           gstAmount: Number(props.payout.gstAmount),
           tdsAmount: Number(props.payout.tdsAmount),
           netAmount: Number(props.payout.netAmount),
         };
-  const shownGst = props.mode === "new" ? isGst : props.payout.isGstInvoice;
+  const shownGst = props.mode === "new" ? isGst || totals.gstAmount > 0 : props.payout.isGstInvoice;
   const shownTds = props.mode === "new" ? tds : props.payout.tdsPercent ? Number(props.payout.tdsPercent) : null;
-  const linkCount = props.mode === "new" ? props.links.length : props.payout.items?.length ?? 0;
+  const invoiceCount = props.mode === "new" ? props.invoices?.length ?? 0 : 0;
+  const linkCount = props.mode === "new" ? props.links.length + invoiceCount : props.payout.items?.length ?? 0;
+  const noun = props.mode === "new" && invoiceCount > 0 ? "item" : "link";
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -100,6 +117,7 @@ export function PaySheet(
       const created = await paymentsApi.createPayout(token, {
         creatorId: props.vendor.id,
         linkIds: props.links.map((l) => l.id),
+        invoiceIds: (props.invoices ?? []).map((inv) => inv.id),
         isGstInvoice: isGst,
         tdsPercent: tds,
       });
@@ -147,7 +165,8 @@ export function PaySheet(
           </div>
           <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">Payout paid</h2>
           <p className="text-[0.8125rem] text-text-muted">
-            {money(paid.netAmount)} to {vendorName}. {linkCount} link{linkCount === 1 ? "" : "s"} moved from Pending to Paid.
+            {money(paid.netAmount)} to {vendorName}. {linkCount} {noun}{linkCount === 1 ? "" : "s"} moved from Pending to Paid
+            {props.mode === "new" && props.links.length > 0 ? `; ${vendorName}'s invoice for ${props.links.length === 1 ? "it" : "them"} is now in their Invoices as paid` : ""}.
           </p>
           <Button className="w-full" onClick={onPaid}>
             Done
@@ -172,7 +191,7 @@ export function PaySheet(
               {vendorName}
             </h2>
             <p className="text-[0.8125rem] text-text-muted">
-              {linkCount} link{linkCount === 1 ? "" : "s"}
+              {linkCount} {noun}{linkCount === 1 ? "" : "s"}
               {props.mode === "draft" && " · GST/TDS already set on this draft"}
             </p>
           </div>
@@ -180,13 +199,20 @@ export function PaySheet(
 
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto border-t border-border md:grid-cols-[minmax(0,1fr)_380px]">
           <div className="flex flex-col gap-5 p-6 md:border-r md:border-border">
-            <StepTitle n={1} title="Links in this payout" hint={props.mode === "new" ? "Remove any you don't want to pay yet" : undefined} />
+            <StepTitle n={1} title="In this payout" hint={props.mode === "new" ? "Remove any you don't want to pay yet" : undefined} />
             {props.mode === "new" ? (
-              <LinksByPage links={props.links} onRemove={props.onRemoveLink} />
+              <>
+                {(props.invoices ?? []).length > 0 && (
+                  <InvoicesInPayout invoices={props.invoices ?? []} onRemove={(id) => props.onRemoveInvoice?.(id)} />
+                )}
+                <LinksByPage links={props.links} onRemove={props.onRemoveLink} showEmpty={(props.invoices ?? []).length === 0} />
+              </>
             ) : (
               <DraftLinks payout={props.payout} />
             )}
-            <p className="mt-auto text-[0.75rem] text-text-faint">Once marked paid, these links leave Pending for good and show under Paid — for you and for {vendorName}.</p>
+            <p className="mt-auto text-[0.75rem] text-text-faint">
+              Once marked paid, these leave Pending and show under Paid — for you and for {vendorName}. Unbilled links get {vendorName}&rsquo;s invoice raised automatically, marked paid; a raised invoice is marked paid.
+            </p>
           </div>
 
           <div className="flex flex-col gap-5 bg-surface-2 p-6">
@@ -226,13 +252,13 @@ export function PaySheet(
             <div className="flex flex-col gap-2 rounded-[10px] border border-border bg-surface p-4 text-[0.8125rem]" data-testid="payout-preview">
               <div className="flex justify-between text-text-2">
                 <span>
-                  Subtotal · {linkCount} link{linkCount === 1 ? "" : "s"}
+                  Subtotal · {linkCount} {noun}{linkCount === 1 ? "" : "s"}
                 </span>
                 <span className="tabular-nums">{money(totals.subtotal)}</span>
               </div>
               {shownGst && (
                 <div className="flex justify-between text-text-2">
-                  <span>GST 18%</span>
+                  <span>GST{props.mode === "new" && invoiceCount > 0 ? "" : " 18%"}</span>
                   <span className="tabular-nums">+{money(totals.gstAmount)}</span>
                 </div>
               )}
@@ -343,9 +369,41 @@ function StepTitle({ n, title, hint }: { n: number; title: string; hint?: string
   );
 }
 
-function LinksByPage({ links, onRemove }: { links: PendingLink[]; onRemove: (id: string) => void }) {
+/** Raised invoices being paid off — whole, never split. */
+function InvoicesInPayout({ invoices, onRemove }: { invoices: PaymentInvoice[]; onRemove: (id: string) => void }) {
+  return (
+    <div className="flex flex-col" data-testid="pay-sheet-invoices">
+      <p className="border-b border-border pb-1.5 text-[0.8438rem] font-semibold">
+        Invoices <span className="font-normal text-text-muted">· paid in full</span>
+      </p>
+      {invoices.map((inv) => (
+        <div key={inv.id} className="flex items-center gap-2.5 border-b border-border py-2 text-[0.8125rem]">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate font-medium">{inv.invoiceNumber}</span>
+            <span className="text-[0.72rem] text-text-faint">
+              {inv.links.length} link{inv.links.length === 1 ? "" : "s"} · {inv.isGstInvoice ? "GST invoice" : "no GST"}
+              {inv.dueDate ? ` · due ${shortDate(inv.dueDate)}` : ""}
+            </span>
+          </div>
+          <span className="font-semibold tabular-nums">{money(inv.amount)}</span>
+          <button
+            type="button"
+            aria-label={`Remove ${inv.invoiceNumber} from this payout`}
+            onClick={() => onRemove(inv.id)}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-text-faint hover:bg-surface-2 hover:text-text"
+          >
+            <CloseIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LinksByPage({ links, onRemove, showEmpty = true }: { links: PendingLink[]; onRemove: (id: string) => void; showEmpty?: boolean }) {
   const pages = new Map<string, PendingLink[]>();
   for (const l of links) pages.set(l.asset.handle, [...(pages.get(l.asset.handle) ?? []), l]);
+  if (links.length === 0 && !showEmpty) return null;
   if (links.length === 0) return <p className="text-[0.8125rem] text-text-muted">No links left on this payout — close and pick some from Pending.</p>;
   return (
     <div className="flex flex-col gap-5" data-testid="pay-sheet-links">

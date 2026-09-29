@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * usable owner. Mocked Prisma, no DB.
  */
 const mockPrisma = {
-  user: { findMany: vi.fn() },
+  user: { findMany: vi.fn(), findUnique: vi.fn() },
   asset: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })), findUnique: vi.fn(async () => ({ scrapeQueuedAt: new Date() })), update: vi.fn(async () => ({})) },
   link: { findMany: vi.fn(async () => []) },
 };
@@ -39,6 +39,10 @@ const row = (overrides) => ({ rowNumber: 2, rawHandle: "x", handle: "x", ownerRe
 beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.user.findMany.mockResolvedValue(owners);
+  // The caller's own record, as looked up fresh (req.user off the access
+  // token is only ever {id, role} — see requireAuth.js — never these display
+  // fields, which is exactly the bug an earlier version of this code had).
+  mockPrisma.user.findUnique.mockResolvedValue(priya);
   mockPrisma.asset.findMany.mockResolvedValue([]);
   mockPrisma.asset.findFirst.mockResolvedValue(null);
   mockPrisma.asset.create.mockImplementation(async ({ data }) => ({ id: `asset-${data.handle}`, handle: data.handle, ownerId: data.ownerId }));
@@ -105,6 +109,18 @@ describe("previewImport — per-row status", () => {
     const preview = await previewImport({ hasOwnerColumn: true, rows: [row({ handle: "taken.page", ownerRef: "9000000001" })] });
     expect(preview.rows[0].status).toBe("conflict");
     expect(preview.rows[0].reason).toMatch(/can't be under two accounts/);
+  });
+
+  // 25 Sep review: a CREATOR's own conflict reason must never name whose
+  // account it actually is — that's exactly the creator-list leak this
+  // whole role is otherwise kept away from (owners: [] in the response).
+  it("a CREATOR's conflict is never told whose account it actually belongs to", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "taken.page", ownerId: "creator-2", owner: { id: "creator-2", name: "Rahul Creator", phoneNumber: "+919000000002" } }]);
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const preview = await previewImport({ hasOwnerColumn: false, rows: [row({ handle: "taken.page" })] }, creator);
+    expect(preview.rows[0].status).toBe("conflict");
+    expect(preview.rows[0].reason).not.toMatch(/Rahul/);
+    expect(preview.rows[0].reason).toMatch(/another account/);
   });
 
   it("asks for an account when the owner cell is blank or unknown, and shows the existing owner when the page already exists anyway", async () => {
@@ -335,5 +351,68 @@ describe("importAssets — creating the confirmed rows", () => {
   it("drops a repeated rate-card format within one row (rate cards are unique per asset+format)", async () => {
     await importAssets(admin, [{ handle: "r.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 1 }, { format: "reel", amount: 2 }] }]);
     expect(mockPrisma.asset.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ rateCards: { create: [{ format: "reel", amount: 1 }] } }) }));
+  });
+});
+
+// 25 Sep: CREATOR and PLAN_MAKER can bulk-import too — pending, no rate
+// cards (same rule as the single "Add page" flow), and a CREATOR's rows are
+// always forced onto their own account regardless of the sheet.
+describe("importAssets — CREATOR and PLAN_MAKER (25 Sep)", () => {
+  it("a CREATOR's rows are forced onto their own id, ignoring whatever ownerId is sent, and land pending with no rate card", async () => {
+    // Bare shape — req.user off the access token only ever carries {id, role}
+    // (requireAuth.js), never name/phone/email; the display fields on the
+    // created owner must come from a fresh DB lookup, not this object.
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const result = await importAssets(creator, [
+      { handle: "own.page", ownerId: "creator-2", rateCards: [{ format: "reel", amount: 5000 }] },
+    ]);
+    expect(result.created.map((a) => a.owner.id)).toEqual(["creator-1"]);
+    expect(result.created[0].owner.name).toBe("Priya Creator");
+    expect(mockPrisma.asset.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ownerId: "creator-1", approvalStatus: "pending" }) })
+    );
+    expect(mockPrisma.asset.create).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ rateCards: expect.anything() }) }));
+  });
+
+  it("a CREATOR's clash-skip reason never names whose account it actually is", async () => {
+    mockPrisma.asset.findFirst.mockResolvedValueOnce({ ownerId: "creator-2", owner: { name: "Rahul Creator", phoneNumber: "+919000000002" } });
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const result = await importAssets(creator, [{ handle: "taken.page" }]);
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual([{ handle: "taken.page", reason: "Already registered under another account." }]);
+  });
+
+  it("a PLAN_MAKER picks from real creator accounts like an admin does, but still lands pending with no rate card", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    await importAssets(planMaker, [{ handle: "vendor.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }] }]);
+    expect(mockPrisma.asset.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ownerId: "creator-1", approvalStatus: "pending" }) })
+    );
+    expect(mockPrisma.asset.create).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ rateCards: expect.anything() }) }));
+  });
+
+  it("a PLAN_MAKER targeting a non-creator id is skipped, same as an unresolved owner", async () => {
+    const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+    const result = await importAssets(planMaker, [{ handle: "x", ownerId: "not-a-creator" }]);
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual([{ handle: "x", reason: "Pick a creator account for this page." }]);
+  });
+});
+
+describe("previewImport — CREATOR's own sheet never sees or leaks other creators (25 Sep)", () => {
+  it("returns no owners list, and forces every row's owner to the caller regardless of the sheet's owner column", async () => {
+    // Bare shape, same reasoning as importAssets' test above.
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const preview = await previewImport({ hasOwnerColumn: true, rows: [row({ handle: "new.page", ownerRef: "9000000002" })] }, creator);
+    expect(preview.owners).toEqual([]);
+    expect(preview.rows[0]).toMatchObject({ status: "ready", ownerId: "creator-1" });
+    expect(preview.rows[0].owner.name).toBe("Priya Creator");
+  });
+
+  it("an ADMIN/PLAN_MAKER preview is unaffected — full owners list, ownerRef still resolved", async () => {
+    const admin = { id: "admin-1", role: "ADMIN" };
+    const preview = await previewImport({ hasOwnerColumn: true, rows: [row({ handle: "new.page", ownerRef: "9000000001" })] }, admin);
+    expect(preview.owners).toEqual(owners);
+    expect(preview.rows[0]).toMatchObject({ status: "ready", ownerId: "creator-1" });
   });
 });

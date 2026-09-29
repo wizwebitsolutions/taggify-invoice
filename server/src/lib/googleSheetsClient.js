@@ -91,7 +91,7 @@ export async function deleteSheetTab({ accessToken, spreadsheetId, sheetId }) {
 
 /** Every tab's title + sheetId ("gid" — the number a deep link like
  *  `.../edit#gid=123` points at) already in the spreadsheet. */
-async function getExistingSheetTabs({ accessToken, spreadsheetId }) {
+export async function getExistingSheetTabs({ accessToken, spreadsheetId }) {
   const res = await fetch(`${SHEETS_API}/${spreadsheetId}?fields=sheets.properties`, { headers: headers(accessToken) });
   if (!res.ok) {
     throw new Error(`Google Sheets API error reading spreadsheet: ${res.status} ${await res.text()}`);

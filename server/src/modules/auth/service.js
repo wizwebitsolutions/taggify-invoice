@@ -12,6 +12,7 @@ import {
 } from "../../lib/auth/jwt.js";
 import { issueOtp, consumeOtp } from "../../lib/auth/emailOtp.js";
 import { issueTrustedDevice, verifyTrustedDevice, revokeTrustedDevices } from "../../lib/auth/trustedDevice.js";
+import { isOtpBypassEmail } from "../../lib/auth/otpBypass.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, computeNewAccountOverlay, isFullAdmin, isOwnScopeRole, ownOverlayFor } from "../../lib/permissions.js";
 
@@ -164,6 +165,15 @@ export async function login({ email, password, trustedDeviceToken }) {
   // doesn't reveal which emails have accounts.
   const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!user?.email || !valid) throw invalid();
+
+  // Test accounts only (OTP_BYPASS_EMAILS, unset by default — see
+  // lib/auth/otpBypass.js). After the password check, so this never turns a
+  // wrong password into a session; logged because skipping a second factor is
+  // worth seeing in the server log rather than happening quietly.
+  if (isOtpBypassEmail(user.email)) {
+    console.warn(`[auth] OTP bypass used for ${user.email} (OTP_BYPASS_EMAILS)`);
+    return { step: "AUTHENTICATED", ...(await issueTokenPair(user)) };
+  }
 
   if (user.emailVerifiedAt && (await verifyTrustedDevice(user.id, trustedDeviceToken))) {
     return { step: "AUTHENTICATED", ...(await issueTokenPair(user)) };

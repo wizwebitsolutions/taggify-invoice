@@ -7,6 +7,7 @@ import { planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 import { creatorPhaseLabels, phaseRowIds } from "../../lib/campaignPhases.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import { assertCanActOnPage, assertPageBooked } from "../../lib/pageOwnership.js";
+import { recomputePostQuota } from "../../lib/postQuota.js";
 
 export async function createLink(user, { campaignId, assetId, url, format, customAmount }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
@@ -39,7 +40,10 @@ async function createOneLink(user, asset, { campaignId, assetId, url, format, cu
   });
 
   await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: user.id } });
-  return link;
+  // Still submits past the booking (29 Sep — the creator may post extra), but
+  // an extra post is flagged so it never counts toward money (lib/postQuota.js).
+  const over = await recomputePostQuota(campaignId, assetId);
+  return { ...link, overQuota: over.includes(link.id) };
 }
 
 /**
@@ -120,7 +124,8 @@ export async function autoAttachLink(asset, { campaignId, url, format, cost }) {
     throw err;
   }
   await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: asset.ownerId } });
-  return link;
+  const over = await recomputePostQuota(campaignId, asset.id);
+  return { ...link, overQuota: over.includes(link.id) };
 }
 
 /**
@@ -214,19 +219,22 @@ export async function listLinks(user, filters) {
   if (filters.ownerId) where.AND = [...(where.AND ?? []), { asset: { ownerId: filters.ownerId } }];
   // Not on any invoice (22 Sep) — the invoice popup's "ready" list used to
   // go by status alone and could offer a drifted link that then failed on
-  // submit with "already on invoice INV-…". Since the Payments tab's admin
-  // payout is a second way to bill a link, "unbilled" now also excludes a
-  // link already on a payout — a link can be billed via a creator Invoice OR
-  // an admin Payout, never both.
+  // submit with "already on invoice INV-…". A link on a payout awaiting its
+  // receipt is off the list too (it'd be rejected the same way).
+  // Nor beyond its campaign booking (29 Sep): the raise-invoice modal selects
+  // everything this returns, so one over-quota post here made the whole raise
+  // fail with INELIGIBLE_LINKS (review finding).
   if (filters.unbilled) {
     where.invoiceItem = null;
     where.payoutItem = null;
+    where.overQuota = false;
   }
   // Payout eligibility mirrors "unbilled" from the other side: not on any
   // payout, AND not already on an invoice either (tasks.md #5).
   if (filters.unpaid) {
     where.payoutItem = null;
     where.invoiceItem = null;
+    where.overQuota = false;
   }
   if (filters.from || filters.to) {
     where.createdAt = {};

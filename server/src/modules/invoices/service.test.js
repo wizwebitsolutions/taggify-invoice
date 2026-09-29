@@ -7,7 +7,8 @@ import { ApiError } from "../../middleware/errorHandler.js";
 const mockPrisma = {
   link: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   invoice: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-  invoiceItem: { deleteMany: vi.fn() },
+  invoiceItem: { deleteMany: vi.fn(), count: vi.fn(async () => 0) },
+  payoutItem: { count: vi.fn(async () => 0) },
   linkStatusEvent: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
   campaign: { findFirst: vi.fn() },
   user: { findUnique: vi.fn() },
@@ -19,14 +20,26 @@ vi.mock("../notifications/service.js", () => ({ notify: vi.fn() }));
 vi.mock("../billing/service.js", () => ({ getApprovedForUser: vi.fn(async () => null) }));
 const mockCloudinary = {
   buildInvoiceAttachmentKey: vi.fn((id) => `invoice-attachments/${id}/uuid`),
+  buildInvoiceReceiptKey: vi.fn((id) => `invoice-receipts/${id}/uuid`),
   getUploadParams: vi.fn((publicId) => ({ uploadUrl: "https://upload", apiKey: "k", timestamp: 1, signature: "s", publicId })),
   objectExists: vi.fn(async () => true),
   publicUrlFor: vi.fn((id) => `https://cdn/${id}`),
 };
 vi.mock("../../lib/cloudinaryClient.js", () => mockCloudinary);
+// The over-quota rule is tested in lib/postQuota.test.js; here only that the gates call it.
+vi.mock("../../lib/postQuota.js", () => ({ refreshPostQuotaForLinks: vi.fn(async () => {}) }));
+const { refreshPostQuotaForLinks } = await import("../../lib/postQuota.js");
 
-const { bulkCreateInvoice, rejectInvoice, approveInvoice, markPaid, confirmAttachment, requestAttachmentUpload, removeAttachment } =
-  await import("./service.js");
+const {
+  bulkCreateInvoice,
+  rejectInvoice,
+  approveInvoice,
+  confirmAttachment,
+  requestAttachmentUpload,
+  removeAttachment,
+  requestInvoiceReceiptUpload,
+  confirmInvoiceReceipt,
+} = await import("./service.js");
 
 const admin = { id: "admin-1", role: "ADMIN" };
 // The links in link() below belong to creator-1 — the actor who may raise them.
@@ -99,12 +112,12 @@ describe("bulkCreateInvoice — eligibility (screenshot and insights are both op
     await expect(bulkCreateInvoice(creator, { linkIds: ["l1"], dueInDays: 15, isGstInvoice: false })).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("regression (24 Sep review): rejects a link Finance already paid out — a link is billed via an Invoice OR a Payout, never both", async () => {
+  it("regression (24 Sep review): rejects a link already on a payout awaiting its receipt — a link is on an Invoice OR a Payout", async () => {
     mockPrisma.link.findMany.mockResolvedValue([link({ id: "l1", url: "https://ig/p/7", payoutItem: { payoutId: "payout-1" } })]);
 
     await expect(bulkCreateInvoice(creator, { linkIds: ["l1"], dueInDays: 15, isGstInvoice: false })).rejects.toMatchObject({
       code: "INELIGIBLE_LINKS",
-      message: expect.stringContaining("https://ig/p/7 (already paid out by Taggify)"),
+      message: expect.stringContaining("https://ig/p/7 (already on a payout awaiting its receipt)"),
     });
     expect(mockPrisma.invoice.create).not.toHaveBeenCalled();
   });
@@ -140,6 +153,19 @@ describe("bulkCreateInvoice — eligibility (screenshot and insights are both op
     await expect(bulkCreateInvoice(creator, { linkIds: ["l1", "l2"], dueInDays: 15, isGstInvoice: false })).rejects.toMatchObject({
       code: "MIXED_CREATORS",
     });
+  });
+
+  // 29 Sep — "it's creator fault not admin/finance": a post beyond what the
+  // campaign booked for the page never goes on an invoice.
+  it("refuses a post beyond its page's booking, re-deriving the flags before anything is billed", async () => {
+    mockPrisma.link.findMany.mockResolvedValue([link({ id: "l1", url: "https://ig/p/extra", campaignId: "c1", assetId: "a1", overQuota: true })]);
+
+    await expect(bulkCreateInvoice(creator, { linkIds: ["l1"], dueInDays: 15, isGstInvoice: false })).rejects.toMatchObject({
+      code: "INELIGIBLE_LINKS",
+      message: expect.stringContaining("https://ig/p/extra (beyond the posts booked for this page on that campaign)"),
+    });
+    expect(refreshPostQuotaForLinks).toHaveBeenCalled();
+    expect(mockPrisma.invoice.create).not.toHaveBeenCalled();
   });
 });
 
@@ -185,13 +211,26 @@ describe("bulkCreateInvoice — creators only (user request, 13 Sep: \"invoice w
 
 describe("approveInvoice — admin sign-off, RAISED → APPROVED", () => {
   it("moves a RAISED invoice to APPROVED", async () => {
-    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "RAISED", creatorId: "creator-1" });
+    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "RAISED", creatorId: "creator-1", items: [] });
     mockPrisma.invoice.update.mockImplementation(async ({ data }) => ({ id: "inv-1", ...data }));
 
     const result = await approveInvoice("inv-1", admin);
 
     expect(mockPrisma.invoice.update).toHaveBeenCalledWith({ where: { id: "inv-1" }, data: { status: "APPROVED" } });
     expect(result.status).toBe("APPROVED");
+  });
+
+  // User decision, 29 Sep: an invoice carrying posts beyond the campaign's
+  // booking is flagged and blocked — rejected and re-raised, never approved
+  // (or paid) for more than was booked, and never rewritten in place.
+  it("refuses an invoice with posts beyond the booking, re-deriving the flags first", async () => {
+    const items = [{ link: { campaignId: "c1", assetId: "a1" } }, { link: { campaignId: "c1", assetId: "a1" } }];
+    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "RAISED", creatorId: "creator-1", items });
+    mockPrisma.invoiceItem.count.mockResolvedValue(1);
+
+    await expect(approveInvoice("inv-1", admin)).rejects.toMatchObject({ code: "OVER_QUOTA", statusCode: 409 });
+    expect(refreshPostQuotaForLinks).toHaveBeenCalledWith(items.map((i) => i.link));
+    expect(mockPrisma.invoice.update).not.toHaveBeenCalled();
   });
 
   it.each(["APPROVED", "PAID", "REJECTED", "DRAFT"])("refuses to approve a %s invoice", async (status) => {
@@ -260,33 +299,46 @@ describe("invoice attachment — the creator's own invoice document (12 Sep)", (
   });
 });
 
-describe("markPaid — only an APPROVED invoice can be paid (12 Sep: admin sign-off gates the money)", () => {
-  it("pays an APPROVED invoice", async () => {
-    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "APPROVED", creatorId: "creator-1" });
-    mockPrisma.invoice.update.mockImplementation(async ({ data }) => ({ id: "inv-1", ...data }));
+describe("requestInvoiceReceiptUpload / confirmInvoiceReceipt — Finance backfilling proof of payment onto a legacy standalone-paid invoice (28 Sep fix)", () => {
+  const standalonePaid = { id: "inv-1", status: "PAID", creatorId: "creator-1", items: [{ link: { payoutItem: null } }] };
+  const paidViaPayout = { id: "inv-1", status: "PAID", creatorId: "creator-1", items: [{ link: { payoutItem: { payoutId: "payout-1" } } }] };
 
-    const result = await markPaid("inv-1", finance);
-    expect(result.status).toBe("PAID");
+  it("mints an upload key for a standalone-paid invoice", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue(standalonePaid);
+    const params = await requestInvoiceReceiptUpload("inv-1");
+    expect(params.publicId).toBe("invoice-receipts/inv-1/uuid");
+  });
+
+  it("refuses to mint an upload key for an invoice paid through a payout — that receipt lives on the payout instead", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue(paidViaPayout);
+    await expect(requestInvoiceReceiptUpload("inv-1")).rejects.toMatchObject({ code: "PAID_VIA_PAYOUT" });
+  });
+
+  it("refuses an invoice that isn't paid yet", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue({ ...standalonePaid, status: "APPROVED" });
+    await expect(requestInvoiceReceiptUpload("inv-1")).rejects.toMatchObject({ code: "INVALID_STATUS" });
+  });
+
+  it("confirms the receipt once the object exists at the expected key", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue(standalonePaid);
+    mockPrisma.invoice.update.mockImplementation(async ({ data }) => ({ ...standalonePaid, ...data }));
+
+    const receipt = await confirmInvoiceReceipt("inv-1", finance, { publicId: "invoice-receipts/inv-1/uuid", fileName: "receipt.pdf" });
+    expect(receipt.name).toBe("receipt.pdf");
     expect(mockPrisma.invoice.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "PAID", paymentStatus: "COMPLETED" }) })
+      expect.objectContaining({ data: expect.objectContaining({ receiptPublicId: "invoice-receipts/inv-1/uuid", receiptName: "receipt.pdf", receiptUploadedById: finance.id }) })
     );
   });
 
-  it("refuses a RAISED invoice with a message pointing at approval", async () => {
-    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "RAISED", creatorId: "creator-1" });
-
-    await expect(markPaid("inv-1", finance)).rejects.toMatchObject({ code: "NOT_APPROVED", message: expect.stringContaining("approved") });
-    expect(mockPrisma.invoice.update).not.toHaveBeenCalled();
+  it("rejects a key that doesn't belong to this invoice", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue(standalonePaid);
+    await expect(confirmInvoiceReceipt("inv-1", finance, { publicId: "invoice-receipts/inv-2/uuid", fileName: "receipt.pdf" })).rejects.toMatchObject({ code: "KEY_MISMATCH" });
   });
 
-  it.each(["REJECTED", "DRAFT"])("refuses a %s invoice", async (status) => {
-    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status, creatorId: "creator-1" });
-    await expect(markPaid("inv-1", finance)).rejects.toMatchObject({ code: "NOT_APPROVED" });
-  });
-
-  it("still reports an already-paid invoice as ALREADY_PAID", async () => {
-    mockPrisma.invoice.findUnique.mockResolvedValue({ id: "inv-1", status: "PAID", creatorId: "creator-1" });
-    await expect(markPaid("inv-1", finance)).rejects.toMatchObject({ code: "ALREADY_PAID" });
+  it("rejects when the upload never actually completed", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue(standalonePaid);
+    mockCloudinary.objectExists.mockResolvedValueOnce(false);
+    await expect(confirmInvoiceReceipt("inv-1", finance, { publicId: "invoice-receipts/inv-1/uuid", fileName: "receipt.pdf" })).rejects.toMatchObject({ code: "UPLOAD_NOT_FOUND" });
   });
 });
 
@@ -347,5 +399,13 @@ describe("rejectInvoice — restores each link's actual prior status", () => {
     mockPrisma.invoice.findUnique.mockResolvedValue({ ...rejectedInvoice, status: "PAID" });
 
     await expect(rejectInvoice("inv-1", admin, { remarks: "x" })).rejects.toMatchObject({ code: "ALREADY_PAID" });
+  });
+
+  it("25 Sep review: refuses to reject an invoice whose links are on a payout awaiting its receipt", async () => {
+    mockPrisma.invoice.findUnique.mockResolvedValue(rejectedInvoice);
+    mockPrisma.payoutItem.count.mockResolvedValueOnce(1);
+
+    await expect(rejectInvoice("inv-1", admin, { remarks: "x" })).rejects.toMatchObject({ code: "ON_PAYOUT" });
+    expect(mockPrisma.invoice.update).not.toHaveBeenCalled();
   });
 });

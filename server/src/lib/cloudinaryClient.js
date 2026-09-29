@@ -34,6 +34,11 @@ export function buildPayoutReceiptKey(payoutId) {
   return `payout-receipts/${payoutId}/${randomUUID()}`;
 }
 
+/** Finance backfilling a proof-of-payment receipt directly onto an invoice paid without a Payout (legacy direct-mark-paid rows) — same layout. */
+export function buildInvoiceReceiptKey(invoiceId) {
+  return `invoice-receipts/${invoiceId}/${randomUUID()}`;
+}
+
 /**
  * Returns a short-lived signed upload payload so the client uploads the
  * binary directly to Cloudinary — the API server never touches the file bytes.

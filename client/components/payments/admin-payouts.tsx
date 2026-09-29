@@ -11,6 +11,7 @@ import { ArrowRightIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, Clo
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { PaySheet, shortDate } from "@/components/payments/pay-sheet";
+import { InvoiceReceiptUpload } from "@/components/payments/invoice-receipt-upload";
 import {
   PaymentsFilterBar,
   DEFAULT_FILTERS,
@@ -21,7 +22,17 @@ import {
   periodLabel,
   type FilterState,
 } from "@/components/payments/payments-filters";
-import { payments as paymentsApi, assets as assetsApi, ApiError, type Link, type PageOwner, type Payout, type PendingLink } from "@/lib/api-client";
+import {
+  payments as paymentsApi,
+  assets as assetsApi,
+  ApiError,
+  type Link,
+  type PageOwner,
+  type PaymentInvoice,
+  type Payout,
+  type PendingLink,
+  type PaidLedgerRow,
+} from "@/lib/api-client";
 import { money, compactNumber, initialsOf, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -31,19 +42,37 @@ import { cn } from "@/lib/utils";
  * page and month; pick one vendor's links and pay them from a single screen.
  * Paid shows each payout made with its links, tax split and receipt. A link
  * that's been paid (or sits on an unfinished draft) never shows on Pending.
+ *
+ * 25 Sep: creator-raised invoices sit in the same list (paid whole, alongside
+ * unbilled links), the tiles are Total dues / Due this month / Paid this
+ * month / 30+ days.
+ *
+ * 28 Sep: paying an invoice off directly (no receipt, no TDS) was removed —
+ * every invoice payment now goes through this same PaySheet, so a paid
+ * invoice always ends up in the Paid tab's merged ledger (a real Payout, or —
+ * for invoices paid the old way before this fix — a legacy standalone row).
+ * The Invoices sub-tab below only ever shows what's still owed; the old
+ * Due/Paid/All switch is gone since "Paid"/"All" would just duplicate the
+ * Paid tab now.
  */
 export function AdminPayouts({ token }: { token: string }) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"pending" | "paid">("pending");
+  const [tab, setTab] = useState<"pending" | "invoices" | "paid">("pending");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const debouncedQ = useDebounced(filters.q);
   const apiFilters = toApiFilters(filters, debouncedQ);
 
   const ownersQuery = useQuery({ queryKey: ["asset-owners"], queryFn: () => assetsApi.owners(token) });
-  const pendingQuery = useQuery({ queryKey: ["payments", "pending", apiFilters], queryFn: () => paymentsApi.listPending(token, apiFilters) });
+  // One read covers both the Pending and Invoices tabs — listPendingLinks
+  // always returns unbilled links (`items`) and owed invoices (`invoices`)
+  // together now that "paid"/"all" invoice filtering moved to the Paid tab.
+  const pendingQuery = useQuery({
+    queryKey: ["payments", "pending", apiFilters],
+    queryFn: () => paymentsApi.listPending(token, apiFilters),
+  });
   const paidQuery = useQuery({
     queryKey: ["payments", "paid", apiFilters],
-    queryFn: () => paymentsApi.listPayouts(token, { ...apiFilters, creatorId: apiFilters.ownerId, status: "PAID", pageSize: 100 }),
+    queryFn: () => paymentsApi.listPaid(token, { ...apiFilters, creatorId: apiFilters.ownerId }),
   });
   // Unfinished payouts, regardless of filters — their links are locked off
   // Pending until someone attaches the receipt or cancels.
@@ -54,49 +83,44 @@ export function AdminPayouts({ token }: { token: string }) {
     queryClient.invalidateQueries({ queryKey: ["links"] });
   };
 
-  // The summary tiles are filter-independent: everything still owed, and this calendar month's payouts.
+  // The summary tiles are filter-independent (server-side totals): everything owed, what falls due this month, what's been paid this month, and what's 30+ days overdue.
   const monthKey = currentMonthKey();
-  const monthRange = periodRange({ kind: "month", month: monthKey });
-  const allPendingQuery = useQuery({ queryKey: ["payments", "pending", {}], queryFn: () => paymentsApi.listPending(token, {}) });
-  const monthPaidQuery = useQuery({
-    queryKey: ["payments", "paid-month", monthKey],
-    queryFn: () => paymentsApi.listPayouts(token, { status: "PAID", ...monthRange, pageSize: 100 }),
-  });
+  const summaryQuery = useQuery({ queryKey: ["payments", "summary"], queryFn: () => paymentsApi.summary(token) });
 
   const pending = pendingQuery.data?.items ?? [];
+  const pendingInvoices = pendingQuery.data?.invoices ?? [];
   const paid = paidQuery.data?.items ?? [];
-  const allPending = allPendingQuery.data?.items ?? [];
-  const monthPaid = monthPaidQuery.data?.items ?? [];
+  const summary = summaryQuery.data;
   const monthLabel = periodLabel({ kind: "month", month: monthKey });
-  const sum = <T,>(xs: T[], pick: (x: T) => string | number) => xs.reduce((s, x) => s + Number(pick(x)), 0);
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 md:mx-0 md:grid md:grid-cols-3 md:gap-4 md:overflow-visible md:px-0 md:pb-0" data-testid="payments-kpis">
+      <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0" data-testid="payments-kpis">
         <KpiCard
           className="w-[190px] shrink-0 md:w-auto"
           icon={ClockIcon}
-          label="Pending payout"
-          value={money(sum(allPending, (l) => l.cost))}
-          foot={
-            (allPendingQuery.data?.total ?? 0) > allPending.length
-              ? `Latest ${allPending.length} of ${allPendingQuery.data?.total} links — filter to see the rest`
-              : `${allPending.length} link${allPending.length === 1 ? "" : "s"} · ${new Set(allPending.map((l) => l.asset.ownerId)).size} page owners`
-          }
-          tone={allPending.length > 0 ? "violet" : undefined}
+          label="Total dues"
+          value={money(summary?.totalDues ?? 0)}
+          foot={`${summary?.dueCount ?? 0} unpaid link${summary?.dueCount === 1 ? "" : "s"} & invoice${summary?.dueCount === 1 ? "" : "s"}`}
+          tone={(summary?.totalDues ?? 0) > 0 ? "violet" : undefined}
           active={tab === "pending"}
-          onClick={() => setTab("pending")}
+          onClick={() => {
+            setTab("pending");
+          }}
+        />
+        <KpiCard
+          className="w-[190px] shrink-0 md:w-auto"
+          icon={InvoiceIcon}
+          label="Due this month"
+          value={money(summary?.dueThisMonth ?? 0)}
+          foot={`Falling due in ${monthLabel}`}
         />
         <KpiCard
           className="w-[190px] shrink-0 md:w-auto"
           icon={CheckCircleIcon}
           label={`Paid in ${monthLabel}`}
-          value={money(sum(monthPaid, (p) => p.netAmount))}
-          foot={
-            (monthPaidQuery.data?.total ?? 0) > monthPaid.length
-              ? `Latest ${monthPaid.length} of ${monthPaidQuery.data?.total} payouts`
-              : `${monthPaid.length} payout${monthPaid.length === 1 ? "" : "s"}`
-          }
+          value={money(summary?.paidThisMonth ?? 0)}
+          foot="Payouts + invoices marked paid"
           active={tab === "paid" && filters.period.kind === "month" && filters.period.month === monthKey}
           onClick={() => {
             setTab("paid");
@@ -105,10 +129,11 @@ export function AdminPayouts({ token }: { token: string }) {
         />
         <KpiCard
           className="w-[190px] shrink-0 md:w-auto"
-          icon={InvoiceIcon}
-          label={`TDS withheld · ${monthLabel}`}
-          value={money(sum(monthPaid, (p) => p.tdsAmount))}
-          foot={`GST paid ${money(sum(monthPaid, (p) => p.gstAmount))}`}
+          icon={WalletIcon}
+          label="30+ days"
+          value={money(summary?.overdue30 ?? 0)}
+          foot="Overdue by more than 30 days"
+          tone={(summary?.overdue30 ?? 0) > 0 ? "rose" : undefined}
         />
       </div>
 
@@ -116,6 +141,7 @@ export function AdminPayouts({ token }: { token: string }) {
         {(
           [
             ["pending", "Pending", pendingQuery.data?.total],
+            ["invoices", "Invoices", pendingQuery.data ? pendingInvoices.length : undefined],
             ["paid", "Paid", paidQuery.data?.total],
           ] as const
         ).map(([key, label, total]) => (
@@ -142,15 +168,21 @@ export function AdminPayouts({ token }: { token: string }) {
         state={filters}
         onChange={setFilters}
         owners={ownersQuery.data}
-        dateLabel={tab === "pending" ? "Posted in" : "Paid in"}
-        summary={tab === "pending" ? pendingSummary(pending) : paidSummary(paid)}
+        dateLabel={tab === "pending" ? "Posted in" : tab === "invoices" ? "Raised in" : "Paid in"}
+        summary={tab === "pending" ? pendingSummary(pending, []) : tab === "invoices" ? pendingSummary([], pendingInvoices) : paidSummary(paid)}
       />
-      <TruncationNote shown={tab === "pending" ? pending.length : paid.length} total={tab === "pending" ? pendingQuery.data?.total : paidQuery.data?.total} />
+      <TruncationNote
+        shown={tab === "paid" ? paid.length : tab === "invoices" ? pendingInvoices.length : pending.length}
+        total={tab === "paid" ? paidQuery.data?.total : tab === "pending" ? pendingQuery.data?.total : undefined}
+      />
 
-      {tab === "pending" ? (
+      {tab !== "paid" ? (
         <PendingTab
+          key={tab}
           token={token}
-          links={pending}
+          mode={tab}
+          links={tab === "pending" ? pending : []}
+          invoices={tab === "invoices" ? pendingInvoices : []}
           isLoading={pendingQuery.isLoading}
           error={pendingQuery.error}
           drafts={draftsQuery.data?.items ?? []}
@@ -162,7 +194,7 @@ export function AdminPayouts({ token }: { token: string }) {
           onChanged={invalidate}
         />
       ) : (
-        <PaidTab payouts={paid} isLoading={paidQuery.isLoading} error={paidQuery.error} />
+        <PaidTab rows={paid} isLoading={paidQuery.isLoading} error={paidQuery.error} onChanged={invalidate} token={token} />
       )}
     </div>
   );
@@ -191,16 +223,20 @@ export function TruncationNote({ shown, total }: { shown: number; total: number 
   );
 }
 
-function pendingSummary(links: PendingLink[]) {
-  const vendors = new Set(links.map((l) => l.asset.ownerId)).size;
-  const total = links.reduce((s, l) => s + Number(l.cost), 0);
-  return `${links.length} link${links.length === 1 ? "" : "s"} · ${vendors} vendor${vendors === 1 ? "" : "s"} · ${money(total)}`;
+function pendingSummary(links: PendingLink[], invoices: PaymentInvoice[]) {
+  const vendors = new Set([...links.map((l) => l.asset.ownerId), ...invoices.map((i) => i.creatorId)]).size;
+  const owed = invoices.filter((i) => i.status !== "PAID");
+  const total = links.reduce((s, l) => s + Number(l.cost), 0) + owed.reduce((s, i) => s + Number(i.amount), 0);
+  const inv = invoices.length ? ` · ${invoices.length} invoice${invoices.length === 1 ? "" : "s"}` : "";
+  return `${links.length} link${links.length === 1 ? "" : "s"}${inv} · ${vendors} vendor${vendors === 1 ? "" : "s"} · ${money(total)} owed`;
 }
 
-function paidSummary(payouts: Payout[]) {
-  const net = payouts.reduce((s, p) => s + Number(p.netAmount), 0);
-  const tds = payouts.reduce((s, p) => s + Number(p.tdsAmount), 0);
-  return `${payouts.length} payout${payouts.length === 1 ? "" : "s"} · ${money(net)} paid · ${money(tds)} TDS withheld`;
+function paidSummary(rows: PaidLedgerRow[]) {
+  // TDS only ever exists on a real Payout — a legacy standalone-paid invoice
+  // (rows[].kind === "invoice") never had it withheld, so it contributes 0.
+  const net = rows.reduce((s, r) => s + Number(r.kind === "payout" ? r.payout.netAmount : r.invoice.amount), 0);
+  const tds = rows.reduce((s, r) => s + Number(r.kind === "payout" ? r.payout.tdsAmount : 0), 0);
+  return `${rows.length} payment${rows.length === 1 ? "" : "s"} · ${money(net)} paid · ${money(tds)} TDS withheld`;
 }
 
 /** Latest scraped views, or null — Apify reports -1 for "unknown". */
@@ -213,7 +249,9 @@ const PENDING_COLS = "md:grid-cols-[20px_minmax(0,2.2fr)_minmax(0,1.1fr)_minmax(
 
 function PendingTab({
   token,
+  mode,
   links,
+  invoices,
   isLoading,
   error,
   drafts,
@@ -222,7 +260,9 @@ function PendingTab({
   onChanged,
 }: {
   token: string;
+  mode: "pending" | "invoices";
   links: PendingLink[];
+  invoices: PaymentInvoice[];
   isLoading: boolean;
   error: unknown;
   drafts: Payout[];
@@ -249,40 +289,53 @@ function PendingTab({
   const [payingVendor, setPayingVendor] = useState<PageOwner | null>(null);
   const [resuming, setResuming] = useState<Payout | null>(null);
 
+  // Selection keys: "l:<linkId>" for an unbilled link, "i:<invoiceId>" for a raised invoice (paid whole).
+  const [openInvoices, setOpenInvoices] = useState<Set<string>>(new Set());
   const groups = useMemo(() => {
-    const byOwner = new Map<string, { owner: PageOwner; links: PendingLink[] }>();
-    for (const link of links) {
-      const ownerId = link.asset.ownerId;
+    const byOwner = new Map<string, { owner: PageOwner; links: PendingLink[]; invoices: PaymentInvoice[] }>();
+    const ownerOf = (ownerId: string, fromRow?: PageOwner | null) => {
       if (!byOwner.has(ownerId)) {
-        const owner = link.asset.owner ?? owners.find((o) => o.id === ownerId) ?? { id: ownerId, name: null, phoneNumber: null };
-        byOwner.set(ownerId, { owner, links: [] });
+        const owner = fromRow ?? owners.find((o) => o.id === ownerId) ?? { id: ownerId, name: null, phoneNumber: null };
+        byOwner.set(ownerId, { owner, links: [], invoices: [] });
       }
-      byOwner.get(ownerId)!.links.push(link);
-    }
+      return byOwner.get(ownerId)!;
+    };
+    for (const link of links) ownerOf(link.asset.ownerId, link.asset.owner).links.push(link);
+    for (const inv of invoices) ownerOf(inv.creatorId, inv.creator).invoices.push(inv);
     return [...byOwner.values()];
-  }, [links, owners]);
+  }, [links, invoices, owners]);
+
+  /** Everything in a group that can be ticked: unbilled links, and owed invoices — a paid invoice never is. */
+  const selectableOf = (g: { links: PendingLink[]; invoices: PaymentInvoice[] }) => [
+    ...g.links.map((l) => ({ key: `l:${l.id}`, amount: Number(l.cost) })),
+    ...g.invoices.filter((i) => i.selectable).map((i) => ({ key: `i:${i.id}`, amount: Number(i.amount) })),
+  ];
+  const validKeys = useMemo(() => new Set(groups.flatMap(selectableOf).map((e) => e.key)), [groups]);
 
   // Anything no longer on the list (filtered out, or paid meanwhile) drops out of the selection.
-  const chosen = links.filter((l) => selected.has(l.id));
-  const vendorId = chosen[0]?.asset.ownerId ?? null;
+  const chosenLinks = links.filter((l) => selected.has(`l:${l.id}`));
+  const chosenInvoices = invoices.filter((i) => i.selectable && selected.has(`i:${i.id}`));
+  const vendorId = chosenLinks[0]?.asset.ownerId ?? chosenInvoices[0]?.creatorId ?? null;
 
-  // One vendor per payout: picking another vendor's link starts a fresh selection.
-  function toggle(link: PendingLink) {
+  // One vendor per payout: picking another vendor's row starts a fresh selection.
+  function toggle(key: string, ownerId: string) {
     setSelected((prev) => {
-      const sameVendor = vendorId === null || vendorId === link.asset.ownerId;
-      const next = sameVendor ? new Set([...prev].filter((id) => links.some((l) => l.id === id))) : new Set<string>();
-      next.has(link.id) ? next.delete(link.id) : next.add(link.id);
+      const sameVendor = vendorId === null || vendorId === ownerId;
+      const next = sameVendor ? new Set([...prev].filter((k) => validKeys.has(k))) : new Set<string>();
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
-  function toggleGroup(groupLinks: PendingLink[]) {
-    const allIn = groupLinks.every((l) => selected.has(l.id));
-    setSelected(allIn ? new Set() : new Set(groupLinks.map((l) => l.id)));
+  function toggleGroup(group: { links: PendingLink[]; invoices: PaymentInvoice[] }) {
+    const keys = selectableOf(group).map((e) => e.key);
+    const allIn = keys.length > 0 && keys.every((k) => selected.has(k));
+    setSelected(allIn ? new Set() : new Set(keys));
   }
-  /** "Select [N] of M" (24 Sep): the vendor's first N links in list order; any other vendor's selection is dropped. */
-  function selectFirst(groupLinks: PendingLink[], n: number) {
-    const count = Math.max(0, Math.min(Number.isFinite(n) ? Math.floor(n) : 0, groupLinks.length));
-    setSelected(new Set(groupLinks.slice(0, count).map((l) => l.id)));
+  /** "Select [N] of M" (24 Sep): the vendor's first N payable rows in list order (links, then invoices); any other vendor's selection is dropped. */
+  function selectFirst(group: { links: PendingLink[]; invoices: PaymentInvoice[] }, n: number) {
+    const keys = selectableOf(group).map((e) => e.key);
+    const count = Math.max(0, Math.min(Number.isFinite(n) ? Math.floor(n) : 0, keys.length));
+    setSelected(new Set(keys.slice(0, count)));
   }
 
   const cancelDraft = useMutation({ mutationFn: (id: string) => paymentsApi.cancelPayout(token, id), onSuccess: onChanged });
@@ -336,24 +389,27 @@ function PendingTab({
             <ErrorNotice message={error instanceof ApiError ? error.message : "Couldn't load pending links."} />
           </div>
         ) : groups.length === 0 ? (
-          <PaymentsEmpty icon={CheckCircleIcon} title="All caught up" text="Nothing pending for these filters — every matching link has been paid or invoiced." />
+          <PaymentsEmpty icon={CheckCircleIcon} title="All caught up" text={mode === "invoices" ? "No invoices for these filters." : "Nothing pending for these filters — every uninvoiced link has been paid out."} />
         ) : (
           groups.map((group) => {
-            const allIn = group.links.every((l) => selected.has(l.id));
+            const selectable = selectableOf(group);
+            const allIn = selectable.length > 0 && selectable.every((e) => selected.has(e.key));
             const pages = new Set(group.links.map((l) => l.assetId)).size;
             const name = personLabel(group.owner);
+            const noun = mode === "invoices" ? "invoices" : "links";
             const open = isOpen(group.owner.id);
-            const groupSelected = group.links.filter((l) => selected.has(l.id));
-            const groupTotal = group.links.reduce((s, l) => s + Number(l.cost), 0);
+            const groupSelected = selectable.filter((e) => selected.has(e.key));
+            const groupTotal = selectable.reduce((s, e) => s + e.amount, 0);
             return (
               <Fragment key={group.owner.id}>
                 <div className={cn("flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-border px-5 py-3", open ? "bg-surface-2" : "hover:bg-surface-2")} data-testid="pending-vendor-group">
                   <input
                     type="checkbox"
-                    aria-label={`Select all of ${name}'s links`}
+                    aria-label={`Select all of ${name}'s ${noun}`}
                     checked={allIn}
-                    onChange={() => toggleGroup(group.links)}
-                    className="h-4 w-4 shrink-0 accent-[var(--ink)]"
+                    disabled={selectable.length === 0}
+                    onChange={() => toggleGroup(group)}
+                    className="h-4 w-4 shrink-0 accent-[var(--ink)] disabled:opacity-40"
                   />
                   <button type="button" aria-expanded={open} onClick={() => toggleOpen(group.owner.id)} className="group flex min-w-0 items-center gap-3 text-left">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[0.75rem] font-semibold text-text-2 ring-1 ring-inset ring-border">
@@ -362,67 +418,78 @@ function PendingTab({
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate text-[0.875rem] font-semibold group-hover:underline">{name}</span>
                       <span className="flex flex-wrap items-center gap-1.5 text-[0.72rem] text-text-muted">
-                        <span className="rounded-full border border-border bg-surface px-1.5 py-px tabular-nums">
-                          {pages} page{pages === 1 ? "" : "s"}
-                        </span>
-                        <span className="rounded-full border border-border bg-surface px-1.5 py-px tabular-nums">
-                          {group.links.length} link{group.links.length === 1 ? "" : "s"}
-                        </span>
+                        {group.links.length > 0 && (
+                          <>
+                            <span className="rounded-full border border-border bg-surface px-1.5 py-px tabular-nums">
+                              {pages} page{pages === 1 ? "" : "s"}
+                            </span>
+                            <span className="rounded-full border border-border bg-surface px-1.5 py-px tabular-nums">
+                              {group.links.length} link{group.links.length === 1 ? "" : "s"}
+                            </span>
+                          </>
+                        )}
+                        {group.invoices.length > 0 && (
+                          <span className="rounded-full border border-border bg-surface px-1.5 py-px tabular-nums">
+                            {group.invoices.length} invoice{group.invoices.length === 1 ? "" : "s"}
+                          </span>
+                        )}
                         <span className="hidden text-text-faint sm:inline">{group.owner.email ?? group.owner.phoneNumber}</span>
                       </span>
                     </span>
                   </button>
                   <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1.5">
                     {/* "Select [N] of M" as a stepper (24 Sep): type a number or tap −/+. */}
-                    <div className="flex items-center gap-1.5 text-[0.75rem] text-text-muted">
-                      <span className="hidden sm:inline">Select</span>
-                      <div className="flex h-8 items-center overflow-hidden rounded-md border border-border-strong bg-surface shadow-card">
-                        <button
-                          type="button"
-                          aria-label={`One fewer of ${name}'s links`}
-                          disabled={groupSelected.length === 0}
-                          onClick={() => selectFirst(group.links, groupSelected.length - 1)}
-                          className="flex h-full w-7 items-center justify-center text-text-2 hover:bg-surface-2 disabled:opacity-40"
-                        >
-                          −
-                        </button>
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={0}
-                          max={group.links.length}
-                          placeholder="0"
-                          aria-label={`Number of ${name}'s links to select`}
-                          value={groupSelected.length || ""}
-                          onChange={(e) => {
-                            if (e.target.value === "" && e.target.validity.badInput) return;
-                            selectFirst(group.links, Number(e.target.value));
-                          }}
-                          className="h-full w-9 border-x border-border bg-transparent text-center text-[0.8125rem] font-medium tabular-nums text-text [appearance:textfield] focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        />
-                        <button
-                          type="button"
-                          aria-label={`One more of ${name}'s links`}
-                          disabled={groupSelected.length >= group.links.length}
-                          onClick={() => selectFirst(group.links, groupSelected.length + 1)}
-                          className="flex h-full w-7 items-center justify-center text-text-2 hover:bg-surface-2 disabled:opacity-40"
-                        >
-                          +
-                        </button>
+                    {selectable.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-[0.75rem] text-text-muted">
+                        <span className="hidden sm:inline">Select</span>
+                        <div className="flex h-8 items-center overflow-hidden rounded-md border border-border-strong bg-surface shadow-card">
+                          <button
+                            type="button"
+                            aria-label={`One fewer of ${name}'s ${noun}`}
+                            disabled={groupSelected.length === 0}
+                            onClick={() => selectFirst(group, groupSelected.length - 1)}
+                            className="flex h-full w-7 items-center justify-center text-text-2 hover:bg-surface-2 disabled:opacity-40"
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            max={selectable.length}
+                            placeholder="0"
+                            aria-label={`Number of ${name}'s ${noun} to select`}
+                            value={groupSelected.length || ""}
+                            onChange={(e) => {
+                              if (e.target.value === "" && e.target.validity.badInput) return;
+                              selectFirst(group, Number(e.target.value));
+                            }}
+                            className="h-full w-9 border-x border-border bg-transparent text-center text-[0.8125rem] font-medium tabular-nums text-text [appearance:textfield] focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          />
+                          <button
+                            type="button"
+                            aria-label={`One more of ${name}'s ${noun}`}
+                            disabled={groupSelected.length >= selectable.length}
+                            onClick={() => selectFirst(group, groupSelected.length + 1)}
+                            className="flex h-full w-7 items-center justify-center text-text-2 hover:bg-surface-2 disabled:opacity-40"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <span className="tabular-nums">of {selectable.length}</span>
                       </div>
-                      <span className="tabular-nums">of {group.links.length}</span>
-                    </div>
+                    )}
                     <span className="text-[0.8438rem] tabular-nums" data-testid="vendor-amount">
                       {groupSelected.length > 0 ? (
                         <>
-                          <b className="font-semibold">{money(groupSelected.reduce((s, l) => s + Number(l.cost), 0))}</b>
+                          <b className="font-semibold">{money(groupSelected.reduce((s, e) => s + e.amount, 0))}</b>
                           <span className="text-text-faint"> of {money(groupTotal)}</span>
                         </>
                       ) : (
                         <b className="font-semibold">{money(groupTotal)}</b>
                       )}
                     </span>
-                    {/* Pay lives on the vendor's own row (24 Sep) — only while some of their links are selected. */}
+                    {/* Pay lives on the vendor's own row (24 Sep) — only while some of their rows are selected. */}
                     {groupSelected.length > 0 && (
                       <Button size="sm" onClick={() => setPayingVendor(group.owner)} data-testid="pay-vendor">
                         Pay {name.split(" ")[0]} · {groupSelected.length} <ArrowRightIcon className="h-3.5 w-3.5" />
@@ -440,7 +507,7 @@ function PendingTab({
                   </button>
                 </div>
                 {open && group.links.map((link) => {
-                  const on = selected.has(link.id);
+                  const on = selected.has(`l:${link.id}`);
                   const otherVendor = vendorId !== null && vendorId !== link.asset.ownerId;
                   return (
                     <div
@@ -457,7 +524,7 @@ function PendingTab({
                         type="checkbox"
                         aria-label={`Select ${link.campaign?.title ?? "link"} on @${link.asset.handle}`}
                         checked={on}
-                        onChange={() => toggle(link)}
+                        onChange={() => toggle(`l:${link.id}`, link.asset.ownerId)}
                         className="h-4 w-4 accent-[var(--ink)]"
                       />
                       <button type="button" onClick={() => setDetail(link)} className="flex min-w-0 flex-col text-left">
@@ -485,6 +552,90 @@ function PendingTab({
                     </div>
                   );
                 })}
+                {open && group.invoices.map((inv) => {
+                  const on = inv.selectable && selected.has(`i:${inv.id}`);
+                  const otherVendor = vendorId !== null && vendorId !== inv.creatorId;
+                  const expanded = openInvoices.has(inv.id);
+                  return (
+                    <Fragment key={inv.id}>
+                      <div
+                        data-testid="pending-invoice-row"
+                        data-selectable={inv.selectable ? "true" : "false"}
+                        className={cn(
+                          "grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-3.5 gap-y-1 border-b border-border px-5 py-3 transition-colors md:gap-y-0",
+                          PENDING_COLS,
+                          on ? "bg-surface-2" : "hover:bg-surface-2",
+                          (otherVendor || !inv.selectable) && "opacity-60"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          aria-label={`Select invoice ${inv.invoiceNumber}`}
+                          checked={on}
+                          disabled={!inv.selectable}
+                          onChange={() => toggle(`i:${inv.id}`, inv.creatorId)}
+                          className="h-4 w-4 accent-[var(--ink)] disabled:cursor-not-allowed"
+                        />
+                        <button
+                          type="button"
+                          aria-expanded={expanded}
+                          onClick={() =>
+                            setOpenInvoices((prev) => {
+                              const next = new Set(prev);
+                              next.has(inv.id) ? next.delete(inv.id) : next.add(inv.id);
+                              return next;
+                            })
+                          }
+                          className="flex min-w-0 flex-col text-left"
+                        >
+                          <span className="truncate text-[0.8438rem] font-medium hover:underline">Invoice {inv.invoiceNumber}</span>
+                          <span className="truncate text-[0.72rem] text-text-faint">
+                            {inv.links.length} link{inv.links.length === 1 ? "" : "s"} · {inv.isGstInvoice ? "GST invoice" : "no GST"} · paid in full only
+                            {(inv.overQuotaCount ?? 0) > 0 && (
+                              // Why the checkbox is off (29 Sep): posts beyond their booking — it has to be rejected and re-raised, not paid.
+                              <span className="font-semibold text-rose" data-testid="pending-invoice-over-quota">
+                                {" "}
+                                · {inv.overQuotaCount} over the booking — reject to re-raise
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                        <span className="hidden truncate text-[0.8125rem] text-text-2 md:block">{[...new Set(inv.links.map((l) => `@${l.asset?.handle ?? "—"}`))].join(", ")}</span>
+                        <span className="hidden text-[0.8125rem] text-text-2 md:block">Invoice</span>
+                        <span className="hidden text-[0.8125rem] text-text-2 md:block" title={inv.status === "PAID" ? "Paid on" : "Due"}>
+                          {inv.status === "PAID" ? (inv.paidAt ? shortDate(inv.paidAt) : "—") : inv.dueDate ? shortDate(inv.dueDate) : "—"}
+                        </span>
+                        <span className="hidden md:block">
+                          <StatusPill status={inv.status} />
+                        </span>
+                        <span className="text-right text-[0.8438rem] font-semibold tabular-nums">{money(inv.amount)}</span>
+                        <button
+                          type="button"
+                          aria-label={expanded ? "Hide invoice links" : "Show invoice links"}
+                          onClick={() =>
+                            setOpenInvoices((prev) => {
+                              const next = new Set(prev);
+                              next.has(inv.id) ? next.delete(inv.id) : next.add(inv.id);
+                              return next;
+                            })
+                          }
+                          className="hidden text-text-faint hover:text-text md:block"
+                        >
+                          <ChevronRightIcon className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")} />
+                        </button>
+                      </div>
+                      {expanded &&
+                        inv.links.map((l) => (
+                          <div key={l.id} data-testid="pending-invoice-link" className="flex items-center gap-3 border-b border-border bg-surface-2 px-5 py-2 pl-[52px] text-[0.78rem] text-text-2">
+                            <span className="min-w-0 flex-1 truncate">
+                              {l.campaign?.title ?? "—"} · @{l.asset?.handle ?? "—"} · <span className="capitalize">{l.format}</span>
+                            </span>
+                            <span className="tabular-nums">{money(l.cost ?? 0)}</span>
+                          </div>
+                        ))}
+                    </Fragment>
+                  );
+                })}
               </Fragment>
             );
           })
@@ -498,11 +649,19 @@ function PendingTab({
           mode="new"
           token={token}
           vendor={payingVendor}
-          links={chosen}
+          links={chosenLinks}
+          invoices={chosenInvoices}
           onRemoveLink={(id) =>
             setSelected((prev) => {
               const next = new Set(prev);
-              next.delete(id);
+              next.delete(`l:${id}`);
+              return next;
+            })
+          }
+          onRemoveInvoice={(id) =>
+            setSelected((prev) => {
+              const next = new Set(prev);
+              next.delete(`i:${id}`);
               return next;
             })
           }
@@ -550,7 +709,47 @@ function PendingTab({
 
 const PAID_COLS = "md:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,0.4fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.6fr)_16px]";
 
-function PaidTab({ payouts, isLoading, error }: { payouts: Payout[]; isLoading: boolean; error: unknown }) {
+/** Normalizes a Payout row or a legacy standalone-paid Invoice row onto the same shape PaidTab renders — see PaidLedgerRow. Exported for creator-payments.tsx's own Paid list. */
+export function paidRowView(row: PaidLedgerRow) {
+  if (row.kind === "payout") {
+    const p = row.payout;
+    return {
+      id: p.id,
+      paidAt: p.paidAt,
+      vendor: p.creator,
+      by: p.markedPaidBy?.name ?? p.createdBy?.name ?? "—",
+      items: (p.items ?? []).map((i) => ({ id: i.id, amount: i.amount, link: i.link })),
+      subtotal: p.subtotal,
+      gstShown: p.isGstInvoice,
+      gstAmount: p.gstAmount,
+      tds: p.tdsPercent ? { percent: Number(p.tdsPercent), amount: p.tdsAmount } : null,
+      net: p.netAmount,
+      utr: p.utr,
+      receiptUrl: p.receipt?.url ?? null,
+      legacy: false as const,
+    };
+  }
+  const inv = row.invoice;
+  return {
+    id: inv.id,
+    paidAt: inv.paidAt,
+    vendor: inv.creator,
+    by: null,
+    items: inv.links.map((l) => ({ id: l.id, amount: l.cost ?? "0", link: l })),
+    subtotal: inv.subtotal,
+    gstShown: inv.isGstInvoice,
+    gstAmount: inv.gstAmount,
+    // A standalone-paid invoice never had TDS withheld — it was paid directly,
+    // outside the Payout flow that's the only place TDS is applied.
+    tds: null,
+    net: inv.amount,
+    utr: null,
+    receiptUrl: inv.receipt?.url ?? null,
+    legacy: true as const,
+  };
+}
+
+function PaidTab({ rows, isLoading, error, onChanged, token }: { rows: PaidLedgerRow[]; isLoading: boolean; error: unknown; onChanged: () => void; token: string }) {
   const [open, setOpen] = useState<string | null>(null);
 
   return (
@@ -569,53 +768,63 @@ function PaidTab({ payouts, isLoading, error }: { payouts: Payout[]; isLoading: 
         <div className="p-5">
           <ErrorNotice message={error instanceof ApiError ? error.message : "Couldn't load payouts."} />
         </div>
-      ) : payouts.length === 0 ? (
+      ) : rows.length === 0 ? (
         <PaymentsEmpty icon={WalletIcon} title="No payouts yet" text="Payouts show up here once a receipt is attached. Try another month or clear the filters." />
       ) : (
-        payouts.map((p) => {
-          const expanded = open === p.id;
-          const pages = [...new Set((p.items ?? []).map((i) => i.link.asset?.handle).filter(Boolean))];
+        rows.map((row) => {
+          const v = paidRowView(row);
+          const expanded = open === v.id;
+          const pages = [...new Set(v.items.map((i) => i.link.asset?.handle).filter(Boolean))];
           return (
-            <div key={p.id} className="border-b border-border" data-testid="paid-row">
+            <div key={v.id} className="border-b border-border" data-testid="paid-row" data-kind={row.kind}>
               <div className={cn("grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-5 py-3.5", PAID_COLS)}>
-                <span className="text-[0.8125rem] tabular-nums text-text-2">{p.paidAt ? shortDate(p.paidAt) : "—"}</span>
-                <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : p.id)} className="flex min-w-0 flex-col text-left">
-                  <span className="truncate text-[0.8438rem] font-medium hover:underline">{personLabel(p.creator)}</span>
-                  <span className="truncate text-[0.72rem] text-text-faint">by {p.markedPaidBy?.name ?? p.createdBy?.name ?? "—"}</span>
+                <span className="text-[0.8125rem] tabular-nums text-text-2">{v.paidAt ? shortDate(v.paidAt) : "—"}</span>
+                <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : v.id)} className="flex min-w-0 flex-col text-left">
+                  <span className="truncate text-[0.8438rem] font-medium hover:underline">{personLabel(v.vendor)}</span>
+                  <span className="truncate text-[0.72rem] text-text-faint">{v.legacy ? "invoice paid directly · no TDS on file" : `by ${v.by}`}</span>
                 </button>
                 <span className="hidden truncate text-[0.8125rem] text-text-2 md:block">{pages.map((h) => `@${h}`).join(", ") || "—"}</span>
-                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{p.items?.length ?? 0}</span>
-                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{money(p.subtotal)}</span>
-                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{p.isGstInvoice ? money(p.gstAmount) : "—"}</span>
-                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{p.tdsPercent ? `${Number(p.tdsPercent)}% · −${money(p.tdsAmount)}` : "—"}</span>
-                <span className="text-right text-[0.9rem] font-semibold tabular-nums md:text-left">{money(p.netAmount)}</span>
+                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{v.items.length}</span>
+                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{money(v.subtotal)}</span>
+                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{v.gstShown ? money(v.gstAmount) : "—"}</span>
+                <span className="hidden text-[0.8125rem] tabular-nums text-text-2 md:block">{v.tds ? `${v.tds.percent}% · −${money(v.tds.amount)}` : "—"}</span>
+                <span className="text-right text-[0.9rem] font-semibold tabular-nums md:text-left">{money(v.net)}</span>
                 <span className="hidden md:block">
-                  {p.receipt?.url ? (
-                    <a href={p.receipt.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[0.75rem] font-semibold text-blue hover:underline">
+                  {v.receiptUrl ? (
+                    <a href={v.receiptUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[0.75rem] font-semibold text-blue hover:underline">
                       <DownloadIcon className="h-3.5 w-3.5" /> View
                     </a>
+                  ) : v.legacy ? (
+                    // Plain text, not a control — the one real upload widget lives in
+                    // the expanded panel below, so there's only ever one file input
+                    // with this accessible name in the DOM, not two.
+                    <span className="text-[0.75rem] text-text-faint">Attach in details</span>
                   ) : (
                     <span className="text-[0.75rem] text-text-faint">—</span>
                   )}
                 </span>
-                <button type="button" aria-expanded={expanded} aria-label={expanded ? "Hide links" : "Show links"} onClick={() => setOpen(expanded ? null : p.id)} className="hidden text-text-faint md:block">
+                <button type="button" aria-expanded={expanded} aria-label={expanded ? "Hide links" : "Show links"} onClick={() => setOpen(expanded ? null : v.id)} className="hidden text-text-faint md:block">
                   <ChevronRightIcon className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")} />
                 </button>
               </div>
               {expanded && (
                 <div className="bg-surface-2 px-5 pb-4 pt-1" data-testid="paid-row-links">
                   <div className="flex flex-wrap gap-x-5 gap-y-1 py-2 text-[0.75rem] text-text-muted">
-                    <span>{p.utr ? `UTR ${p.utr}` : "No UTR recorded"}</span>
-                    <span>{p.isGstInvoice ? `GST 18% · ${money(p.gstAmount)}` : "No GST"}</span>
-                    <span>{p.tdsPercent ? `TDS ${Number(p.tdsPercent)}% · −${money(p.tdsAmount)}` : "No TDS"}</span>
-                    {p.receipt?.url && (
-                      <a href={p.receipt.url} target="_blank" rel="noreferrer" className="font-semibold text-blue hover:underline md:hidden">
+                    <span>{v.utr ? `UTR ${v.utr}` : v.legacy ? "Paid directly — no UTR on file" : "No UTR recorded"}</span>
+                    <span>{v.gstShown ? `GST 18% · ${money(v.gstAmount)}` : "No GST"}</span>
+                    <span>{v.tds ? `TDS ${v.tds.percent}% · −${money(v.tds.amount)}` : v.legacy ? "No TDS — paid outside a payout" : "No TDS"}</span>
+                    {v.receiptUrl ? (
+                      <a href={v.receiptUrl} target="_blank" rel="noreferrer" className="font-semibold text-blue hover:underline md:hidden">
                         View receipt
                       </a>
+                    ) : (
+                      // The only InvoiceReceiptUpload instance for this row (not
+                      // duplicated per breakpoint) — reachable by expanding, from any width.
+                      v.legacy && <InvoiceReceiptUpload token={token} invoiceId={v.id} onUploaded={onChanged} />
                     )}
                   </div>
                   <div className="overflow-hidden rounded-[10px] border border-border bg-surface">
-                    {(p.items ?? []).map((item) => {
+                    {v.items.map((item) => {
                       const views = viewsOf(item.link);
                       return (
                         <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border px-4 py-2.5 text-[0.8125rem] last:border-b-0 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,0.6fr)_minmax(0,0.6fr)_minmax(0,0.6fr)_minmax(0,0.6fr)]">

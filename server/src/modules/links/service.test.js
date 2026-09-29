@@ -15,6 +15,10 @@ vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 vi.mock("../../lib/cloudinaryClient.js", () => ({ publicUrlFor: vi.fn((id) => `https://cloudinary/${id}`) }));
 vi.mock("../scraping/service.js", () => ({ refreshLinkMetrics: vi.fn(async () => ({ ok: true })) }));
 vi.mock("../notifications/service.js", () => ({ notify: vi.fn() }));
+// The over-quota rule has its own tests (lib/postQuota.test.js); here it's
+// only checked that creating a post triggers the recompute.
+vi.mock("../../lib/postQuota.js", () => ({ recomputePostQuota: vi.fn(async () => []) }));
+const { recomputePostQuota } = await import("../../lib/postQuota.js");
 
 const { reviseLinkCost, getLinkCostRevisions, bulkImportLinks, markLinkInvalid, autoAttachLink, reviewScreenshot, listLinks, createLink, bulkCreateLink, getLinkTimeline } = await import("./service.js");
 const { transitionLinkStatus } = await import("./statusTimeline.js");
@@ -40,7 +44,7 @@ describe("listLinks — unbilled filter (22 Sep, broadened 23 Sep for Payouts)",
     mockPrisma.link.count = vi.fn().mockReturnValue("count");
 
     await listLinks(admin, { status: "SUBMITTED,INSIGHTS_APPROVED", unbilled: true, page: 1, pageSize: 100 });
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ status: { in: ["SUBMITTED", "INSIGHTS_APPROVED"] }, invoiceItem: null, payoutItem: null });
+    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ status: { in: ["SUBMITTED", "INSIGHTS_APPROVED"] }, invoiceItem: null, payoutItem: null, overQuota: false });
 
     await listLinks(admin, { status: "SUBMITTED", unbilled: false, page: 1, pageSize: 100 });
     expect(mockPrisma.link.findMany.mock.calls[1][0].where).toEqual({ status: "SUBMITTED" });
@@ -75,7 +79,7 @@ describe("listLinks — Payments tab filters (tasks.md #5, 23 Sep)", () => {
     mockPrisma.link.count = vi.fn().mockReturnValue("count");
 
     await listLinks(admin, { unpaid: true, page: 1, pageSize: 100 });
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ payoutItem: null, invoiceItem: null });
+    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toEqual({ payoutItem: null, invoiceItem: null, overQuota: false });
   });
 });
 
@@ -243,7 +247,19 @@ describe("autoAttachLink — a sheet-named post is attached to the page owner, n
     expect(mockPrisma.linkStatusEvent.create).toHaveBeenCalledWith({
       data: { linkId: "link-1", status: "SUBMITTED", actedById: "creator-1" },
     });
-    expect(link).toEqual({ id: "link-1" });
+    // 29 Sep: every new post re-derives its page's quota, and the result says whether this one is over.
+    expect(recomputePostQuota).toHaveBeenCalledWith("camp-1", "asset-1");
+    expect(link).toEqual({ id: "link-1", overQuota: false });
+  });
+
+  it("a sheet-attached post past the booking comes back flagged over quota", async () => {
+    mockPrisma.link.findFirst.mockResolvedValue(null);
+    mockPrisma.link.create.mockResolvedValue({ id: "link-1" });
+    recomputePostQuota.mockResolvedValueOnce(["link-1"]);
+
+    const link = await autoAttachLink(asset, { campaignId: "camp-1", url: "https://instagram.com/p/1", format: "reel", cost: 9000 });
+
+    expect(link.overQuota).toBe(true);
   });
 
   it("uses an explicit cost over the rate card when given, and marks it customRate", async () => {
@@ -402,6 +418,8 @@ describe("createLink / bulkCreateLink — only on your own pages (24 Sep)", () =
     mockPrisma.campaignAssignment = { findFirst: vi.fn(async () => ({ id: "booking-1" })) };
     mockPrisma.teamMembership.findUnique.mockResolvedValueOnce({ id: "m-1" });
     await expect(createLink(member, { campaignId: "c1", assetId: "asset-9", url: "https://ig/p/2", format: "reel" })).resolves.toMatchObject({ id: "new-link" });
+    // 29 Sep: a submitted post re-derives its page's quota.
+    expect(recomputePostQuota).toHaveBeenCalledWith("c1", "asset-9");
 
     mockPrisma.teamMembership.findUnique.mockResolvedValueOnce(null);
     await expect(createLink(member, { campaignId: "c1", assetId: "asset-9", url: "https://ig/p/3", format: "reel" })).rejects.toMatchObject({ code: "NOT_YOUR_PAGE" });

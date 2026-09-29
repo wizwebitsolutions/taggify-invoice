@@ -4,6 +4,7 @@ import { autoAttachLink } from "../links/service.js";
 import { campaignVisibilityWhere, canPlanMakerAccessCampaign, canCreatorAccessCampaign, ownerIdsFor, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 import { byPhaseThenPost, creatorPhaseNumberIn, creatorPhaseTitle, creatorRowsOf, groupsByRoot, phaseRowIds } from "../../lib/campaignPhases.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
+import { recomputePostQuota } from "../../lib/postQuota.js";
 
 const MAX_SHEET_BYTES = 5 * 1024 * 1024; // 5MB — plenty for a pages/work list, small enough to hold in memory
 
@@ -20,8 +21,11 @@ const MAX_SHEET_BYTES = 5 * 1024 * 1024; // 5MB — plenty for a pages/work list
  */
 const LINK_SELECT_FOR_CAMPAIGN = {
   campaignId: true,
+  // assetId: which page the post is on — the creator's booked-vs-submitted count (29 Sep).
+  assetId: true,
   cost: true,
   status: true,
+  overQuota: true,
   asset: { select: { ownerId: true } },
   postedAt: true,
   createdAt: true,
@@ -37,8 +41,12 @@ const LINK_SELECT_FOR_CAMPAIGN = {
 // admin has since confirmed dead/broken (newTask.md, 8 Sep). Shared by
 // annotateCampaign and the phase-group rollups below so "spent" is never
 // computed two different ways.
+// A post beyond its campaign booking (overQuota, 29 Sep) is the creator's own
+// extra — it counts toward neither the campaign's spend nor their earnings.
+const countsTowardCampaign = (l) => l.status !== "SCREENSHOT_REJECTED" && l.status !== "INVALID" && !l.overQuota;
+
 function computeSpent(links) {
-  return links.filter((l) => l.status !== "SCREENSHOT_REJECTED" && l.status !== "INVALID").reduce((sum, l) => sum + Number(l.cost), 0);
+  return links.filter(countsTowardCampaign).reduce((sum, l) => sum + Number(l.cost), 0);
 }
 
 const isCreatorSide = (user) => user?.role === "CREATOR" || user?.role === "TEAM_MEMBER";
@@ -80,7 +88,8 @@ function annotateCampaign(campaign, campaignLinks, pendingAssignmentCount) {
 
   return {
     ...campaign,
-    postCount: campaignLinks.length,
+    // Posts beyond the booking don't count (29 Sep — "everywhere it'll show 2 of 2").
+    postCount: campaignLinks.filter((l) => !l.overQuota).length,
     representativePost: representativeSnapshot
       ? { thumbnailUrl: representativeSnapshot.thumbnailUrl, caption: representativeSnapshot.caption }
       : null,
@@ -202,6 +211,39 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
     select: { campaignId: true, assetId: true },
   });
   const bookedAssetIds = (campaignId) => [...new Set(bookings.filter((b) => b.campaignId === campaignId).map((b) => b.assetId))];
+
+  // How many posts each of their pages owes, and how many they've put up
+  // (user report, 29 Sep — "it's not showing any limit of how many post on
+  // that page ... so creator will get to know how many post gonna go").
+  // A page booked for 2 posts has one assignment row on each of that phase's
+  // post rows (plans/service.js's createCampaignFromPlan spreads
+  // postsPerProfile that way), so counting those rows *is* the quota — the
+  // number is never stored anywhere else. Counted per phase, since that's the
+  // unit a booking is made in.
+  const rowsById = new Map([...groups.values()].flat().map((r) => [r.id, r]));
+  const phaseKey = (campaignId) => {
+    const row = rowsById.get(campaignId);
+    return row ? `${row.parentCampaignId ?? row.id}|${row.phaseNumber}` : null;
+  };
+  const quotas = new Map(); // "rootId|phase" → Map(assetId → { booked, submitted })
+  const quotaEntry = (key, assetId) => {
+    if (!quotas.has(key)) quotas.set(key, new Map());
+    const perAsset = quotas.get(key);
+    if (!perAsset.has(assetId)) perAsset.set(assetId, { assetId, booked: 0, submitted: 0 });
+    return perAsset.get(assetId);
+  };
+  for (const booking of bookings) {
+    const key = phaseKey(booking.campaignId);
+    if (key) quotaEntry(key, booking.assetId).booked += 1;
+  }
+  for (const [campaignId, rowLinks] of linksByCampaign) {
+    const key = phaseKey(campaignId);
+    if (!key) continue;
+    // Only their own pages — a phase can carry other creators' posts too.
+    for (const link of rowLinks) if (ownerIds.includes(link.asset?.ownerId)) quotaEntry(key, link.assetId).submitted += 1;
+  }
+  const pageQuota = (campaignId) => [...(quotas.get(phaseKey(campaignId)) ?? new Map()).values()];
+
   const childSet = new Set(childIds);
   const mine = new Set(bookings.map((b) => b.campaignId).filter((id) => childSet.has(id)));
   const children = childIds.length === 0 ? [] : await prisma.campaign.findMany({ where: { id: { in: [...mine] } } });
@@ -211,7 +253,13 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
   for (const root of annotatedRoots) {
     const group = groups.get(root.id) ?? [];
     // To the creator, Phase 1 is just the root row — its extra posts are their own entries below.
-    out.push({ ...toCreatorMoneyView(annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), linksByCampaign.get(root.id) ?? [], ownerIds), phaseCount: root.phaseCount, creatorPhaseNumber: 1, bookedAssetIds: bookedAssetIds(root.id) });
+    out.push({
+      ...toCreatorMoneyView(annotateCampaign(root, linksByCampaign.get(root.id) ?? [], pendingByCampaign.get(root.id) ?? 0), linksByCampaign.get(root.id) ?? [], ownerIds),
+      phaseCount: root.phaseCount,
+      creatorPhaseNumber: 1,
+      bookedAssetIds: bookedAssetIds(root.id),
+      pageQuota: pageQuota(root.id),
+    });
     // Numbered over this creator's own rows only (root + what they're booked on).
     const theirs = creatorRowsOf(group, mine);
     for (const row of [...theirs].sort(byPhaseThenPost)) {
@@ -219,7 +267,7 @@ async function withCreatorPhaseEntries(annotatedRoots, requester, { linksByCampa
       if (!child) continue;
       const n = creatorPhaseNumberIn(theirs, row.id);
       const annotated = annotateCampaign({ ...child, title: creatorPhaseTitle(root.title, n), phaseNumber: n }, linksByCampaign.get(child.id) ?? [], pendingByCampaign.get(child.id) ?? 0);
-      out.push({ ...toCreatorMoneyView(annotated, linksByCampaign.get(child.id) ?? [], ownerIds), creatorPhaseNumber: n, phaseCount: 1, bookedAssetIds: bookedAssetIds(child.id) });
+      out.push({ ...toCreatorMoneyView(annotated, linksByCampaign.get(child.id) ?? [], ownerIds), creatorPhaseNumber: n, phaseCount: 1, bookedAssetIds: bookedAssetIds(child.id), pageQuota: pageQuota(child.id) });
     }
   }
   return out;
@@ -584,6 +632,10 @@ export async function resolveAssignment(campaignId, assignmentId, assetId) {
     where: { id: assignmentId },
     data: { assetId, status: "matched" },
   });
+  // The booking just landed on this page — and, when re-resolving, left
+  // another one — so both pages' post quotas can move (lib/postQuota.js).
+  await recomputePostQuota(campaignId, assetId);
+  if (assignment.assetId && assignment.assetId !== assetId) await recomputePostQuota(campaignId, assignment.assetId);
   return autoAttachLinkIfPossible(updated, asset);
 }
 

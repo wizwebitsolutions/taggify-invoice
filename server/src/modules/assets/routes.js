@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createAssetSchema, updateRateCardSchema, importAssetsSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
+import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import * as assetsService from "./service.js";
@@ -90,6 +90,17 @@ router.post("/:id/refresh-profile", requireAccess("inventory.edit"), async (req,
   }
 });
 
+// Category + manual engagement (28 Sep). Gated exactly like the rate card
+// below — inventory.edit with no bare roles — so a creator can't retune the
+// numbers planners price their own pages against.
+router.put("/:id/details", requireAccess("inventory.edit"), validateBody(updateAssetDetailsSchema), async (req, res, next) => {
+  try {
+    res.json(await assetsService.updateAssetDetails(req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.put(
   "/:id/rate-card",
   requireAccess("inventory.edit"),
@@ -120,8 +131,12 @@ router.get("/owners", requireAccess("inventory.edit", "PLAN_MAKER"), async (req,
 });
 
 // "Download template" in the Import pages popup (22 Sep) — the exact
-// columns the importer reads, with two example rows.
-router.get("/import/template.xlsx", requireAccess("inventory.edit"), async (req, res, next) => {
+// columns the importer reads, with two example rows. CREATOR and PLAN_MAKER
+// are bare roles too (25 Sep) — they can bulk-import pages the same way
+// they can add one at a time; see importAssets/previewImport for the
+// role-based scoping (own-pages-only for CREATOR, pending/no-rate-card for
+// anyone but ADMIN).
+router.get("/import/template.xlsx", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), async (req, res, next) => {
   try {
     const buffer = await buildImportPagesTemplate();
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -138,7 +153,7 @@ router.get("/import/template.xlsx", requireAccess("inventory.edit"), async (req,
 // X-File-Name), get parsed and resolved against real accounts/pages, and
 // the resulting per-row preview goes back. Nothing is written here.
 const rawFileBody = express.raw({ type: () => true, limit: MAX_IMPORT_FILE_BYTES });
-router.post("/import/preview", requireAccess("inventory.edit"), (req, res, next) => {
+router.post("/import/preview", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), (req, res, next) => {
   rawFileBody(req, res, (err) => {
     if (!err) return next();
     if (err.type === "entity.too.large") return next(new ApiError(413, "FILE_TOO_LARGE", "That file is over 5 MB — export just the pages sheet and try again."));
@@ -156,7 +171,7 @@ router.post("/import/preview", requireAccess("inventory.edit"), (req, res, next)
       fileName = "";
     }
     const parsed = await assetsService.parseImportSheetOrThrow(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), fileName);
-    res.json(await assetsService.previewImport(parsed));
+    res.json(await assetsService.previewImport(parsed, req.user));
   } catch (err) {
     next(err);
   }
@@ -164,9 +179,9 @@ router.post("/import/preview", requireAccess("inventory.edit"), (req, res, next)
 
 // Step 1, Google Sheet flavour (user request, 14 Sep): a pasted share link
 // instead of a file — fetched server-side as CSV, then the same preview.
-router.post("/import/preview-url", requireAccess("inventory.edit"), validateBody(importSheetUrlSchema), async (req, res, next) => {
+router.post("/import/preview-url", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), validateBody(importSheetUrlSchema), async (req, res, next) => {
   try {
-    res.json(await assetsService.previewImportFromSheetUrl(req.body.url));
+    res.json(await assetsService.previewImportFromSheetUrl(req.body.url, req.user));
   } catch (err) {
     next(err);
   }
@@ -175,7 +190,7 @@ router.post("/import/preview-url", requireAccess("inventory.edit"), validateBody
 // Step 1½: live follower counts / avg views for the previewed handles, one
 // Apify run for the batch (user request, 14 Sep). Slow-ish (a minute or
 // so) and optional — the modal shows the rows first and fills these in.
-router.post("/import/followers", requireAccess("inventory.edit"), validateBody(importFollowersSchema), async (req, res, next) => {
+router.post("/import/followers", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), validateBody(importFollowersSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.fetchImportFollowers(req.body.handles));
   } catch (err) {
@@ -183,9 +198,9 @@ router.post("/import/followers", requireAccess("inventory.edit"), validateBody(i
   }
 });
 
-// Step 2: create the rows the admin confirmed (each with the account it
+// Step 2: create the rows that were confirmed (each with the account it
 // should sit under). Re-validated server-side — see importAssets.
-router.post("/import", requireAccess("inventory.edit"), validateBody(importAssetsSchema), async (req, res, next) => {
+router.post("/import", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), validateBody(importAssetsSchema), async (req, res, next) => {
   try {
     res.status(201).json(await assetsService.importAssets(req.user, req.body.rows));
   } catch (err) {

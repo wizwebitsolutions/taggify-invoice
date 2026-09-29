@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApifyInstagramProvider, PostNotFoundError } from "../../lib/apifyClient.js";
+import { recomputePostQuota } from "../../lib/postQuota.js";
 
 /**
  * Scrapes metrics for a single Link's URL and persists a PostSnapshot.
@@ -30,6 +31,9 @@ export async function refreshLinkMetrics(linkId) {
     });
     if (metrics.postedAt && !link.postedAt) {
       await prisma.link.update({ where: { id: linkId }, data: { postedAt: metrics.postedAt } });
+      // Which posts count is decided by posted date, so learning one can move
+      // the over-quota line on this page (lib/postQuota.js).
+      await recomputePostQuota(link.campaignId, link.assetId);
     }
     return { ok: true };
   } catch (err) {

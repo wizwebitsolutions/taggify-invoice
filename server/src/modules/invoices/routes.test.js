@@ -16,7 +16,7 @@ vi.mock("../../middleware/requireAuth.js", () => ({
 }));
 
 const approveInvoice = vi.fn(async (id) => ({ id, status: "APPROVED" }));
-vi.mock("./service.js", () => ({ approveInvoice, listInvoices: vi.fn(), markPaid: vi.fn() }));
+vi.mock("./service.js", () => ({ approveInvoice, listInvoices: vi.fn(), requestInvoiceReceiptUpload: vi.fn(), confirmInvoiceReceipt: vi.fn() }));
 const listClientInvoices = vi.fn(async () => ({ items: [], total: 0 }));
 const markClientInvoicePaid = vi.fn(async (id) => ({ id, status: "PAID" }));
 vi.mock("./clientInvoices.js", () => ({

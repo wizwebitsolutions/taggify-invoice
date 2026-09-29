@@ -20,6 +20,10 @@ function matches(row, where = {}) {
     if (key === "AND") return cond.every((w) => matches(row, w));
     if (key === "asset") return matches(db.assets.find((a) => a.id === row.assetId) ?? {}, cond);
     if (key === "campaign") return true; // plan-maker scoping isn't what these tests cover
+    // to-many relation (invoice.items): without this, `items: { some: … }`
+    // fell through to the catch-all `return true` below and matched every row.
+    if (key === "items") return (row.items ?? []).some((item) => matches(item, cond.some ?? {}));
+    if (key === "link") return matches(row.link ?? {}, cond);
     const value = row[key];
     if (cond === null) return value === null || value === undefined;
     if (typeof cond === "object" && !(cond instanceof Date)) {
@@ -222,6 +226,37 @@ describe("creator view — every row is its own numbered phase", () => {
     expect(list[0].postCount).toBe(1);
     // Each entry says which of their pages it takes links for (booked campaigns only, 24 Sep).
     for (const entry of list) expect(entry.bookedAssetIds).toEqual(["asset-a"]);
+  });
+
+  // User report, 29 Sep — the creator had no way to know how many posts a
+  // page owed. The booking is the page's assignment slots across the phase.
+  it("each entry says how many posts each of their pages was booked for in that phase, and how many are up", async () => {
+    // Prisma returns link.asset.ownerId for LINK_SELECT_FOR_CAMPAIGN; this
+    // fake only passes through fields a fixture row actually has.
+    for (const link of db.links) link.asset = { ownerId: db.assets.find((a) => a.id === link.assetId).ownerId };
+
+    const list = await listCampaigns({}, creatorA);
+    const quotaOf = (id) => list.find((c) => c.id === id).pageQuota;
+
+    // Phase 1: page A has two post rows (root + p1-post2) and both links are up.
+    expect(quotaOf("root")).toEqual([{ assetId: "asset-a", booked: 2, submitted: 2 }]);
+    // p1-post2 is phase 1 too — the same booking, not a second one.
+    expect(quotaOf("p1-post2")).toEqual([{ assetId: "asset-a", booked: 2, submitted: 2 }]);
+    // Phase 2 is its own booking: one post, none up yet.
+    expect(quotaOf("phase2")).toEqual([{ assetId: "asset-a", booked: 1, submitted: 0 }]);
+  });
+
+  it("over-posting shows up as submitted beyond booked, and never counts another creator's page", async () => {
+    db.links.push(
+      { id: "l3", campaignId: "root", assetId: "asset-a", cost: 5000, status: "SUBMITTED", postedAt: null, createdAt: t0, postSnapshots: [] },
+      // Creator B's page on the same phase — must not leak into creator A's numbers.
+      { id: "l4", campaignId: "root", assetId: "asset-b", cost: 4000, status: "SUBMITTED", postedAt: null, createdAt: t0, postSnapshots: [] }
+    );
+    for (const link of db.links) link.asset = { ownerId: db.assets.find((a) => a.id === link.assetId).ownerId };
+
+    const root = (await listCampaigns({}, creatorA)).find((c) => c.id === "root");
+
+    expect(root.pageQuota).toEqual([{ assetId: "asset-a", booked: 2, submitted: 3 }]);
   });
 
   it("a creator with one post per phase counts only their own rows — another page's 2nd reel leaves no gap (Phase 1, 2)", async () => {

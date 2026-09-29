@@ -8,6 +8,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { Field, Select } from "@/components/ui/form-field";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { links as linksApi, ApiError, LINK_FORMATS } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
 
 // Standard formats every page should be able to post — mirrors the Assets
 // rate-card editor's list. A page's rate card only needs *some* of these
@@ -33,7 +34,7 @@ export function UploadLinksModal({
   onCreated,
 }: {
   token: string;
-  campaigns: { id: string; title: string; bookedAssetIds?: string[] }[];
+  campaigns: { id: string; title: string; bookedAssetIds?: string[]; pageQuota?: { assetId: string; booked: number; submitted: number }[] }[];
   assets: { id: string; handle: string; rateCards: { format: string }[] }[];
   initialCampaignId?: string;
   onClose: () => void;
@@ -52,15 +53,34 @@ export function UploadLinksModal({
   const asset = assets.find((a) => a.id === assetId);
   const urls = urlsText.split("\n").map((u) => u.trim()).filter(Boolean);
 
+  // How many posts this page was booked for on this campaign, and how many
+  // are already up (user report, 29 Sep — a creator had no way to know). Extra
+  // posts beyond the booking still submit, but only the booked number counts.
+  const quota = selectedCampaign?.pageQuota?.find((q) => q.assetId === assetId);
+  const remaining = quota ? Math.max(0, quota.booked - quota.submitted) : null;
+
   // reel/story only (14 Sep) — a legacy rate card with another format is
   // not offered for new submissions.
   const availableFormats = [...STANDARD_FORMATS];
 
-  // Switching campaign keeps the page choice valid for it.
+  // Keeps the page choice valid — on a campaign switch, and also when the
+  // pages themselves arrive after the modal opened. The initial useState above
+  // only runs once, so a creator who opened this before their pages loaded was
+  // left with a <select> *showing* a page while the real choice stayed "" — no
+  // quota line, and Submit would post with no page at all.
+  // Same for the campaign: if the list arrives after opening, pick the first
+  // bookable one rather than staying on "" (a pinned campaign is left alone).
+  const bookableIds = bookable.map((c) => c.id).join(",");
+  useEffect(() => {
+    if (!initialCampaignId && !bookable.some((c) => c.id === campaignId)) setCampaignId(bookable[0]?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookableIds]);
+
+  const pageOptionIds = pageOptions.map((a) => a.id).join(",");
   useEffect(() => {
     if (!pageOptions.some((a) => a.id === assetId)) setAssetId(pageOptions[0]?.id ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId]);
+  }, [campaignId, pageOptionIds]);
 
   // Keep the selected format valid when the chosen page changes, preferring
   // a format this page has actually priced.
@@ -129,6 +149,33 @@ export function UploadLinksModal({
         {pageOptions.length === 0 && (
           <p className="rounded-md border border-border bg-surface-2 px-3.5 py-2.5 text-[0.8125rem] text-text-muted" data-testid="upload-not-booked">
             {bookable.length === 0 ? "None of your pages is booked on a campaign yet." : "None of your pages is booked on this campaign."} Ask your admin to book your page first.
+          </p>
+        )}
+
+        {quota && (
+          <p
+            data-testid="upload-quota"
+            className={cn(
+              "rounded-md border px-3.5 py-2.5 text-[0.8125rem]",
+              quota.submitted > quota.booked ? "border-rose/30 bg-rose-soft text-rose" : "border-border bg-surface-2 text-text-muted"
+            )}
+          >
+            {quota.submitted > quota.booked ? (
+              <>
+                <b className="font-semibold">
+                  {quota.submitted} posted, but only {quota.booked} booked.
+                </b>{" "}
+                Only the first {quota.booked} count — the extra {quota.submitted - quota.booked} won&rsquo;t be paid for.
+              </>
+            ) : (
+              <>
+                <b className="font-semibold">
+                  {quota.submitted} of {quota.booked} posts
+                </b>{" "}
+                up for @{asset?.handle}
+                {remaining === 0 ? " — that's all of them." : ` — ${remaining} still to upload.`}
+              </>
+            )}
           </p>
         )}
 

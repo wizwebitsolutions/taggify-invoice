@@ -10,6 +10,8 @@ import {
   listPendingLinksQuerySchema,
   listMyPendingQuerySchema,
   listMyPayoutsQuerySchema,
+  listPaidQuerySchema,
+  listMyPaidQuerySchema,
 } from "./schemas.js";
 import * as paymentsService from "./service.js";
 
@@ -20,6 +22,14 @@ router.use(requireAuth);
 // the service forces ownerId/creatorId to the caller, so this only ever
 // returns links on pages they own and payouts made to them. Registered
 // before the finance.pay gate below so it isn't caught by it.
+router.get("/me/summary", requireOwnAccess("finance.view"), async (req, res, next) => {
+  try {
+    res.json(await paymentsService.getMyPaymentSummary(req.user));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/me/pending", requireOwnAccess("finance.view"), validateQuery(listMyPendingQuerySchema), async (req, res, next) => {
   try {
     res.json(await paymentsService.listMyPendingLinks(req.user, req.query));
@@ -36,9 +46,25 @@ router.get("/me/payouts", requireOwnAccess("finance.view"), validateQuery(listMy
   }
 });
 
+router.get("/me/paid", requireOwnAccess("finance.view"), validateQuery(listMyPaidQuerySchema), async (req, res, next) => {
+  try {
+    res.json(await paymentsService.listMyPaidLedger(req.user, req.query));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Everything else — the "Payments" tab's admin side (tasks.md #5, 23 Sep) —
 // is admin/finance only.
 router.use(requireAccess("finance.pay"));
+
+router.get("/summary", async (req, res, next) => {
+  try {
+    res.json(await paymentsService.getPaymentSummary(req.user));
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get("/pending", validateQuery(listPendingLinksQuerySchema), async (req, res, next) => {
   try {
@@ -51,6 +77,14 @@ router.get("/pending", validateQuery(listPendingLinksQuerySchema), async (req, r
 router.get("/payouts", validateQuery(listPayoutsQuerySchema), async (req, res, next) => {
   try {
     res.json(await paymentsService.listPayouts(req.user, req.query));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/paid", validateQuery(listPaidQuerySchema), async (req, res, next) => {
+  try {
+    res.json(await paymentsService.listPaidLedger(req.user, req.query));
   } catch (err) {
     next(err);
   }

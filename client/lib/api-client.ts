@@ -340,13 +340,23 @@ export interface Asset {
   followers: number;
   /** Instagram CDN URL, synced from Apify — re-synced every 24h. Null until the first scrape completes. */
   profilePicUrl?: string | null;
-  /** Free-form, e.g. "Meme page", "News page" — set at creation. */
+  /** Free-form, e.g. "Meme page", "News page" — set at creation, editable from Inventory's Edit panel (28 Sep). */
   category?: string | null;
   approvalStatus: string;
   createdAt: string;
   rateCards: RateCard[];
-  /** `source: "profile"` = averaged from the profile's latest posts by the Apify scrape (no links through the app yet); absent = from this app's own link snapshots. */
-  engagement: { avgLikes: number | null; avgComments: number | null; avgViews: number | null; sampleSize: number; source?: "profile" };
+  /**
+   * `source: "profile"` = averaged from the profile's latest posts by the Apify scrape (no links through the app yet); absent = from this app's own link snapshots.
+   * `manual` marks figures typed in Inventory's Edit panel (28 Sep), which override whichever automatic source produced the rest and survive re-scrapes.
+   */
+  engagement: {
+    avgLikes: number | null;
+    avgComments: number | null;
+    avgViews: number | null;
+    sampleSize: number;
+    source?: "profile";
+    manual?: { avgViews?: true; avgLikes?: true; avgComments?: true };
+  };
   /** When the last Instagram profile scrape succeeded — null until the first one lands (Inventory shows "Fetching from Instagram…" meanwhile). */
   lastScrapedAt?: string | null;
   /** Why the last profile scrape failed (private account, bad handle, Apify outage) — null once one succeeds. */
@@ -393,6 +403,9 @@ export interface Campaign {
    *  exact row — the only pages it takes links for (server:
    *  lib/pageOwnership.js assertPageBooked). */
   bookedAssetIds?: string[];
+  /** Creator / team member list only (29 Sep): per page of theirs, how many posts this campaign phase booked and how many are already up.
+   *  `booked` is the number of assignment slots — the plan's postsPerProfile isn't stored on the campaign, only spread into one row per post. */
+  pageQuota?: { assetId: string; booked: number; submitted: number }[];
   /** The whole phase group (including this campaign), phase-1-first. Only present on getCampaignById's response, not the list. */
   phases?: { id: string; phaseNumber: number; title: string; createdAt: string }[];
   /** Only present on listCampaigns' response — how many phases (including this root) exist. 1 for a campaign with no phases. */
@@ -472,6 +485,8 @@ export interface Link {
     | "INVOICED"
     | "INVALID";
   postedAt: string | null;
+  /** Beyond the posts the campaign booked for this page (29 Sep) — the creator's own extra: never invoiced, paid, or counted toward spend. */
+  overQuota?: boolean;
   createdAt: string;
   campaign?: Campaign;
   asset?: Asset;
@@ -523,6 +538,10 @@ export interface Invoice {
   raisedBy?: { id: string; name: string | null; role: string } | null;
   /** The creator's own invoice document (PDF/image) attached to this record, if any (12 Sep). */
   attachment?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
+  /** Proof of payment Finance backfilled directly onto this invoice (28 Sep) — only ever set for a standalone-paid invoice with no Payout behind it; one paid through a Payout has its receipt there instead. */
+  receipt?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
+  /** Posts on it beyond their campaign booking (29 Sep). Non-zero means it can't be approved or paid — reject it so the creator re-raises with only the booked posts. */
+  overQuotaCount?: number;
   items?: { id: string; amount: string; link: Link }[];
   billingProfile?: BillingProfile | null;
 }
@@ -781,6 +800,11 @@ export const assets = {
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
   updateRateCard: (token: string, assetId: string, rateCards: { format: string; amount: number }[]) =>
     request<RateCard[]>(`/assets/${assetId}/rate-card`, { method: "PUT", token, body: { rateCards } }),
+  // Category + manual engagement from Inventory's Edit panel (28 Sep). Only the
+  // keys sent are touched; null clears one (no category, or that figure back to
+  // whatever the scrape says).
+  updateDetails: (token: string, assetId: string, body: { category?: string | null; avgViews?: number | null; avgLikes?: number | null; avgComments?: number | null }) =>
+    request<Asset>(`/assets/${assetId}/details`, { method: "PUT", token, body }),
   setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
     request<Asset>(`/assets/${assetId}/approval`, { method: "PUT", token, body: { approvalStatus } }),
   // Inventory's manual "refresh" button — re-pulls followers/name/bio/avatar
@@ -871,7 +895,7 @@ export interface ImportAssetRow {
 }
 
 export interface ImportResult {
-  created: { id: string; handle: string; ownerId: string; owner: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } }[];
+  created: { id: string; handle: string; ownerId: string; approvalStatus: string; owner: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } }[];
   skipped: { handle: string; reason: string }[];
 }
 
@@ -1074,8 +1098,15 @@ export const invoices = {
   // Admin sign-off, RAISED → APPROVED (Finance then marks paid).
   approve: (token: string, invoiceId: string) =>
     request<Invoice>(`/invoices/${invoiceId}/approve`, { method: "POST", token }),
-  markPaid: (token: string, invoiceId: string) =>
-    request<Invoice>(`/invoices/${invoiceId}/mark-paid`, { method: "POST", token }),
+  // Finance backfilling proof of payment onto a legacy standalone-paid invoice
+  // (28 Sep) — an invoice is otherwise paid off exclusively via a Payout now (see PaySheet).
+  requestReceiptUpload: (token: string, invoiceId: string) =>
+    request<{ uploadUrl: string; apiKey: string; timestamp: number; signature: string; publicId: string }>(`/invoices/${invoiceId}/receipt-upload`, {
+      method: "POST",
+      token,
+    }),
+  confirmReceipt: (token: string, invoiceId: string, publicId: string, fileName: string) =>
+    request<NonNullable<Invoice["receipt"]>>(`/invoices/${invoiceId}/receipt`, { method: "POST", token, body: { publicId, fileName } }),
   reject: (token: string, invoiceId: string, remarks: string) =>
     request<Invoice>(`/invoices/${invoiceId}/reject`, { method: "POST", token, body: { remarks } }),
   updateGstStatus: (token: string, invoiceId: string, gstStatus: Invoice["gstStatus"]) =>
@@ -1165,6 +1196,51 @@ export type PendingLink = Link & {
   campaign?: Campaign;
 };
 
+/**
+ * A creator-raised invoice on the Payments list (25 Sep) — an owed invoice is
+ * paid as a whole from Payments; `selectable` is false once it's paid (or one of
+ * its links is already on a payout), so the checkbox is disabled.
+ */
+export interface PaymentInvoice {
+  id: string;
+  invoiceNumber: string;
+  creatorId: string;
+  amount: string;
+  subtotal: string;
+  isGstInvoice: boolean;
+  gstAmount: string;
+  status: "RAISED" | "APPROVED" | "PAID";
+  dueDate: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  creator?: PageOwner | null;
+  links: PayoutItemLink[];
+  selectable: boolean;
+  /** Posts on it beyond their campaign booking (29 Sep) — when non-zero it's not selectable: it has to be rejected and re-raised. */
+  overQuotaCount?: number;
+  /** Set only on a legacy standalone-paid row (28 Sep fix) — never present on an owed invoice. */
+  receipt?: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
+}
+
+/**
+ * One row on the Paid tab's merged ledger (28 Sep fix): a real Payout (TDS +
+ * receipt always present — the only way an invoice can be paid off going
+ * forward) or, for legacy data from before the direct-mark-paid path was
+ * removed, a standalone invoice paid with no TDS applied and — until Finance
+ * backfills one — no receipt on file.
+ */
+export type PaidLedgerRow = { kind: "payout"; paidAt: string | null; payout: Payout } | { kind: "invoice"; paidAt: string | null; invoice: PaymentInvoice };
+export type PaidLedgerResult = { items: PaidLedgerRow[]; total: number };
+
+/** The four tiles on Payments (25 Sep): everything owed, due this calendar month, paid this month, and overdue by more than 30 days. */
+export interface PaymentSummary {
+  totalDues: number;
+  dueThisMonth: number;
+  paidThisMonth: number;
+  overdue30: number;
+  dueCount: number;
+}
+
 /** Pending/Paid tab filters (24 Sep redesign). from/to are ISO instants. */
 export interface PaymentsFilters {
   ownerId?: string;
@@ -1173,6 +1249,8 @@ export interface PaymentsFilters {
   from?: string;
   to?: string;
 }
+
+export type PendingResult = { items: PendingLink[]; total: number; invoices: PaymentInvoice[] };
 
 function paymentsQuery(params: PaymentsFilters & { status?: string; page?: number; pageSize?: number }) {
   const qs = new URLSearchParams();
@@ -1191,14 +1269,23 @@ export const payments = {
   ) => request<Paginated<Payout>>(`/payments/payouts?${paymentsQuery({ page: 1, pageSize: 100, ...params })}`, { token }),
   /** Every vendor's payable links — the Pending tab. */
   listPending: (token: string, filters: PaymentsFilters = {}) =>
-    request<{ items: PendingLink[]; total: number }>(`/payments/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
+    request<PendingResult>(`/payments/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
+  /** Totals for the four Payments tiles. */
+  summary: (token: string) => request<PaymentSummary>("/payments/summary", { token }),
+  mySummary: (token: string) => request<PaymentSummary>("/payments/me/summary", { token }),
   /** Creator's own payable links (server forces the owner to the caller). */
   listMyPending: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) =>
-    request<{ items: PendingLink[]; total: number }>(`/payments/me/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
+    request<PendingResult>(`/payments/me/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
   /** Creator's own PAID payouts. */
   listMyPayouts: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) =>
     request<Paginated<Payout>>(`/payments/me/payouts?${paymentsQuery({ page: 1, pageSize: 100, ...filters })}`, { token }),
-  createPayout: (token: string, body: { creatorId: string; linkIds: string[]; isGstInvoice: boolean; tdsPercent: 1 | 2 | 10 | null }) =>
+  /** The Paid tab's actual list (28 Sep fix): real Payouts plus any legacy standalone-paid invoice — matches what the "Paid this month" tile counts. */
+  listPaid: (token: string, filters: Omit<PaymentsFilters, "ownerId"> & { creatorId?: string } = {}) =>
+    request<PaidLedgerResult>(`/payments/paid?${paymentsQuery({ pageSize: 100, ...filters })}`, { token }),
+  /** Creator's own paid ledger. */
+  listMyPaid: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) =>
+    request<PaidLedgerResult>(`/payments/me/paid?${paymentsQuery({ pageSize: 100, ...filters })}`, { token }),
+  createPayout: (token: string, body: { creatorId: string; linkIds: string[]; invoiceIds?: string[]; isGstInvoice: boolean; tdsPercent: 1 | 2 | 10 | null }) =>
     request<Payout>("/payments/payouts", { method: "POST", token, body }),
   cancelPayout: (token: string, payoutId: string) => request<void>(`/payments/payouts/${payoutId}`, { method: "DELETE", token }),
   // Same two-step direct-to-Cloudinary upload as every other attachment here.

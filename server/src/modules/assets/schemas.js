@@ -36,6 +36,19 @@ export const updateRateCardSchema = z.object({
   rateCards: z.array(rateCardEntrySchema).min(1),
 });
 
+// Inventory's Edit panel (28 Sep) — category and the manual engagement
+// overrides. Every field is optional (an omitted key is left untouched) and
+// nullable (an explicit null clears it: no category, or that figure handed
+// back to the profile scrape). Ints, since these are counts, not money.
+const manualEngagementFigure = z.number().int().min(0).max(2_000_000_000).nullable().optional();
+
+export const updateAssetDetailsSchema = z.object({
+  category: z.string().trim().min(1).max(40).nullable().optional(),
+  avgViews: manualEngagementFigure,
+  avgLikes: manualEngagementFigure,
+  avgComments: manualEngagementFigure,
+});
+
 // Inventory "Import pages" (user request, 14 Sep) — step 2's confirmed
 // rows. Everything here is re-checked in assets/service.js's importAssets
 // (handle validity, owner is a real CREATOR, handle not already taken);

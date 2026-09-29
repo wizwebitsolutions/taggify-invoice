@@ -24,6 +24,10 @@ import { cn } from "@/lib/utils";
 
 const APPROVED_GROUP_FILTER = "SCREENSHOT_APPROVED,INSIGHTS_PENDING,INSIGHTS_APPROVED,INVOICED";
 const INVOICEABLE_STATUSES = new Set<string>(INVOICEABLE_LINK_STATUSES);
+// Billable = an invoiceable status AND within the posts the campaign booked for
+// the page (29 Sep) — an over-quota post is the creator's own extra and never
+// billed, so it mustn't be counted, offered, or selected as ready to bill.
+const isBillable = (l: Pick<LinkRow, "status" | "overQuota">) => INVOICEABLE_STATUSES.has(l.status) && !l.overQuota;
 
 const STATUS_FILTERS: { label: string; value: string | undefined }[] = [
   { label: "All statuses", value: undefined },
@@ -77,8 +81,8 @@ export function CreatorDashboard() {
       pendingScreenshots: items.filter((l) => l.status === "PENDING_SCREENSHOT_REVIEW").length,
       approved: items.filter((l) => !["SUBMITTED", "PENDING_SCREENSHOT_REVIEW", "SCREENSHOT_REJECTED", "INVALID"].includes(l.status)).length,
       invoiced: items.filter((l) => l.status === "INVOICED").length,
-      uninvoiced: items.filter((l) => INVOICEABLE_STATUSES.has(l.status)).length,
-      readyAmount: items.filter((l) => INVOICEABLE_STATUSES.has(l.status)).reduce((s, l) => s + Number(l.cost), 0),
+      uninvoiced: items.filter(isBillable).length,
+      readyAmount: items.filter(isBillable).reduce((s, l) => s + Number(l.cost), 0),
     };
   }, [allLinksQuery.data]);
 
@@ -224,7 +228,7 @@ export function CreatorDashboard() {
                     index={i}
                     selected={selectedIds.has(link.id)}
                     active={detailId === link.id}
-                    canSelect={canBulkInvoice && INVOICEABLE_STATUSES.has(link.status)}
+                    canSelect={canBulkInvoice && isBillable(link)}
                     onToggle={() => toggleSelect(link.id)}
                     onOpen={() => setDetailId(link.id)}
                     onRaise={canBulkInvoice ? () => bulkInvoiceMutation.mutate([link.id]) : undefined}
@@ -290,7 +294,7 @@ function PostRow({ link, index, selected, active, canSelect, onToggle, onOpen, o
   const snapshot = link.postSnapshots?.[0];
   // "Ready" mirrors the server's invoiceable set (minus the two states where the creator still owes proof).
   const needsCreator = link.status === "SUBMITTED" || link.status === "SCREENSHOT_REJECTED";
-  const ready = !needsCreator && INVOICEABLE_STATUSES.has(link.status);
+  const ready = !needsCreator && isBillable(link);
   return (
     <li
       className={cn("flex cursor-pointer items-center gap-3 border-b border-border px-[18px] py-3 transition-colors last:border-b-0 hover:bg-[#fbfbfc] motion-safe:animate-reveal-up dark:hover:bg-surface-2", active && "bg-surface-2")}
@@ -322,6 +326,15 @@ function PostRow({ link, index, selected, active, canSelect, onToggle, onOpen, o
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[0.8375rem] font-semibold">@{link.asset?.handle ?? "—"} · {link.format}</span>
           <span className="hidden truncate text-[0.78rem] text-text-muted sm:inline">{link.campaign?.title ?? "—"}</span>
+          {link.overQuota && (
+            <span
+              className="shrink-0 rounded-full border border-rose/30 bg-rose-soft px-2 py-px text-[0.68rem] font-medium text-rose"
+              title="More posts than the campaign booked for this page — only the booked number count, so this one won't be paid."
+              data-testid="over-quota-badge"
+            >
+              Over limit · not paid
+            </span>
+          )}
         </div>
         <StatusSteps status={link.status} animate={false} />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.75rem]">

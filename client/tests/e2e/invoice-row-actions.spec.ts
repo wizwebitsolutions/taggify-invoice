@@ -192,3 +192,55 @@ test.describe("Invoices — collapsed row actions", () => {
     await expect(menu.getByRole("menuitem", { name: "Reject invoice" })).toHaveCount(0);
   });
 });
+
+/**
+ * 29 Sep — an invoice carrying posts beyond what the campaign booked for the
+ * page is flagged and blocked (user decision): never approved or paid as it
+ * stands, never rewritten in place. Reject stays, since rejecting and
+ * re-raising with only the booked posts is how it gets resolved.
+ */
+test.describe("Invoices — over-booking posts block approve and pay", () => {
+  const mockOne = async (page: import("@playwright/test").Page, over: Partial<Invoice>) => {
+    await page.route("**/invoices?**", (route) => {
+      if (route.request().method() !== "GET") return route.fulfill({ status: 204, body: "" });
+      return route.fulfill({ json: { items: [invoice({ id: "inv-over", invoiceNumber: "INV-OVER", overQuotaCount: 2, ...over })], total: 1, page: 1, pageSize: 100 } });
+    });
+  };
+
+  test("a RAISED invoice with over-booking posts says why, and offers no Approve — only Reject", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockOne(page, { status: "RAISED" });
+
+    await page.goto("/invoices");
+    const panel = page.getByTestId("invoice-detail-panel");
+    await expect(panel.getByTestId("invoice-over-quota")).toContainText("2 posts are beyond what the campaign booked");
+    await expect(panel.getByRole("button", { name: "Approve invoice" })).toHaveCount(0);
+
+    const row = page.locator("div.grid", { hasText: "INV-OVER" });
+    await expect(row.getByRole("button", { name: "Approve" })).toHaveCount(0);
+    await row.getByTestId("invoice-actions-trigger-inv-over").click();
+    await expect(page.getByTestId("invoice-actions-menu-inv-over").getByRole("menuitem", { name: "Reject invoice" })).toBeVisible();
+  });
+
+  test("an APPROVED invoice with over-booking posts can't be marked paid", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockOne(page, { status: "APPROVED" });
+
+    await page.goto("/invoices");
+    const row = page.locator("div.grid", { hasText: "INV-OVER" });
+    await expect(row.getByRole("button", { name: "Mark paid" })).toHaveCount(0);
+    await expect(page.getByTestId("invoice-detail-panel").getByRole("button", { name: "Mark as paid" })).toHaveCount(0);
+  });
+
+  test("a clean invoice (no over-booking posts) is unaffected", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockOne(page, { status: "APPROVED", overQuotaCount: 0 });
+
+    await page.goto("/invoices");
+    await expect(page.getByTestId("invoice-over-quota")).toHaveCount(0);
+    await expect(page.locator("div.grid", { hasText: "INV-OVER" }).getByRole("button", { name: "Mark paid" })).toBeVisible();
+  });
+});

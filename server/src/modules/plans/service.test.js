@@ -35,7 +35,10 @@ const mockEnsureSheetTabsExist = vi.fn();
 const mockWriteSheetTab = vi.fn();
 const mockGetSheetTabIds = vi.fn();
 const mockBatchUpdateSpreadsheet = vi.fn();
+// Tabs already in the file — read to rename a plan's tabs in place (29 Sep). None by default.
+const mockGetExistingSheetTabs = vi.fn(async () => []);
 vi.mock("../../lib/googleSheetsClient.js", () => ({
+  getExistingSheetTabs: (...args) => mockGetExistingSheetTabs(...args),
   createSpreadsheet: (...args) => mockCreateSpreadsheet(...args),
   deleteSheetTab: (...args) => mockDeleteSheetTab(...args),
   ensureSheetTabsExist: (...args) => mockEnsureSheetTabsExist(...args),
@@ -82,6 +85,7 @@ const {
   createPlanVariant,
   listPlanGroup,
   generatePlanSheet,
+  refreshGeneratedSheets,
   importPlanSheetPages,
   createPlanFromSheet,
   syncPlanFromSheet,
@@ -1078,6 +1082,111 @@ describe("generatePlanSheet — one real spreadsheet per plan (user request, 10 
     expect(mockMakeFilePublicViewable).not.toHaveBeenCalled();
     expect(result.spreadsheetUrl).toBe("https://docs.google.com/spreadsheets/d/new-sheet-1/edit?gid=111#gid=111");
     expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-1" }, data: { internalSheetUrl: result.spreadsheetUrl } });
+  });
+});
+
+/**
+ * User report, 29 Sep — "on modifying plan after generation, in google sheet
+ * it's not updating". The sheet was only written by an explicit Generate, but
+ * its link is shared with the client, who opens it directly. An edit now
+ * rewrites whatever sheet was already generated (routes.js fires this after
+ * the response), and never fails or stalls the save itself.
+ */
+describe("refreshGeneratedSheets — an edit rewrites the already-generated sheet", () => {
+  const plan = {
+    id: "plan-1",
+    name: "Q1 Push",
+    variantLabel: "Plan A",
+    pitchGroupId: null,
+    createdById: "admin-1",
+    clientName: "Acme",
+    budget: null,
+    gstPercent: null,
+    clientSheetUrl: "https://docs.google.com/spreadsheets/d/existing-sheet/edit?gid=7#gid=7",
+    internalSheetUrl: null,
+    items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 2, asset }],
+  };
+
+  beforeEach(() => {
+    mockIsGoogleOAuthConfigured.mockReturnValue(true);
+    mockGetUserAccessToken.mockResolvedValue("access-token");
+    mockGetSheetTabIds.mockImplementation(({ titles }) => Object.fromEntries(titles.map((t, i) => [t, 100 + i])));
+  });
+
+  it("rewrites the existing client sheet in place — same file, fresh tabs, no new spreadsheet", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(plan);
+    mockPrisma.plan.findMany.mockResolvedValue([plan]);
+
+    await refreshGeneratedSheets("plan-1", admin);
+
+    expect(mockCreateSpreadsheet).not.toHaveBeenCalled();
+    expect(mockWriteSheetTab).toHaveBeenCalled();
+    expect(mockWriteSheetTab.mock.calls.every(([args]) => args.spreadsheetId === "existing-sheet")).toBe(true);
+  });
+
+  it("touches only the variants already generated — no internal sheet is created just because the client one exists", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(plan);
+    mockPrisma.plan.findMany.mockResolvedValue([plan]);
+
+    await refreshGeneratedSheets("plan-1", admin);
+
+    // Every write went to the one existing (client) file; nothing was created for "internal".
+    expect(mockCreateSpreadsheet).not.toHaveBeenCalled();
+    expect(mockPrisma.plan.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ internalSheetUrl: expect.anything() }) }));
+  });
+
+  it("a plan nobody has generated a sheet for is left alone — generating is still an explicit action", async () => {
+    const fresh = { ...plan, clientSheetUrl: null, internalSheetUrl: null };
+    mockPrisma.plan.findUnique.mockResolvedValue(fresh);
+    mockPrisma.plan.findMany.mockResolvedValue([fresh]);
+
+    await refreshGeneratedSheets("plan-1", admin);
+
+    expect(mockGetUserAccessToken).not.toHaveBeenCalled();
+    expect(mockCreateSpreadsheet).not.toHaveBeenCalled();
+    expect(mockWriteSheetTab).not.toHaveBeenCalled();
+  });
+
+  it("Plan B with no link of its own still refreshes the group's shared sheet", async () => {
+    const planA = { ...plan, id: "plan-a", pitchGroupId: "g1" };
+    const planB = { ...plan, id: "plan-b", pitchGroupId: "g1", variantLabel: "Plan B", clientSheetUrl: null };
+    mockPrisma.plan.findUnique.mockResolvedValue(planB);
+    mockPrisma.plan.findMany.mockResolvedValue([planA, planB]);
+
+    await refreshGeneratedSheets("plan-b", admin);
+
+    expect(mockWriteSheetTab).toHaveBeenCalled();
+    expect(mockWriteSheetTab.mock.calls[0][0].spreadsheetId).toBe("existing-sheet");
+  });
+
+  it("a Google failure is logged, never thrown — it must not surface as a failed save", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(plan);
+    mockPrisma.plan.findMany.mockResolvedValue([plan]);
+    mockGetUserAccessToken.mockResolvedValue(null); // disconnected
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(refreshGeneratedSheets("plan-1", admin)).resolves.toBeUndefined();
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining("plan-1"), expect.stringContaining("No Google account is connected"));
+    logged.mockRestore();
+  });
+
+  it("two edits at once don't interleave their writes — the second waits, and a burst costs one extra rewrite", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(plan);
+    mockPrisma.plan.findMany.mockResolvedValue([plan]);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockWriteSheetTab.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+    });
+
+    await Promise.all([refreshGeneratedSheets("plan-1", admin), refreshGeneratedSheets("plan-1", admin), refreshGeneratedSheets("plan-1", admin)]);
+
+    expect(maxInFlight).toBe(1);
+    // One rewrite + one catch-up for the burst (2 tabs each), not three.
+    expect(mockWriteSheetTab).toHaveBeenCalledTimes(4);
   });
 });
 

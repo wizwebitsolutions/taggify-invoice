@@ -4,9 +4,10 @@ import { notify } from "../notifications/service.js";
 import { getApprovedForUser } from "../billing/service.js";
 import { canPlanMakerAccessCampaign, planMakerCampaignWhere } from "../../lib/campaignAccess.js";
 import { phaseRowIds } from "../../lib/campaignPhases.js";
-import { buildInvoiceAttachmentKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
+import { buildInvoiceAttachmentKey, buildInvoiceReceiptKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
 import { nanoid } from "nanoid";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
+import { refreshPostQuotaForLinks } from "../../lib/postQuota.js";
 
 // A submitted link is invoiceable as-is (user request, 12 Sep — "remove
 // concept of mandatory screenshot before invoice generation"). The
@@ -51,6 +52,10 @@ export async function bulkCreateInvoice(actor, { linkIds, dueInDays, isGstInvoic
   if (actor.role !== "CREATOR") {
     throw new ApiError(403, "CREATOR_ONLY", "Only a creator can raise an invoice for their own pages");
   }
+  // Money is about to be committed: re-derive which of these posts are beyond
+  // their booking first (lib/postQuota.js), so a stale flag can never let an
+  // extra post onto an invoice.
+  await refreshPostQuotaForLinks(await prisma.link.findMany({ where: { id: { in: linkIds } }, select: { campaignId: true, assetId: true } }));
   const links = await prisma.link.findMany({
     where: { id: { in: linkIds } },
     include: LINK_INCLUDE_FOR_INVOICING,
@@ -111,14 +116,18 @@ export async function bulkCreateInvoice(actor, { linkIds, dueInDays, isGstInvoic
  * that's what a person can actually find on screen.
  */
 function assertLinksInvoiceable(links) {
-  // payoutItem (24 Sep): a payout doesn't change Link.status, so without this
-  // a link Finance already paid out could still be put on a creator invoice
-  // and billed twice — a link goes on an Invoice OR a Payout, never both.
-  const ineligible = links.filter((l) => !INVOICEABLE_STATUSES.has(l.status) || l.invoiceItem || l.payoutItem);
+  // payoutItem: a payout awaiting its receipt doesn't change Link.status, so
+  // without this a link Finance is about to pay could also be invoiced. Once the
+  // payout is paid its links become INVOICED (payments/service.js auto-invoice),
+  // so a link is on an Invoice OR a Payout, and paying always ends in an invoice.
+  // overQuota (29 Sep): a post beyond what the campaign booked for its page
+  // is the creator's own extra — never billed (lib/postQuota.js).
+  const ineligible = links.filter((l) => !INVOICEABLE_STATUSES.has(l.status) || l.invoiceItem || l.payoutItem || l.overQuota);
   if (ineligible.length === 0) return;
   const describe = (l) => {
     if (l.invoiceItem) return `${l.url} (already on invoice ${l.invoiceItem.invoice?.invoiceNumber ?? l.invoiceItem.invoiceId})`;
-    if (l.payoutItem) return `${l.url} (already paid out by Taggify)`;
+    if (l.payoutItem) return `${l.url} (already on a payout awaiting its receipt)`;
+    if (l.overQuota) return `${l.url} (beyond the posts booked for this page on that campaign)`;
     return `${l.url} (${l.status.toLowerCase().replace(/_/g, " ")})`;
   };
   throw new ApiError(400, "INELIGIBLE_LINKS", `Not eligible for invoicing: ${ineligible.map(describe).join("; ")}`);
@@ -130,7 +139,7 @@ const LINK_INCLUDE_FOR_INVOICING = {
   payoutItem: { select: { payoutId: true } },
 };
 
-function newInvoiceNumber() {
+export function newInvoiceNumber() {
   return `INV-${Date.now()}-${nanoid(6).toUpperCase()}`;
 }
 
@@ -139,14 +148,14 @@ function dueDateFrom(dueInDays) {
 }
 
 /** subtotal/gstAmount/amount for a set of links. Every figure rounded to paise so float drift can't leave amount !== subtotal + gstAmount by a fraction once stored as Decimal(12,2). */
-function invoiceTotals(links, isGstInvoice) {
+export function invoiceTotals(links, isGstInvoice) {
   const paise = (n) => Math.round(n * 100) / 100;
   const subtotal = paise(links.reduce((sum, l) => sum + Number(l.cost), 0));
   const gstAmount = isGstInvoice ? paise(subtotal * GST_RATE) : 0;
   return { subtotal, gstAmount, amount: paise(subtotal + gstAmount) };
 }
 
-async function markLinksInvoiced(tx, linkIds, actedById) {
+export async function markLinksInvoiced(tx, linkIds, actedById) {
   await tx.link.updateMany({ where: { id: { in: linkIds } }, data: { status: "INVOICED" } });
   await tx.linkStatusEvent.createMany({ data: linkIds.map((linkId) => ({ linkId, status: "INVOICED", actedById })) });
 }
@@ -174,14 +183,36 @@ export async function listInvoices(user, filters) {
   const where = {};
   // Plan Maker sees the invoices of their own plans' campaigns *plus* any
   // billed to them personally, should they also own pages; every other
-  // role without finance.view sees only invoices billed to them.
-  if (user.role === "PLAN_MAKER") where.OR = [{ campaign: planMakerCampaignWhere(user.id) }, { creatorId: user.id }];
-  else if (!seesAll) where.creatorId = user.id;
+  // role without finance.view sees only invoices billed to them. The
+  // items-based clause is there for the same reason as the campaign filter
+  // below: an invoice whose posts span two rows carries no campaignId, so
+  // matching on the tag alone would hide it from the plan's own maker.
+  if (user.role === "PLAN_MAKER") {
+    where.OR = [
+      { campaign: planMakerCampaignWhere(user.id) },
+      { items: { some: { link: { campaign: planMakerCampaignWhere(user.id) } } } },
+      { creatorId: user.id },
+    ];
+  } else if (!seesAll) where.creatorId = user.id;
   // A phase's invoices include those raised on its extra posts (22 Sep) —
   // an invoice for just a page's 2nd reel carries that row's campaignId,
   // which has no phase tab of its own to be found under.
+  //
+  // Matched on the invoice's own posts as well as its campaignId tag (user
+  // report, 28 Sep — "not showing invoiced post in invoice section in
+  // campaign"): bulkCreateInvoice only sets campaignId when *every* link
+  // shares one campaign row, so one invoice covering a page's 2nd and 3rd
+  // post of the same phase is tagged null and used to show under no campaign
+  // at all. Its posts still say which campaign they belong to, so that's what
+  // this asks. Which rows count stays as it was per role — a creator's filter
+  // is still the exact row they opened (they navigate per phase row, see
+  // campaigns/phases.test.js), not the whole phase.
   if (filters.campaignId) {
-    where.campaignId = seesAll || user.role === "PLAN_MAKER" ? { in: await phaseRowIds(filters.campaignId) } : filters.campaignId;
+    const rowIds = seesAll || user.role === "PLAN_MAKER" ? await phaseRowIds(filters.campaignId) : [filters.campaignId];
+    const onThisCampaign = { OR: [{ campaignId: { in: rowIds } }, { items: { some: { link: { campaignId: { in: rowIds } } } } }] };
+    // AND, not a second `where.OR` — that would overwrite the Plan Maker
+    // visibility clause above rather than narrow it.
+    where.AND = [...(where.AND ?? []), onThisCampaign];
   }
   if (filters.status) where.status = filters.status;
   if (filters.paymentStatus) where.paymentStatus = filters.paymentStatus;
@@ -215,6 +246,9 @@ export async function listInvoices(user, filters) {
         ? Math.floor((now - inv.dueDate.getTime()) / (24 * 60 * 60 * 1000))
         : 0,
     attachment: attachmentFor(inv),
+    receipt: invoiceReceiptFor(inv),
+    // Posts on it beyond their campaign booking — non-zero means it can't be approved or paid until re-raised (see assertNoOverQuotaPosts).
+    overQuotaCount: (inv.items ?? []).filter((i) => i.link?.overQuota).length,
   }));
 
   return { items: withAging, total, page: filters.page, pageSize: filters.pageSize };
@@ -282,33 +316,64 @@ export async function removeAttachment(invoiceId, user) {
 }
 
 /**
- * Payments are manual — Finance confirms outside the system, then records
- * it here. No gateway/webhook involved. Only an APPROVED invoice can be
- * paid (12 Sep): every invoice is creator-raised (13 Sep) and needs
- * approveInvoice first, so the sign-off is a real gate on the money, not
- * advisory. Rejected invoices are closed.
+ * An invoice is paid off exclusively through the Payments module now — a
+ * Payout with this invoice's id in `invoiceIds` (payments/service.js's
+ * createPayout/confirmPayoutReceipt), which applies TDS and requires a
+ * receipt before PAID. The old bare "mark paid" (no TDS, no receipt) that
+ * used to live here was the source of paid invoices with no payment record
+ * behind them — removed rather than left dormant.
  */
-export async function markPaid(invoiceId, financeUser) {
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
-  if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
-  if (invoice.status === "PAID") {
-    throw new ApiError(409, "ALREADY_PAID", "Invoice is already marked paid");
-  }
-  if (invoice.status !== "APPROVED") {
-    throw new ApiError(
-      409,
-      "NOT_APPROVED",
-      invoice.status === "RAISED" ? "This invoice needs to be approved before it can be marked paid" : `A ${invoice.status.toLowerCase()} invoice can't be marked paid`
-    );
-  }
 
+/** Public shape for a receipt Finance backfilled directly onto an invoice — never the raw public_id, mirrors attachmentFor/payments' receiptFor. */
+export function invoiceReceiptFor(invoice) {
+  if (!invoice.receiptPublicId) return null;
+  return {
+    name: invoice.receiptName ?? "Payment receipt",
+    url: publicUrlFor(invoice.receiptPublicId),
+    uploadedAt: invoice.receiptUploadedAt,
+    uploadedById: invoice.receiptUploadedById,
+  };
+}
+
+/**
+ * Backfilling proof of payment onto an invoice that was marked paid without
+ * ever going through a Payout (legacy direct-mark-paid rows, from before that
+ * path was removed). Only Finance/Admin reach this route (see routes.js); it
+ * only applies to a standalone-paid invoice — one already backed by a real
+ * Payout has its receipt there instead, so a second one here would be
+ * misleading about which document is the actual proof of payment.
+ */
+async function getStandalonePaidInvoice(invoiceId) {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { items: { include: { link: { include: { payoutItem: { select: { payoutId: true } } } } } } },
+  });
+  if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+  if (invoice.status !== "PAID") throw new ApiError(409, "INVALID_STATUS", "Only a paid invoice can have a receipt attached");
+  if (invoice.items.some((i) => i.link.payoutItem)) {
+    throw new ApiError(409, "PAID_VIA_PAYOUT", "This invoice was paid through a payout — see that payout's receipt instead");
+  }
+  return invoice;
+}
+
+export async function requestInvoiceReceiptUpload(invoiceId) {
+  await getStandalonePaidInvoice(invoiceId);
+  return getUploadParams(buildInvoiceReceiptKey(invoiceId));
+}
+
+export async function confirmInvoiceReceipt(invoiceId, financeUser, { publicId, fileName }) {
+  await getStandalonePaidInvoice(invoiceId);
+  if (!publicId.startsWith(`invoice-receipts/${invoiceId}/`)) {
+    throw new ApiError(400, "KEY_MISMATCH", "Object key does not belong to this invoice");
+  }
+  if (!(await objectExists(publicId))) {
+    throw new ApiError(422, "UPLOAD_NOT_FOUND", "No file found at that key — upload may not have completed");
+  }
   const updated = await prisma.invoice.update({
     where: { id: invoiceId },
-    data: { status: "PAID", paymentStatus: "COMPLETED", paidAt: new Date() },
+    data: { receiptPublicId: publicId, receiptName: fileName, receiptUploadedById: financeUser.id, receiptUploadedAt: new Date() },
   });
-
-  await notifyQuietly(invoice.creatorId, "invoice_paid", { invoiceId, markedById: financeUser.id });
-  return updated;
+  return invoiceReceiptFor(updated);
 }
 
 /**
@@ -318,12 +383,33 @@ export async function markPaid(invoiceId, financeUser) {
  * may call it is the route's business (ADMIN / finance.manage, and FINANCE
  * itself since 23 Sep); `approver` is only recorded on the notification.
  */
+/**
+ * An invoice raised before the post cap existed (29 Sep), or before a scrape
+ * reordered which posts count, can carry posts beyond what the campaign booked
+ * for the page. It can't be approved or paid as it stands (user decision: flag
+ * it and block until re-raised, never rewrite a raised invoice's amount): Finance
+ * rejects it, and the creator raises it again with only the booked posts.
+ * Re-derives the flags first, since this gates money.
+ */
+export async function assertNoOverQuotaPosts(invoice) {
+  await refreshPostQuotaForLinks(invoice.items.map((i) => i.link).filter(Boolean));
+  const over = await prisma.invoiceItem.count({ where: { invoiceId: invoice.id, link: { overQuota: true } } });
+  if (over > 0) {
+    throw new ApiError(
+      409,
+      "OVER_QUOTA",
+      `This invoice includes ${over} post${over === 1 ? "" : "s"} beyond what the campaign booked for the page. Reject it so the creator can raise it again with only the booked posts.`
+    );
+  }
+}
+
 export async function approveInvoice(invoiceId, approver) {
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { items: { include: { link: { select: { campaignId: true, assetId: true } } } } } });
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
   if (invoice.status !== "RAISED") {
     throw new ApiError(409, "INVALID_STATUS", `Only a raised invoice can be approved (this one is ${invoice.status.toLowerCase()})`);
   }
+  await assertNoOverQuotaPosts(invoice);
 
   const updated = await prisma.invoice.update({ where: { id: invoiceId }, data: { status: "APPROVED" } });
   await notifyQuietly(invoice.creatorId, "invoice_approved", { invoiceId, approvedById: approver.id });
@@ -358,6 +444,12 @@ export async function rejectInvoice(invoiceId, admin, { remarks }) {
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not found");
   if (invoice.status === "PAID") {
     throw new ApiError(409, "ALREADY_PAID", "A paid invoice can't be rejected");
+  }
+  // Finance is mid-payout on this invoice (a DRAFT payout holds its links): rejecting now
+  // would free the links while the payout still pays the invoice's amount.
+  const onPayout = await prisma.payoutItem.count({ where: { linkId: { in: invoice.items.map((i) => i.linkId) } } });
+  if (onPayout > 0) {
+    throw new ApiError(409, "ON_PAYOUT", "This invoice is on a payout awaiting its receipt — cancel that payout in Payments before rejecting it");
   }
   if (invoice.status === "REJECTED") {
     throw new ApiError(409, "ALREADY_REJECTED", "Invoice is already rejected");
@@ -436,5 +528,12 @@ export async function getInvoiceDetail(invoiceId, user) {
   // block, if the creator has registered and been approved for one.
   const billingProfile = await getApprovedForUser(invoice.creatorId);
 
-  return { ...invoice, overdueDays, billingProfile, attachment: attachmentFor(invoice) };
+  return {
+    ...invoice,
+    overdueDays,
+    billingProfile,
+    attachment: attachmentFor(invoice),
+    receipt: invoiceReceiptFor(invoice),
+    overQuotaCount: invoice.items.filter((i) => i.link?.overQuota).length,
+  };
 }

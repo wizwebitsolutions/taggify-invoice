@@ -161,4 +161,82 @@ test.describe("Invoices — Receivables view (client invoices, 23 Sep)", () => {
     await expect(row.getByRole("button", { name: "Mark paid" })).toHaveCount(0);
     await expect(row.getByRole("button", { name: "Cancel" })).toHaveCount(0);
   });
+
+  // 25 Sep: /invoices' Receivables asks for attached-only, matching Payments'
+  // Client tab — a Proforma with nothing real attached isn't a receivable
+  // this list counts, even though the server still holds the row.
+  test("FINANCE's Receivables requests hasAttachment=true, unlike Payments' own list", async ({ page }) => {
+    await signIn(page, "FINANCE");
+    await mockApi(page);
+    let requestedUrl = "";
+    await page.route(`${API_URL}/invoices/client**`, (route) => {
+      requestedUrl = route.request().url();
+      return route.fulfill({ json: { items: [clientInvoice()], total: 1 } });
+    });
+
+    await page.goto("/invoices?view=receivables");
+    await expect(page.getByTestId("receivables-view")).toContainText("PI-0007");
+    expect(new URL(requestedUrl).searchParams.get("hasAttachment")).toBe("true");
+    await expect(page.getByText("with a real invoice attached")).toBeVisible();
+  });
+
+  // Independent review (25 Sep): filtering unconditionally would have made a
+  // Plan Maker's own receivables disappear the moment they're Proforma-only —
+  // a Plan Maker has no "Mark paid"/"Cancel" and no "Attach an invoice" entry
+  // point on this page, so there'd be no way to bring an unattached row back.
+  // They keep seeing everything, same as before this change.
+  test("PLAN_MAKER's Receivables stays unfiltered — no hasAttachment sent, no 'Attach an invoice' button", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await mockApi(page);
+    let requestedUrl = "";
+    await page.route(`${API_URL}/invoices/client**`, (route) => {
+      requestedUrl = route.request().url();
+      return route.fulfill({ json: { items: [clientInvoice({ plan: { ...clientInvoice().plan, invoiceAttachmentPublicId: null } })], total: 1 } });
+    });
+
+    await page.goto("/invoices?view=receivables");
+    await expect(page.getByTestId("receivables-view")).toContainText("PI-0007");
+    expect(new URL(requestedUrl).searchParams.has("hasAttachment")).toBe(false);
+    await expect(page.getByTestId("attach-invoice-button")).toHaveCount(0);
+  });
+
+  // 25 Sep: attaching no longer requires first finding the right plan on the
+  // Plans page — pick the client here, see everything billed to them
+  // (including not-yet-attached rows the main list above just excluded).
+  test("'Attach an invoice' picks a client, lists their invoices unfiltered by attachment, and attaches inline", async ({ page }) => {
+    await signIn(page, "FINANCE");
+    await mockApi(page);
+    // One handler, branching on the query string, covering all three calls
+    // this flow makes to the same endpoint: the main list (hasAttachment, no
+    // search) sees the normal attached row; the picker's own unfiltered fetch
+    // (no params at all — deliberately not /plans/clients, which a plain
+    // FINANCE account can't reach) sees the same row to build its client
+    // suggestion from; the modal's client search (no hasAttachment) sees an
+    // unattached one — proving the modal's list isn't filtered the way the
+    // page behind it now is.
+    let searchSent: string | null = "not called";
+    await page.route(`${API_URL}/invoices/client**`, (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      if (params.get("search")) {
+        searchSent = params.get("search");
+        return route.fulfill({ json: { items: [clientInvoice({ id: "ci-unattached", invoiceNumber: "PI-0009", plan: { ...clientInvoice().plan, invoiceAttachmentPublicId: null } })], total: 1 } });
+      }
+      return route.fulfill({ json: { items: [clientInvoice()], total: 1 } });
+    });
+
+    await page.goto("/invoices?view=receivables");
+    await page.getByTestId("attach-invoice-button").click();
+    const modal = page.getByTestId("attach-invoice-modal");
+    await expect(modal).toBeVisible();
+
+    await modal.getByLabel("Client").click();
+    await modal.getByLabel("Client").fill("Acme");
+    await modal.getByRole("option", { name: /Acme Foods/ }).click();
+
+    await expect(modal).toContainText("PI-0009");
+    expect(searchSent).toBe("Acme Foods Pvt Ltd");
+
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByTestId("attach-invoice-modal")).toHaveCount(0);
+  });
 });

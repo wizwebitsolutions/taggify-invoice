@@ -283,6 +283,14 @@ model Asset {
   profileAvgLikes     Int?
   profileAvgComments  Int?
   profileSampleSize   Int       @default(0)
+  // Manually entered engagement (Inventory's Edit panel, 28 Sep). Each
+  // non-null figure replaces that one number in getAvgEngagement's automatic
+  // result and survives every re-scrape — unlike profileAvg* above, which the
+  // next profile scrape overwrites. Null = that figure stays automatic, so
+  // clearing the box hands the number back to the scrape.
+  manualAvgViews      Int?
+  manualAvgLikes      Int?
+  manualAvgComments   Int?
   // When the last profile scrape succeeded / why the last one failed — lets
   // the Inventory row say "Fetching from Instagram…" right after creation,
   // or "Couldn't fetch (private / bad handle)" instead of a silent 0.
@@ -404,6 +412,13 @@ model Link {
   customRate    Boolean    @default(false)
   status        LinkStatus @default(SUBMITTED)
   postedAt      DateTime?
+  // A post beyond what its campaign phase booked for this page (29 Sep —
+  // "it's creator's fault, not admin/finance"): the first N by posted date
+  // count, where N is the page's assignment slots in the phase, and the rest
+  // are over quota — never invoiced, paid, or counted toward spend. Derived,
+  // not entered: lib/postQuota.js recomputes it whenever links, bookings or
+  // posted dates change, and re-checks it before any money is committed.
+  overQuota     Boolean    @default(false)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -539,6 +554,14 @@ model Invoice {
   attachmentName         String?
   attachmentUploadedById String?
   attachmentUploadedAt   DateTime?
+  // Finance backfilling proof of payment onto an invoice paid without ever
+  // going through a Payout (legacy direct-mark-paid rows, and the guard in
+  // invoices/service.js keeps this from being used once a real Payout receipt
+  // exists for the invoice's links) — same shape as Payout's own receipt.
+  receiptPublicId        String?
+  receiptName            String?
+  receiptUploadedById    String?
+  receiptUploadedAt      DateTime?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 

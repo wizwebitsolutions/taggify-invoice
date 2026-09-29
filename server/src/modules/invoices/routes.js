@@ -99,14 +99,6 @@ router.post("/:id/approve", requireAccess("finance.approve"), async (req, res, n
   }
 });
 
-router.post("/:id/mark-paid", requireAccess("finance.pay"), async (req, res, next) => {
-  try {
-    res.json(await invoicesService.markPaid(req.params.id, req.user));
-  } catch (err) {
-    next(err);
-  }
-});
-
 router.put("/:id/gst-status", requireAccess("finance.edit"), validateBody(gstStatusSchema), async (req, res, next) => {
   try {
     res.json(await invoicesService.updateGstStatus(req.params.id, req.body.gstStatus));
@@ -154,6 +146,27 @@ router.delete("/:id/attachment", requireOwnAccess("finance.edit"), async (req, r
   try {
     await invoicesService.removeAttachment(req.params.id, req.user);
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Finance backfilling proof of payment onto an invoice paid without ever
+// going through a Payout (legacy direct-mark-paid rows) — finance.pay-gated
+// like the payout receipt, since it's recording money movement, not editing
+// invoice metadata. Same two-step signed upload as the attachment above;
+// reuses confirmAttachmentSchema since the body shape (publicId + fileName) is identical.
+router.post("/:id/receipt-upload", requireAccess("finance.pay"), async (req, res, next) => {
+  try {
+    res.json(await invoicesService.requestInvoiceReceiptUpload(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/:id/receipt", requireAccess("finance.pay"), validateBody(confirmAttachmentSchema), async (req, res, next) => {
+  try {
+    res.status(201).json(await invoicesService.confirmInvoiceReceipt(req.params.id, req.user, req.body));
   } catch (err) {
     next(err);
   }

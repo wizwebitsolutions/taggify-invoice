@@ -5,7 +5,7 @@ const mockPrisma = { asset: { create: vi.fn(), findMany: vi.fn(), findUnique: vi
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 vi.mock("../scraping/service.js", () => ({ refreshAssetMetrics: vi.fn(async () => {}) }));
 
-const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement } = await import("./service.js");
+const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails } = await import("./service.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
 // listAssets (23 Sep, Step 3) reads the *caller's* effective permissions
@@ -145,6 +145,96 @@ describe("getAvgEngagement — falls back to the profile scrape's averages", () 
 
   it("still reports N/A when neither links nor a profile sample exist", async () => {
     await expect(getAvgEngagement("asset-1", { profileSampleSize: 0 })).resolves.toEqual({ avgLikes: null, avgComments: null, avgViews: null, sampleSize: 0 });
+  });
+});
+
+describe("manual engagement overrides (Inventory Edit panel, 28 Sep)", () => {
+  it("a typed figure replaces the profile scrape's and is tagged manual; the untouched ones stay automatic", async () => {
+    const asset = { id: "asset-1", profileAvgViews: 900, profileAvgLikes: 50, profileAvgComments: 3, profileSampleSize: 12, manualAvgViews: 5000 };
+
+    await expect(getAvgEngagement("asset-1", asset)).resolves.toEqual({
+      avgViews: 5000,
+      avgLikes: 50,
+      avgComments: 3,
+      sampleSize: 12,
+      source: "profile",
+      manual: { avgViews: true },
+    });
+  });
+
+  it("beats this app's own link snapshots too — a scraped post doesn't shadow a typed number", async () => {
+    mockPrisma.link.findMany.mockResolvedValueOnce([{ postSnapshots: [{ likeCount: 100, commentsCount: 10, videoViews: 1000 }] }]);
+
+    const result = await getAvgEngagement("asset-1", { manualAvgViews: 5000, profileSampleSize: 0 });
+
+    expect(result.avgViews).toBe(5000);
+    // The automatic figures underneath are untouched, and sampleSize still
+    // describes them — a typed number is not an average of anything.
+    expect(result.avgLikes).toBe(100);
+    expect(result.sampleSize).toBe(1);
+    expect(result.manual).toEqual({ avgViews: true });
+  });
+
+  it("gives a page with nothing scraped real numbers instead of N/A", async () => {
+    await expect(getAvgEngagement("asset-1", { profileSampleSize: 0, manualAvgViews: 400, manualAvgLikes: 20, manualAvgComments: 2 })).resolves.toEqual({
+      avgViews: 400,
+      avgLikes: 20,
+      avgComments: 2,
+      sampleSize: 0,
+      manual: { avgViews: true, avgLikes: true, avgComments: true },
+    });
+  });
+
+  it("clearing an override (null) hands that figure back to the scrape, with no manual tag left", async () => {
+    const asset = { id: "asset-1", profileAvgViews: 900, profileAvgLikes: 50, profileAvgComments: 3, profileSampleSize: 12, manualAvgViews: null };
+
+    const result = await getAvgEngagement("asset-1", asset);
+
+    expect(result.avgViews).toBe(900);
+    expect(result).not.toHaveProperty("manual");
+  });
+
+  it("a zero is a real override, not an empty box", async () => {
+    const result = await getAvgEngagement("asset-1", { profileAvgViews: 900, profileSampleSize: 12, manualAvgViews: 0 });
+
+    expect(result.avgViews).toBe(0);
+    expect(result.manual).toEqual({ avgViews: true });
+  });
+});
+
+describe("updateAssetDetails — Inventory's Edit panel (28 Sep)", () => {
+  beforeEach(() => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ id: "asset-1", handle: "memes" });
+    mockPrisma.asset.update.mockImplementation(async ({ data }) => ({ id: "asset-1", handle: "memes", profileSampleSize: 0, ...data }));
+  });
+
+  it("saves a category and the typed engagement figures", async () => {
+    const result = await updateAssetDetails("asset-1", { category: "Meme page", avgViews: 5000, avgLikes: 100, avgComments: 4 });
+
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { category: "Meme page", manualAvgViews: 5000, manualAvgLikes: 100, manualAvgComments: 4 } })
+    );
+    // Comes back with engagement already recomputed, so the caller doesn't re-derive it.
+    expect(result.engagement).toMatchObject({ avgViews: 5000, manual: { avgViews: true } });
+  });
+
+  it("only touches the keys actually sent — saving a category can't wipe an override", async () => {
+    await updateAssetDetails("asset-1", { category: "News page" });
+
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ data: { category: "News page" } }));
+  });
+
+  it("an explicit null clears — category back to none, a figure back to the scrape", async () => {
+    await updateAssetDetails("asset-1", { category: null, avgViews: null });
+
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ data: { category: null, manualAvgViews: null } }));
+  });
+
+  it("404s on a page that doesn't exist, without writing", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValueOnce(null);
+
+    await expect(updateAssetDetails("nope", { category: "x" })).rejects.toMatchObject({ code: "ASSET_NOT_FOUND" });
+    expect(mockPrisma.asset.update).not.toHaveBeenCalled();
   });
 });
 

@@ -9,11 +9,11 @@ import { TableSkeleton, ErrorNotice } from "@/components/ui/table-parts";
 import { CheckCircleIcon, ChevronRightIcon, DownloadIcon, WalletIcon } from "@/components/icons";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { shortDate } from "@/components/payments/pay-sheet";
-import { viewsOf } from "@/components/payments/admin-payouts";
+import { viewsOf, paidRowView } from "@/components/payments/admin-payouts";
 import { PaymentsFilterBar, DEFAULT_FILTERS, toApiFilters, useDebounced, type FilterState } from "@/components/payments/payments-filters";
 import NextLink from "next/link";
 import { TruncationNote, PaymentsEmpty } from "@/components/payments/admin-payouts";
-import { payments as paymentsApi, ApiError, type Payout, type PendingLink } from "@/lib/api-client";
+import { payments as paymentsApi, ApiError, type PaidLedgerRow, type PendingLink } from "@/lib/api-client";
 import { money, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -32,16 +32,37 @@ export function CreatorPayments({ token }: { token: string }) {
   const { ownerId: _ignored, ...apiFilters } = toApiFilters(filters, debouncedQ);
 
   const pendingQuery = useQuery({ queryKey: ["payments", "me", "pending", apiFilters], queryFn: () => paymentsApi.listMyPending(token, apiFilters) });
-  const paidQuery = useQuery({ queryKey: ["payments", "me", "paid", apiFilters], queryFn: () => paymentsApi.listMyPayouts(token, apiFilters) });
+  const paidQuery = useQuery({ queryKey: ["payments", "me", "paid", apiFilters], queryFn: () => paymentsApi.listMyPaid(token, apiFilters) });
+
+  // Tiles (25 Sep): what Taggify owes them (their unbilled links + invoices still unpaid), what falls due this month, what was paid this month, and 30+ days overdue.
+  const summaryQuery = useQuery({ queryKey: ["payments", "me", "summary"], queryFn: () => paymentsApi.mySummary(token) });
+  const summary = summaryQuery.data;
 
   const pending = pendingQuery.data?.items ?? [];
   const paid = paidQuery.data?.items ?? [];
   const pendingTotal = pending.reduce((s, l) => s + Number(l.cost), 0);
-  const receivedTotal = paid.reduce((s, p) => s + Number(p.netAmount), 0);
-  const tdsTotal = paid.reduce((s, p) => s + Number(p.tdsAmount), 0);
+  // TDS only ever exists on a real Payout — a legacy standalone-paid invoice row never had it withheld.
+  const receivedTotal = paid.reduce((s, r) => s + Number(paidRowView(r).net), 0);
+  const tdsTotal = paid.reduce((s, r) => s + Number(paidRowView(r).tds?.amount ?? 0), 0);
 
   return (
     <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="creator-payments-kpis">
+        {(
+          [
+            ["Total dues", summary?.totalDues],
+            ["Due this month", summary?.dueThisMonth],
+            ["Paid this month", summary?.paidThisMonth],
+            ["30+ days", summary?.overdue30],
+          ] as const
+        ).map(([label, value]) => (
+          <div key={label} className="rounded-lg border border-border bg-surface p-3.5 shadow-card">
+            <p className="text-[0.75rem] text-text-muted">{label}</p>
+            <p className="text-[1.25rem] font-semibold tabular-nums tracking-[-0.02em]">{money(value ?? 0)}</p>
+          </div>
+        ))}
+      </div>
+
       <div role="tablist" aria-label="Payout status" className="grid w-full grid-cols-2 rounded-[10px] bg-surface-2 p-[3px] sm:w-[320px]">
         {(
           [
@@ -79,7 +100,7 @@ export function CreatorPayments({ token }: { token: string }) {
             </span>
           </div>
           <p className="-mt-2 text-[0.75rem] text-text-muted">
-            Links you&rsquo;ve billed on your own invoice aren&rsquo;t listed here — track those under{" "}
+            Links you&rsquo;ve billed on your own invoice aren&rsquo;t listed here, but their amount is in your dues — track those under{" "}
             <NextLink href="/invoices" className="font-medium text-blue hover:underline">
               Invoices
             </NextLink>
@@ -99,7 +120,7 @@ export function CreatorPayments({ token }: { token: string }) {
               <p className="text-[1.25rem] font-semibold tabular-nums tracking-[-0.02em]">{money(tdsTotal)}</p>
             </div>
           </div>
-          <CreatorPaidList payouts={paid} isLoading={paidQuery.isLoading} error={paidQuery.error} />
+          <CreatorPaidList rows={paid} isLoading={paidQuery.isLoading} error={paidQuery.error} />
         </>
       )}
     </div>
@@ -187,32 +208,33 @@ function CreatorPendingList({
   );
 }
 
-function CreatorPaidList({ payouts, isLoading, error }: { payouts: Payout[]; isLoading: boolean; error: unknown }) {
+function CreatorPaidList({ rows, isLoading, error }: { rows: PaidLedgerRow[]; isLoading: boolean; error: unknown }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   if (isLoading) return <TableSkeleton rows={3} />;
   if (error) return <ErrorNotice message={error instanceof ApiError ? error.message : "Couldn't load your payouts."} />;
-  if (payouts.length === 0) return <PaymentsEmpty icon={WalletIcon} title="No payouts yet" text="When Taggify pays you, each payout shows here with its GST/TDS split and receipt." />;
+  if (rows.length === 0) return <PaymentsEmpty icon={WalletIcon} title="No payouts yet" text="When Taggify pays you, each payout shows here with its GST/TDS split and receipt." />;
 
   return (
     <div className="grid gap-4 lg:grid-cols-2" data-testid="creator-paid-list">
-      {payouts.map((p, i) => {
-        // The newest payout opens expanded; the rest start collapsed.
-        const expanded = open.has(p.id) !== (i === 0);
-        const pages = [...new Set((p.items ?? []).map((it) => it.link.asset?.handle).filter(Boolean))];
+      {rows.map((row, i) => {
+        const v = paidRowView(row);
+        // The newest payment opens expanded; the rest start collapsed.
+        const expanded = open.has(v.id) !== (i === 0);
+        const pages = [...new Set(v.items.map((it) => it.link.asset?.handle).filter(Boolean))];
         const toggle = () =>
           setOpen((prev) => {
             const next = new Set(prev);
-            next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+            next.has(v.id) ? next.delete(v.id) : next.add(v.id);
             return next;
           });
         return (
-          <article key={p.id} className="overflow-hidden rounded-lg border border-border bg-surface shadow-card" data-testid="creator-payout-card">
+          <article key={v.id} className="overflow-hidden rounded-lg border border-border bg-surface shadow-card" data-testid="creator-payout-card">
             <div className="flex items-start justify-between gap-3 p-3.5">
               <div className="flex flex-col gap-0.5">
-                <span className="text-[0.75rem] text-text-faint">Paid {p.paidAt ? new Date(p.paidAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : ""}</span>
-                <span className="text-[1.375rem] font-semibold tabular-nums tracking-[-0.02em]">{money(p.netAmount)}</span>
+                <span className="text-[0.75rem] text-text-faint">Paid {v.paidAt ? new Date(v.paidAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : ""}</span>
+                <span className="text-[1.375rem] font-semibold tabular-nums tracking-[-0.02em]">{money(v.net)}</span>
                 <span className="text-[0.78rem] text-text-muted">
-                  {pages.map((h) => `@${h}`).join(", ")} · {p.items?.length ?? 0} link{(p.items?.length ?? 0) === 1 ? "" : "s"}
+                  {pages.map((h) => `@${h}`).join(", ")} · {v.items.length} link{v.items.length === 1 ? "" : "s"}
                 </span>
               </div>
               <StatusPill status="PAID" />
@@ -222,23 +244,23 @@ function CreatorPaidList({ payouts, isLoading, error }: { payouts: Payout[]; isL
                 <div className="mx-3.5 flex flex-col gap-1.5 border-t border-border py-3 text-[0.8125rem] text-text-2">
                   <div className="flex justify-between">
                     <span>Subtotal</span>
-                    <span className="tabular-nums">{money(p.subtotal)}</span>
+                    <span className="tabular-nums">{money(v.subtotal)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>GST</span>
-                    <span className="tabular-nums">{p.isGstInvoice ? `+${money(p.gstAmount)}` : "—"}</span>
+                    <span className="tabular-nums">{v.gstShown ? `+${money(v.gstAmount)}` : "—"}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>{p.tdsPercent ? `TDS ${Number(p.tdsPercent)}% withheld` : "TDS"}</span>
-                    <span className="tabular-nums">{p.tdsPercent ? `−${money(p.tdsAmount)}` : "—"}</span>
+                    <span>{v.tds ? `TDS ${v.tds.percent}% withheld` : "TDS"}</span>
+                    <span className="tabular-nums">{v.tds ? `−${money(v.tds.amount)}` : "—"}</span>
                   </div>
                   <div className="flex justify-between font-semibold text-text">
                     <span>Received</span>
-                    <span className="tabular-nums">{money(p.netAmount)}</span>
+                    <span className="tabular-nums">{money(v.net)}</span>
                   </div>
                 </div>
                 <div className="mx-3.5 border-t border-border">
-                  {(p.items ?? []).map((item) => (
+                  {v.items.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-3 border-b border-border py-2 text-[0.8125rem] last:border-b-0">
                       <a href={item.link.url} target="_blank" rel="noreferrer" className="min-w-0 truncate font-medium text-text hover:underline">
                         {item.link.campaign?.title ?? item.link.url}
@@ -255,17 +277,19 @@ function CreatorPaidList({ payouts, isLoading, error }: { payouts: Payout[]; isL
                 <button type="button" onClick={toggle} aria-expanded={expanded} className="w-fit text-[0.8125rem] font-medium text-blue hover:underline">
                   {expanded ? "Hide breakdown" : "Show breakdown"}
                 </button>
-                {p.utr && <span className="text-[0.72rem] text-text-faint">UTR {p.utr}</span>}
+                {v.utr && <span className="text-[0.72rem] text-text-faint">UTR {v.utr}</span>}
               </span>
-              {p.receipt?.url && (
+              {v.receiptUrl ? (
                 <a
-                  href={p.receipt.url}
+                  href={v.receiptUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-[0.8125rem] font-medium text-text shadow-card hover:bg-surface-2"
                 >
                   <DownloadIcon className="h-3.5 w-3.5" /> Receipt
                 </a>
+              ) : (
+                v.legacy && <span className="text-[0.72rem] text-text-faint">No receipt on file yet</span>
               )}
             </div>
           </article>

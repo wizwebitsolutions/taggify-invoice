@@ -7,11 +7,12 @@ import {
   ensureSheetTabsExist,
   writeSheetTab,
   getSheetTabIds,
+  getExistingSheetTabs,
   batchUpdateSpreadsheet,
 } from "../../lib/googleSheetsClient.js";
 import { makeFilePublicViewable } from "../../lib/googleDriveClient.js";
 import { getUserAccessToken, isGoogleOAuthConfigured } from "../../lib/googleOAuthClient.js";
-import { buildPlanSheetTabs, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate } from "../../lib/planSheet.js";
+import { buildPlanSheetTabs, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, reconcilePlanTabRequests, tabStatusRequests } from "../../lib/planSheet.js";
 import { getNumbering, advancePast } from "../../lib/clientInvoiceNumbering.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import { buildPlanInvoiceAttachmentKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
@@ -113,6 +114,69 @@ async function assertCanAccessPlan(requester, plan) {
   if (await canManageAnyPlan(requester)) return;
   if (plan.createdById !== requester.id) {
     throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
+  }
+}
+
+// ── Keeping generated Google Sheets current (user report, 29 Sep) ──────
+// "on modifying plan after generation, in google sheet it's not updating":
+// a plan's sheet was only ever written by an explicit Generate/Regenerate,
+// but its link is shared publicly with the client, who opens it directly —
+// never through the app. So any edit that changes what the sheet shows now
+// rewrites every sheet already generated for the plan's group (client and/or
+// internal). It runs after the save, not inside it: a rewrite is several
+// seconds of Google API calls and the wizard saves on every step, and a
+// Google outage must never fail a plan save. Rewrites of the same
+// spreadsheet are serialised and coalesced, so two quick edits can't
+// interleave their clear/write calls, and a burst of edits costs at most one
+// extra rewrite — each rewrite reads the plan fresh, so the last one is current.
+const sheetRefreshes = new Map(); // group key → { again: boolean, done: Promise }
+
+function queueSheetRefresh(key, run) {
+  const current = sheetRefreshes.get(key);
+  if (current) {
+    current.again = true;
+    return current.done;
+  }
+  const state = { again: false };
+  state.done = (async () => {
+    try {
+      do {
+        state.again = false;
+        await run();
+      } while (state.again);
+    } finally {
+      sheetRefreshes.delete(key);
+    }
+  })();
+  sheetRefreshes.set(key, state);
+  return state.done;
+}
+
+/**
+ * Rewrites the plan group's already-generated sheets. A sheet nobody has
+ * generated yet is left alone — generating one is still an explicit action.
+ * Returns the queued promise (tests await it; routes don't).
+ */
+export async function refreshGeneratedSheets(planId, requester) {
+  try {
+    const plan = await prisma.plan.findUnique({ where: { id: planId }, select: { id: true, pitchGroupId: true } });
+    if (!plan) return;
+    // Keyed by the pitch group, not the plan: Plan A and Plan B share one
+    // spreadsheet, so edits to both must queue behind each other too.
+    await queueSheetRefresh(plan.pitchGroupId ?? plan.id, async () => {
+      try {
+        const group = await prisma.plan.findMany({
+          where: plan.pitchGroupId ? { pitchGroupId: plan.pitchGroupId } : { id: plan.id },
+          select: { clientSheetUrl: true, internalSheetUrl: true },
+        });
+        if (group.some((p) => p.clientSheetUrl)) await generatePlanSheet(planId, requester, { internal: false });
+        if (group.some((p) => p.internalSheetUrl)) await generatePlanSheet(planId, requester, { internal: true });
+      } catch (err) {
+        console.error(`[plans] couldn't refresh the Google Sheet for plan ${planId}:`, err?.message ?? err);
+      }
+    });
+  } catch (err) {
+    console.error(`[plans] couldn't queue a Google Sheet refresh for plan ${planId}:`, err?.message ?? err);
   }
 }
 
@@ -553,6 +617,9 @@ export function forClientPdf(plan) {
   return {
     name: plan.name,
     variantLabel: plan.variantLabel,
+    // Approval state — the client sheet shows whether this plan is the one
+    // that went ahead (Active) or not (29 Sep). Not a cost, safe to pass.
+    status: plan.status,
     clientName: plan.clientName,
     clientContact: plan.clientContact,
     clientCompany: plan.clientCompany,
@@ -1179,6 +1246,12 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
     // property of the file, not something a rewrite could ever revoke.
     if (!internal) await makeFilePublicViewable({ accessToken, fileId: spreadsheetId });
   } else {
+    // Rename this group's existing tabs to their current titles first (plan
+    // renamed, or its status flipped Active ↔ Not active, 29 Sep) — otherwise
+    // the new titles would be created alongside the old tabs, and the client's
+    // sheet would keep the stale pair forever.
+    const existingTabs = await getExistingSheetTabs({ accessToken, spreadsheetId });
+    await batchUpdateSpreadsheet({ accessToken, spreadsheetId, requests: reconcilePlanTabRequests(existingTabs, sheets, { internal }) });
     await ensureSheetTabsExist({ accessToken, spreadsheetId, titles });
   }
 
@@ -1199,8 +1272,8 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
     accessToken,
     spreadsheetId,
     requests: sheets.flatMap((t) => [
-      ...(gids[t.overviewTitle] != null ? buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols) : []),
-      ...(gids[t.pagesTitle] != null ? buildFormatRequests(gids[t.pagesTitle], t.pagesRowSpecs, t.pagesNumCols) : []),
+      ...(gids[t.overviewTitle] != null ? [...buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols), ...tabStatusRequests(gids[t.overviewTitle], t.plan)] : []),
+      ...(gids[t.pagesTitle] != null ? [...buildFormatRequests(gids[t.pagesTitle], t.pagesRowSpecs, t.pagesNumCols), ...tabStatusRequests(gids[t.pagesTitle], t.plan)] : []),
     ]),
   });
 

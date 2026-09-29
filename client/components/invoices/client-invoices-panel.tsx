@@ -8,7 +8,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Field, TextField } from "@/components/ui/form-field";
-import { DownloadIcon, SearchIcon, CloseIcon } from "@/components/icons";
+import { DownloadIcon, SearchIcon, CloseIcon, UploadIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { clientInvoices as clientInvoicesApi, ApiError, type ClientInvoice } from "@/lib/api-client";
 import { PlanInvoiceAttachmentControl } from "@/components/plans/plan-invoice-attachment";
@@ -36,15 +36,21 @@ export function ClientInvoicesPanel({
   hasAttachment = false,
   showAttachmentControl = false,
   searchPlaceholder = "Search invoice, client, plan maker…",
+  initialSearch = "",
+  onAttachInvoice,
 }: {
   token: string;
   canManage: boolean;
   hasAttachment?: boolean;
   showAttachmentControl?: boolean;
   searchPlaceholder?: string;
+  /** Seeds the search box (25 Sep — the "Attach an invoice" client picker opens this list pre-searched for the client it picked). Only read on first render; the search box is still freely editable after. */
+  initialSearch?: string;
+  /** Renders an "Attach an invoice" action next to the search bar when set (25 Sep — Receivables' client-picker entry point). Omit to leave it out, e.g. on the Payments tab. */
+  onAttachInvoice?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch);
   const [statusFilter, setStatusFilter] = useState<ClientInvoice["status"] | "">("");
   const [settling, setSettling] = useState<ClientInvoice | null>(null);
   const [cancelling, setCancelling] = useState<ClientInvoice | null>(null);
@@ -152,6 +158,12 @@ export function ClientInvoicesPanel({
           <option value="PAID">Paid</option>
           <option value="CANCELLED">Cancelled</option>
         </select>
+        {onAttachInvoice && (
+          <Button variant="secondary" size="sm" className="rounded-full" onClick={onAttachInvoice} data-testid="attach-invoice-button">
+            <UploadIcon className="h-3.5 w-3.5" />
+            Attach an invoice
+          </Button>
+        )}
       </div>
 
       {(markPaidMutation.isError || cancelMutation.isError || downloadMutation.isError) && (

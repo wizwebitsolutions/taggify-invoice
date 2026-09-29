@@ -400,6 +400,8 @@ function PlansSection({
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
   });
+  // An existing link opens straight away — the server keeps it current by
+  // rewriting the sheet after every plan edit (plans/routes.js, 29 Sep).
   function openSheet(plan: Plan, variant: "client" | "internal") {
     const existingUrl = variant === "client" ? plan.clientSheetUrl : plan.internalSheetUrl;
     if (existingUrl) {

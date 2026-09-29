@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // jwt.js reads its secrets at import time — real tokens here, so the
 // challenge-token purpose checks are exercised for real, not mocked away.
@@ -258,6 +258,58 @@ describe("login — trusted device (user decision, 23 Sep: 'skip OTP for 7 days'
     expect(result.accessToken).toBeTruthy();
     expect(result.trustedDeviceToken).toBeUndefined();
     expect(issueTrustedDevice).not.toHaveBeenCalled();
+  });
+});
+
+describe("login — OTP bypass for test accounts (OTP_BYPASS_EMAILS, 28 Sep)", () => {
+  const dummy = () => verified({ email: "creator1@taggify.test" });
+  afterEach(() => {
+    delete process.env.OTP_BYPASS_EMAILS;
+  });
+
+  it("is off unless the env var is set — an unset allowlist still emails a code", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(dummy());
+
+    const result = await login({ email: "creator1@taggify.test", password: "right-password" });
+
+    expect(result.step).toBe("OTP_REQUIRED");
+    expect(issueOtp).toHaveBeenCalledTimes(1);
+  });
+
+  it("an allowlisted address signs in without a code", async () => {
+    process.env.OTP_BYPASS_EMAILS = "planner1@taggify.test, creator1@taggify.test";
+    mockPrisma.user.findUnique.mockResolvedValue(dummy());
+
+    const result = await login({ email: "creator1@taggify.test", password: "right-password" });
+
+    expect(result.step).toBe("AUTHENTICATED");
+    expect(result.accessToken).toBeTruthy();
+    expect(issueOtp).not.toHaveBeenCalled();
+  });
+
+  it("still checks the password first — being allowlisted doesn't save a wrong password", async () => {
+    process.env.OTP_BYPASS_EMAILS = "creator1@taggify.test";
+    mockPrisma.user.findUnique.mockResolvedValue(dummy());
+
+    await expect(login({ email: "creator1@taggify.test", password: "nope" })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it("only the listed addresses bypass — every other account still gets a code", async () => {
+    process.env.OTP_BYPASS_EMAILS = "creator1@taggify.test";
+    mockPrisma.user.findUnique.mockResolvedValue(verified());
+
+    const result = await login({ email: "creator@gmail.com", password: "right-password" });
+
+    expect(result.step).toBe("OTP_REQUIRED");
+    expect(issueOtp).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unverified test account bypasses too (its address can never receive a code)", async () => {
+    process.env.OTP_BYPASS_EMAILS = "creator1@taggify.test";
+    mockPrisma.user.findUnique.mockResolvedValue(unverified({ email: "creator1@taggify.test" }));
+
+    expect((await login({ email: "creator1@taggify.test", password: "right-password" })).step).toBe("AUTHENTICATED");
   });
 });
 

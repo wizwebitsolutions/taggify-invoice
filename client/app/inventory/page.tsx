@@ -53,6 +53,13 @@ function InventoryContent() {
   // "Admin" in the loose sense of "can manage Inventory" — a plain ADMIN by
   // default, or (15 Sep) any other role explicitly granted inventory.manage.
   const isAdmin = hasAccess(user, "inventory.edit");
+  // The server's auto-approval + rate-card write is gated on the literal
+  // ADMIN role (createAsset/importAssets), not on the inventory.edit grant —
+  // a FINANCE account granted inventory.edit can manage Inventory but still
+  // has its own submissions land pending with no rate card, same as anyone
+  // else. isAdmin above must stay reserved for "can access these routes at
+  // all"; this one specifically mirrors what the server will actually do.
+  const isFullAdmin = user?.role === "ADMIN";
   // A creator adds their own pages; a plan maker (25 Sep) registers a
   // vendor's page while building a plan — both via the same simple "Add
   // page" entry point, distinguished inside the modal by canAssignOwner.
@@ -61,6 +68,11 @@ function InventoryContent() {
   // registers pages under any creator account, one at a time or from a
   // sheet (user request, 14 Sep).
   const canAddPage = (user?.role === "CREATOR" || user?.role === "PLAN_MAKER") && canUse(user, "inventory.edit");
+  // Bulk import (25 Sep): same inventory.edit grant as "Add page" opens it up
+  // to Creator/Plan Maker too — ImportPagesModal itself scopes what each
+  // role's sheet can actually do (own pages only for a Creator; pending, no
+  // rate card for anyone but an Admin).
+  const canImport = isAdmin || canAddPage;
   // Owner-assignment UI (existing-account picker + create-a-new-creator):
   // real staff isAdmin, or a plan maker granted inventory.edit — never a
   // plain creator, whose own page is implicitly theirs.
@@ -108,21 +120,23 @@ function InventoryContent() {
           title="Inventory"
           subtitle={canManagePlans ? "Every page you can book, by category. Select pages to build a plan." : "Pages and their rate cards."}
           actions={
-            isAdmin ? (
+            canImport ? (
               <>
                 <Button variant="secondary" onClick={() => setShowImport(true)} data-testid="import-pages-button">
                   <UploadIcon className="h-4 w-4" />
                   Import pages
                 </Button>
-                <Button onClick={() => setShowAddPage(true)} data-testid="create-page-button">
-                  <PlusIcon className="h-4 w-4" />
-                  Create page
-                </Button>
+                {isAdmin && (
+                  <Button onClick={() => setShowAddPage(true)} data-testid="create-page-button">
+                    <PlusIcon className="h-4 w-4" />
+                    Create page
+                  </Button>
+                )}
               </>
             ) : undefined
           }
         />
-        <PagesSection token={token} isAdmin={isAdmin} canAssignOwner={canAssignOwner} showForm={showAddPage} setShowForm={setShowAddPage} canSelect={canManagePlans || isAdmin} selectedAssetIds={selectedAssetIds} setSelectedAssetIds={setSelectedAssetIds} />
+        <PagesSection token={token} isAdmin={isAdmin} isFullAdmin={isFullAdmin} canAssignOwner={canAssignOwner} showForm={showAddPage} setShowForm={setShowAddPage} canSelect={canManagePlans || isAdmin} selectedAssetIds={selectedAssetIds} setSelectedAssetIds={setSelectedAssetIds} />
       </div>
 
       {showImport && <ImportPagesModal token={token} onClose={() => setShowImport(false)} onImported={() => queryClient.invalidateQueries({ queryKey: ["assets"] })} />}
@@ -151,6 +165,7 @@ function InventoryContent() {
 function PagesSection({
   token,
   isAdmin,
+  isFullAdmin,
   canAssignOwner,
   showForm,
   setShowForm,
@@ -160,6 +175,7 @@ function PagesSection({
 }: {
   token: string;
   isAdmin: boolean;
+  isFullAdmin: boolean;
   canAssignOwner: boolean;
   showForm: boolean;
   setShowForm: (v: boolean) => void;
@@ -315,7 +331,17 @@ function PagesSection({
               </tr>
             </THead>
             {items.map((asset, i) => (
-              <AssetRow key={asset.id} asset={asset} index={i} token={token} editable={isAdmin} selectable={canSelect} selected={selectedAssetIds.has(asset.id)} onToggleSelect={() => toggleSelected(asset.id)} />
+              <AssetRow
+                key={asset.id}
+                asset={asset}
+                index={i}
+                token={token}
+                editable={isAdmin}
+                selectable={canSelect}
+                selected={selectedAssetIds.has(asset.id)}
+                onToggleSelect={() => toggleSelected(asset.id)}
+                existingCategories={categories.filter((c) => c.label !== "All").map((c) => c.label)}
+              />
             ))}
           </Table>
         )}
@@ -324,7 +350,7 @@ function PagesSection({
       {showForm && (
         <NewAssetModal
           token={token}
-          isAdmin={isAdmin}
+          isAdmin={isFullAdmin}
           canAssignOwner={canAssignOwner}
           existingCategories={categories.filter((c) => c.label !== "All").map((c) => c.label)}
           onClose={() => setShowForm(false)}
@@ -419,16 +445,52 @@ function SelectionBar({ total, selectedCount, allSelected, onToggleAll, onSelect
   );
 }
 
-function AssetRow({ asset, index, token, editable, selectable, selected, onToggleSelect }: { asset: Asset; index: number; token: string; editable: boolean; selectable: boolean; selected: boolean; onToggleSelect: () => void }) {
+function AssetRow({
+  asset,
+  index,
+  token,
+  editable,
+  selectable,
+  selected,
+  onToggleSelect,
+  existingCategories,
+}: {
+  asset: Asset;
+  index: number;
+  token: string;
+  editable: boolean;
+  selectable: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
+  existingCategories: string[];
+}) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   // reel/story only (user request, 14 Sep) — no custom formats any more; a
   // legacy rate card in another format simply isn't shown or re-saved.
   const formats: string[] = [...FORMATS];
   const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(formats.map((f) => [f, asset.rateCards.find((rc) => rc.format === f)?.amount ?? ""])));
+  const [category, setCategory] = useState(asset.category ?? "");
+  // Only a figure that's already a manual override prefills — an empty box
+  // means "use the scraped number", which is also how you clear an override.
+  const manualFigure = (key: "avgViews" | "avgLikes" | "avgComments") => (asset.engagement.manual?.[key] ? String(asset.engagement[key] ?? "") : "");
+  const [engagement, setEngagement] = useState({ avgViews: manualFigure("avgViews"), avgLikes: manualFigure("avgLikes"), avgComments: manualFigure("avgComments") });
 
   const saveMutation = useMutation({
-    mutationFn: () => assetsApi.updateRateCard(token, asset.id, formats.filter((f) => amounts[f]).map((f) => ({ format: f, amount: Number(amounts[f]) }))),
+    mutationFn: async () => {
+      const rateCards = formats.filter((f) => amounts[f]).map((f) => ({ format: f, amount: Number(amounts[f]) }));
+      // Only when there's something to save: the rate-card endpoint requires at
+      // least one entry, so posting an empty list for a page that has no rates
+      // yet would 400 and take the details save down with it.
+      if (rateCards.length > 0) await assetsApi.updateRateCard(token, asset.id, rateCards);
+      const figure = (raw: string) => (raw.trim() === "" ? null : Number(raw));
+      return assetsApi.updateDetails(token, asset.id, {
+        category: category.trim() === "" ? null : category.trim(),
+        avgViews: figure(engagement.avgViews),
+        avgLikes: figure(engagement.avgLikes),
+        avgComments: figure(engagement.avgComments),
+      });
+    },
     onSuccess: () => {
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["assets"] });
@@ -600,17 +662,45 @@ function AssetRow({ asset, index, token, editable, selectable, selected, onToggl
                       </div>
                     ))}
                   </div>
+                  <p className="mb-2 mt-3 text-[0.72rem] font-medium text-text-muted">Category</p>
+                  <ComboInput
+                    aria-label="Category"
+                    value={category}
+                    onChange={setCategory}
+                    suggestions={existingCategories.map((c) => ({ key: c, label: c }))}
+                    placeholder="Search or type a new category…"
+                  />
                 </div>
                 <div>
                   <p className="mb-2 text-[0.72rem] font-medium text-text-muted">Engagement</p>
                   <div className="grid grid-cols-3 gap-1.5">
-                    <EngagementStat label="Avg. likes" value={asset.engagement.avgLikes} />
-                    <EngagementStat label="Avg. comments" value={asset.engagement.avgComments} />
-                    <EngagementStat label="Avg. views" value={asset.engagement.avgViews} />
+                    {(
+                      [
+                        ["avgLikes", "Avg. likes"],
+                        ["avgComments", "Avg. comments"],
+                        ["avgViews", "Avg. views"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <label key={key} className="flex flex-col gap-1">
+                        <IntegerField
+                          className="h-8 w-full px-2 text-center text-[0.8125rem]"
+                          value={engagement[key]}
+                          onChange={(v) => setEngagement((prev) => ({ ...prev, [key]: v }))}
+                          // An empty box falls back to the scraped figure, so the
+                          // placeholder shows what that currently is.
+                          placeholder={asset.engagement[key] === null ? "N/A" : compactNumber(asset.engagement[key]!)}
+                          aria-label={label}
+                        />
+                        <span className="truncate text-center text-[0.65rem] text-text-muted">{label}</span>
+                      </label>
+                    ))}
                   </div>
+                  <p className="mt-1.5 text-[0.68rem] text-text-muted">
+                    {asset.engagement.manual ? "Typed in here — clear a box to use the scraped number again." : "Leave blank to keep using the scraped numbers."}
+                  </p>
                   {asset.engagement.sampleSize > 0 && (
-                    <p className="mt-1.5 text-[0.68rem] text-text-muted">
-                      Across {asset.engagement.sampleSize} {asset.engagement.source === "profile" ? "recent post" : "scraped post"}
+                    <p className="mt-1 text-[0.68rem] text-text-muted">
+                      Scraped from {asset.engagement.sampleSize} {asset.engagement.source === "profile" ? "recent post" : "scraped post"}
                       {asset.engagement.sampleSize === 1 ? "" : "s"}
                       {asset.engagement.source === "profile" ? " on the profile" : ""}
                     </p>
@@ -645,15 +735,6 @@ function AssetRow({ asset, index, token, editable, selectable, selected, onToggl
         </tr>
       )}
     </tbody>
-  );
-}
-
-function EngagementStat({ label, value }: { label: string; value: number | null }) {
-  return (
-    <div className="flex flex-col gap-0.5 rounded-md border border-border bg-surface px-1.5 py-1.5 text-center">
-      <span className="truncate text-[0.8125rem] font-semibold tabular-nums">{value === null ? "N/A" : compactNumber(value)}</span>
-      <span className="truncate text-[0.65rem] text-text-muted">{label}</span>
-    </div>
   );
 }
 

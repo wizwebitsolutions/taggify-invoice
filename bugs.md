@@ -6,3 +6,7 @@
 6. import work for admin should have option of google sheet link as well 
 7. edit and view campaign detail inside campaign tab with nice ui, campaigns can have cost revise as well for individual pages as well 
 8.
+
+28 sept
+
+1. in inventory after pages created, there is no option of edit category, engagement.please fix

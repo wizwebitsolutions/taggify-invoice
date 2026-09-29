@@ -18,9 +18,11 @@ import { Field, TextField } from "@/components/ui/form-field";
 import { DownloadIcon, SearchIcon, PlusIcon, AlertIcon, CheckCircleIcon, CloseIcon, MoreIcon, ArrowRightIcon } from "@/components/icons";
 import { Th, TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { InvoiceAttachmentControl } from "@/components/invoices/invoice-attachment";
+import { PaySheet, toPaymentInvoice } from "@/components/payments/pay-sheet";
 import { useAuth } from "@/lib/auth-context";
 import { InvoiceNumberingCard } from "@/components/invoices/invoice-numbering-card";
 import { ClientInvoicesPanel } from "@/components/invoices/client-invoices-panel";
+import { AttachInvoiceModal } from "@/components/invoices/attach-invoice-modal";
 import {
   invoices as invoicesApi,
   links as linksApi,
@@ -35,6 +37,9 @@ import {
 } from "@/lib/api-client";
 import { money, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+/** Posts on an invoice beyond their campaign booking (29 Sep) — non-zero blocks Approve and Pay until it's rejected and re-raised. */
+const overQuotaOf = (inv: Invoice) => inv.overQuotaCount ?? 0;
 
 export default function InvoicesPage() {
   return (
@@ -63,6 +68,10 @@ function InvoicesContent() {
   );
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [showAttachInvoice, setShowAttachInvoice] = useState(false);
+  // Paying an invoice off directly (28 Sep) opens the same TDS + mandatory-
+  // receipt PaySheet the Payments tab uses, instead of the old bare mark-paid.
+  const [payingInvoice, setPayingInvoice] = useState<Invoice | null>(null);
   // Payables (creators bill us) vs Receivables (we bill the plan's client) —
   // user decision, 23 Sep. Deep-linkable as ?view=receivables.
   const [view, setView] = useState<"payables" | "receivables">(searchParams.get("view") === "receivables" ? "receivables" : "payables");
@@ -114,10 +123,6 @@ function InvoicesContent() {
   // Plan Maker can see the ones on their plans. Server: GET /invoices/client.
   const canSeeReceivables = hasAccess(user, "finance.view") || user?.role === "PLAN_MAKER";
 
-  const markPaidMutation = useMutation({
-    mutationFn: (id: string) => invoicesApi.markPaid(token, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
-  });
   const approveMutation = useMutation({
     mutationFn: (id: string) => invoicesApi.approve(token, id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
@@ -169,6 +174,14 @@ function InvoicesContent() {
         {inv.status === "REJECTED" && inv.remarks && (
           <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] text-rose">{inv.remarks}</p>
         )}
+        {overQuotaOf(inv) > 0 && inv.status !== "REJECTED" && inv.status !== "PAID" && (
+          <p className="rounded-md border border-rose/30 bg-rose-soft px-3.5 py-2.5 text-[0.8125rem] text-rose" data-testid="invoice-over-quota">
+            <b className="font-semibold">
+              {overQuotaOf(inv)} post{overQuotaOf(inv) === 1 ? " is" : "s are"} beyond what the campaign booked.
+            </b>{" "}
+            This invoice can&rsquo;t be approved or paid as it stands — reject it so it can be raised again with only the booked posts.
+          </p>
+        )}
         <div className="h-px bg-border" />
         <div className="flex flex-col gap-3">
           {(inv.items ?? []).slice(0, 4).map((item) => (
@@ -212,18 +225,19 @@ function InvoicesContent() {
           {downloadLinksMutation.isPending ? "Preparing…" : "Download links"}
         </Button>
 
-        {canApprove && inv.status === "RAISED" && (
+        {canApprove && inv.status === "RAISED" && overQuotaOf(inv) === 0 && (
           <Button size="lg" className="w-full" onClick={() => approveMutation.mutate(inv.id)} disabled={approveMutation.isPending}>
             <CheckCircleIcon className="h-4 w-4 text-accent-ink" />
             {approveMutation.isPending ? "Approving…" : "Approve invoice"}
           </Button>
         )}
-        {/* Payment only once approved — the server's markPaid enforces the
-            same (12 Sep), so a RAISED invoice shows Approve and nothing
-            payable until that's done. */}
-        {canManage && inv.status === "APPROVED" && (
-          <Button size="lg" className="w-full" onClick={() => markPaidMutation.mutate(inv.id)} disabled={markPaidMutation.isPending}>
-            {markPaidMutation.isPending ? "Marking paid…" : "Mark as paid"}
+        {/* Payment only once approved (12 Sep) — a RAISED invoice shows
+            Approve and nothing payable until that's done. Paying opens the
+            same TDS + mandatory-receipt PaySheet the Payments tab uses (28
+            Sep) — an invoice is paid off exclusively through a Payout now. */}
+        {canManage && inv.status === "APPROVED" && overQuotaOf(inv) === 0 && (
+          <Button size="lg" className="w-full" onClick={() => setPayingInvoice(inv)}>
+            Mark as paid
           </Button>
         )}
         {canManage && inv.status !== "PAID" && inv.status !== "REJECTED" && (
@@ -243,13 +257,11 @@ function InvoicesContent() {
           </Button>
         )}
 
-        {(markPaidMutation.isError || approveMutation.isError || gstMutation.isError || downloadMutation.isError || downloadLinksMutation.isError) && (
+        {(approveMutation.isError || gstMutation.isError || downloadMutation.isError || downloadLinksMutation.isError) && (
           <ErrorNotice
             message={
-              markPaidMutation.error instanceof ApiError
-                ? markPaidMutation.error.message
-                : approveMutation.error instanceof ApiError
-                  ? approveMutation.error.message
+              approveMutation.error instanceof ApiError
+                ? approveMutation.error.message
                 : gstMutation.error instanceof ApiError
                   ? gstMutation.error.message
                   : downloadMutation.error instanceof ApiError
@@ -283,7 +295,11 @@ function InvoicesContent() {
           <p className="mb-1 text-[0.68rem] font-medium uppercase tracking-[0.06em] text-text-faint">Finance</p>
           <h1 className="mb-1 text-[1.5rem] font-semibold leading-tight tracking-[-0.03em] md:text-[1.625rem]">Invoices</h1>
           <p className="max-w-[56ch] text-[0.875rem] text-text-muted">
-            {view === "receivables" ? "Client invoices issued from approved plans — what clients owe us, settled manually." : "Raised, paid, and GST status — tracked independently, settled manually."}
+            {view === "receivables"
+              ? canManage
+                ? "What clients owe us, on plans with a real invoice attached — not just the Proforma."
+                : "Client invoices issued from your approved plans — what clients owe, settled manually."
+              : "Raised, paid, and GST status — tracked independently, settled manually."}
           </p>
         </div>
 
@@ -309,7 +325,13 @@ function InvoicesContent() {
         )}
 
         {view === "receivables" && canSeeReceivables ? (
-          <ClientInvoicesPanel token={token} canManage={canManage} />
+          // Attached-only for whoever can actually do something about an
+          // unattached row (Admin/Finance — Mark paid/Cancel, plus the new
+          // "Attach an invoice" picker below). A Plan Maker has neither on
+          // this page, so filtering them the same way would just make their
+          // own receivables disappear with no way to bring them back — they
+          // keep seeing everything, same as before this change.
+          <ClientInvoicesPanel token={token} canManage={canManage} hasAttachment={canManage} onAttachInvoice={canManage ? () => setShowAttachInvoice(true) : undefined} />
         ) : (
           <>
 
@@ -438,11 +460,10 @@ function InvoicesContent() {
                         canApprove={canApprove}
                         onApprove={() => approveMutation.mutate(inv.id)}
                         approvePending={approveMutation.isPending}
-                        onMarkPaid={() => markPaidMutation.mutate(inv.id)}
+                        onMarkPaid={() => setPayingInvoice(inv)}
                         onReject={() => setRejectingId(inv.id)}
                         onDownloadPdf={() => downloadMutation.mutate(inv)}
                         onDownloadLinks={() => downloadLinksMutation.mutate(inv)}
-                        markPaidPending={markPaidMutation.isPending}
                         downloadPdfPending={downloadMutation.isPending}
                         downloadLinksPending={downloadLinksMutation.isPending}
                       />
@@ -494,17 +515,16 @@ function InvoicesContent() {
                               : "—"}
                       </span>
                       <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
-                        {canApprove && inv.status === "RAISED" && (
+                        {canApprove && inv.status === "RAISED" && overQuotaOf(inv) === 0 && (
                           <Button size="sm" className="h-9 px-2.5" onClick={() => approveMutation.mutate(inv.id)} disabled={approveMutation.isPending}>
                             Approve
                           </Button>
                         )}
-                        {canManage && inv.status === "APPROVED" && (
+                        {canManage && inv.status === "APPROVED" && overQuotaOf(inv) === 0 && (
                           <Button
                             size="sm"
                             className="h-9 bg-accent-soft px-2.5 text-accent shadow-none hover:brightness-100"
-                            onClick={() => markPaidMutation.mutate(inv.id)}
-                            disabled={markPaidMutation.isPending}
+                            onClick={() => setPayingInvoice(inv)}
                           >
                             Mark paid
                           </Button>
@@ -564,6 +584,27 @@ function InvoicesContent() {
           }}
         />
       )}
+
+      {showAttachInvoice && <AttachInvoiceModal token={token} canManage={canManage} onClose={() => setShowAttachInvoice(false)} />}
+
+      {payingInvoice && (
+        <PaySheet
+          mode="new"
+          token={token}
+          vendor={payingInvoice.creator!}
+          links={[]}
+          invoices={[toPaymentInvoice(payingInvoice)]}
+          onRemoveLink={() => {}}
+          // Only one invoice is ever in this sheet — removing it leaves nothing to pay, so close instead of showing PaySheet's "no links left" state (which assumes links, not invoices).
+          onRemoveInvoice={() => setPayingInvoice(null)}
+          onClose={() => setPayingInvoice(null)}
+          onPaid={() => {
+            setPayingInvoice(null);
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
+            queryClient.invalidateQueries({ queryKey: ["payments"] });
+          }}
+        />
+      )}
     </AppShell>
   );
 }
@@ -585,7 +626,6 @@ function InvoiceRowActions({
   onReject,
   onDownloadPdf,
   onDownloadLinks,
-  markPaidPending,
   downloadPdfPending,
   downloadLinksPending,
 }: {
@@ -598,7 +638,6 @@ function InvoiceRowActions({
   onReject: () => void;
   onDownloadPdf: () => void;
   onDownloadLinks: () => void;
-  markPaidPending: boolean;
   downloadPdfPending: boolean;
   downloadLinksPending: boolean;
 }) {
@@ -608,8 +647,10 @@ function InvoiceRowActions({
   // (server-enforced too) — so a RAISED row shows Approve for Admin and
   // no payment action for Finance until that's done.
   const canAct = canManage && inv.status !== "PAID" && inv.status !== "REJECTED";
-  const canPay = canManage && inv.status === "APPROVED";
-  const showApprove = canApprove && inv.status === "RAISED";
+  // Over-quota posts on it (29 Sep): Reject stays (that's how it's resolved), Approve and Pay don't.
+  const blocked = overQuotaOf(inv) > 0;
+  const canPay = canManage && inv.status === "APPROVED" && !blocked;
+  const showApprove = canApprove && inv.status === "RAISED" && !blocked;
 
   useEffect(() => {
     if (!open) return;
@@ -635,7 +676,7 @@ function InvoiceRowActions({
         </Button>
       )}
       {canPay && (
-        <Button size="sm" className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100" onClick={onMarkPaid} disabled={markPaidPending}>
+        <Button size="sm" className="h-8 bg-accent-soft text-accent shadow-none hover:brightness-100" onClick={onMarkPaid}>
           Mark paid
         </Button>
       )}

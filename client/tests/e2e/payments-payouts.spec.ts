@@ -43,6 +43,30 @@ const L1 = pendingLink("l1", ROHAN, "memes.daily", "Swiggy Instamart · Sep", "8
 const L2 = pendingLink("l2", ROHAN, "desi.humour", "boAt Airdopes launch", "12000");
 const L3 = pendingLink("l3", KABIR, "cricket.buzz", "Zomato Gold relaunch", "22000");
 
+/** A creator-raised invoice as the Payments list carries it (25 Sep). */
+function payInvoice(id: string, owner: typeof ROHAN, status: "RAISED" | "APPROVED" | "PAID", amount: string, linkCost: string) {
+  return {
+    id,
+    invoiceNumber: `INV-${id.toUpperCase()}`,
+    creatorId: owner.id,
+    amount,
+    subtotal: linkCost,
+    isGstInvoice: false,
+    gstAmount: "0",
+    status,
+    dueDate: "2026-10-10T00:00:00.000Z",
+    paidAt: status === "PAID" ? "2026-09-20T00:00:00.000Z" : null,
+    createdAt: "2026-09-10T00:00:00.000Z",
+    creator: owner,
+    links: [{ id: `il-${id}`, url: `https://instagram.com/reel/il-${id}`, format: "reel", cost: linkCost, campaign: { id: "c9", title: "Nykaa Diwali", brandName: "Nykaa" }, asset: { id: "asset-x", handle: "memes.daily" } }],
+    selectable: status !== "PAID",
+  };
+}
+const INV_OPEN = payInvoice("i1", ROHAN, "RAISED", "5000", "5000");
+const INV_PAID = payInvoice("i2", ROHAN, "PAID", "3000", "3000");
+
+const SUMMARY = { totalDues: 47000, dueThisMonth: 12000, paidThisMonth: 9000, overdue30: 3000, dueCount: 4 };
+
 type Recorded = {
   pendingQueries: URLSearchParams[];
   created: Record<string, unknown>[];
@@ -59,6 +83,7 @@ async function mockPayments(page: Page, opts: { drafts?: Record<string, unknown>
   let lastCreated: Record<string, unknown> | null = null;
 
   await page.route(`${API_URL}/assets/owners`, (route) => route.fulfill({ json: [ROHAN, KABIR] }));
+  await page.route(`${API_URL}/payments/summary`, (route) => route.fulfill({ json: SUMMARY }));
   await page.route(`${API_URL}/fake-cloudinary`, (route) => route.fulfill({ status: opts.uploadStatus ?? 200, json: { ok: true } }));
   await page.route(`${API_URL}/payments/**`, async (route) => {
     const url = new URL(route.request().url());
@@ -68,17 +93,27 @@ async function mockPayments(page: Page, opts: { drafts?: Record<string, unknown>
     if (method === "GET" && path === "/pending") {
       rec.pendingQueries.push(url.searchParams);
       const items = [L1, L2, L3].filter((l) => !paidIds.has(l.id));
-      return route.fulfill({ json: { items, total: items.length } });
+      // The server only ever returns owed invoices here now (28 Sep fix) — a
+      // paid one shows in the Paid tab's merged ledger instead.
+      const invoices = [INV_OPEN, INV_PAID].filter((i) => i.status !== "PAID");
+      return route.fulfill({ json: { items, total: items.length, invoices } });
     }
     if (method === "GET" && path === "/payouts") {
       const items = url.searchParams.get("status") === "DRAFT" ? drafts : payouts;
       return route.fulfill({ json: { items, total: items.length, page: 1, pageSize: 100 } });
     }
+    // The Paid tab's merged ledger (28 Sep fix) — real Payouts only in this
+    // fixture (no legacy standalone-paid invoice case here; see the dedicated test below).
+    if (method === "GET" && path === "/paid") {
+      const rows = payouts.map((p) => ({ kind: "payout", paidAt: (p as { paidAt: string }).paidAt, payout: p }));
+      return route.fulfill({ json: { items: rows, total: rows.length } });
+    }
     if (method === "POST" && path === "/payouts") {
       const body = route.request().postDataJSON();
       rec.created.push(body);
       const links = [L1, L2, L3].filter((l) => body.linkIds.includes(l.id));
-      const subtotal = links.reduce((s, l) => s + Number(l.cost), 0);
+      const invs = [INV_OPEN].filter((i) => (body.invoiceIds ?? []).includes(i.id));
+      const subtotal = links.reduce((s, l) => s + Number(l.cost), 0) + invs.reduce((s, i) => s + Number(i.subtotal), 0);
       const gst = body.isGstInvoice ? subtotal * 0.18 : 0;
       const tds = body.tdsPercent ? subtotal * (body.tdsPercent / 100) : 0;
       lastCreated = {
@@ -94,7 +129,7 @@ async function mockPayments(page: Page, opts: { drafts?: Record<string, unknown>
         paidAt: null,
         createdAt: "2026-09-24T00:00:00.000Z",
         creator: ROHAN,
-        items: links.map((l) => ({ id: `item-${l.id}`, amount: l.cost, link: l })),
+        items: [...links, ...invs.flatMap((i) => i.links)].map((l) => ({ id: `item-${l.id}`, amount: l.cost, link: l })),
       };
       return route.fulfill({ status: 201, json: lastCreated });
     }
@@ -217,7 +252,7 @@ test.describe("Payments — admin payouts (list-first, 24 Sep)", () => {
     await markPaid.click();
 
     await expect(page.getByTestId("payout-paid")).toContainText("₹23,200 to Rohan Mehta");
-    expect(rec.created).toEqual([{ creatorId: "creator-1", linkIds: ["l1", "l2"], isGstInvoice: true, tdsPercent: 2 }]);
+    expect(rec.created).toEqual([{ creatorId: "creator-1", linkIds: ["l1", "l2"], invoiceIds: [], isGstInvoice: true, tdsPercent: 2 }]);
     expect(rec.receipts).toHaveLength(1);
     expect(rec.receipts[0].id).toBe("p-new");
     expect(rec.receipts[0].body).toMatchObject({ fileName: "neft-receipt.pdf", utr: "UTR123" });
@@ -367,20 +402,122 @@ test.describe("Payments — admin payouts (list-first, 24 Sep)", () => {
     await expect(page.getByTestId("pending-row")).toHaveCount(0);
   });
 
-  test("summary tiles: pending total across every vendor, and 'Paid this month' jumps to Paid filtered to this month", async ({ page }) => {
+  test("summary tiles: Total dues / Due this month / Paid this month / 30+ days, and Paid this month jumps to Paid filtered to this month", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await mockPayments(page);
     await page.goto("/payments");
 
     const kpis = page.getByTestId("payments-kpis");
-    await expect(kpis).toContainText("Pending payout");
-    await expect(kpis).toContainText("₹42,000"); // 8,000 + 12,000 + 22,000
-    await expect(kpis).toContainText("3 links · 2 page owners");
+    await expect(kpis).toContainText("Total dues");
+    await expect(kpis).toContainText("₹47,000");
+    await expect(kpis).toContainText("Due this month");
+    await expect(kpis).toContainText("₹12,000");
+    await expect(kpis).toContainText("₹9,000");
+    await expect(kpis).toContainText("30+ days");
+    await expect(kpis).toContainText("₹3,000");
 
     await kpis.getByRole("button", { name: /Paid in/ }).click();
     await expect(page.getByRole("tab", { name: /Paid/ })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("combobox", { name: "Paid in" })).toHaveValue(currentMonthKey());
+  });
+
+  test("creator-raised invoices sit in their own Invoices category — Pending lists only uninvoiced links", async ({ page }) => {
+    await signIn(page, "FINANCE");
+    await mockApi(page);
+    await mockPayments(page);
+    await page.goto("/payments");
+
+    // Pending: links only, no invoice rows anywhere.
+    await openVendor(page, "Rohan Mehta");
+    await expect(page.getByTestId("pending-row")).toHaveCount(2);
+    await expect(page.getByTestId("pending-invoice-row")).toHaveCount(0);
+
+    await page.getByRole("tab", { name: /Invoices/ }).click();
+    await expect(page.getByRole("tab", { name: /Invoices/ })).toHaveAttribute("aria-selected", "true");
+    await openVendor(page, "Rohan Mehta");
+    await expect(page.getByTestId("pending-row")).toHaveCount(0);
+    await expect(page.getByTestId("pending-invoice-row")).toHaveCount(1); // Due (default): only the owed one
+    await expect(page.getByTestId("pending-invoice-row")).toContainText("INV-I1");
+    await expect(page.getByTestId("pending-invoice-row")).toContainText("₹5,000");
+  });
+
+  test("the Invoices tab only ever shows what's still owed — a paid one lives in the Paid tab instead; an owed one is paid whole with invoiceIds going to the server", async ({ page }) => {
+    await signIn(page, "FINANCE");
+    await mockApi(page);
+    const rec = await mockPayments(page);
+    await page.goto("/payments");
+
+    await page.getByRole("tab", { name: /Invoices/ }).click();
+    // No Due/Paid/All switch any more (28 Sep fix) — a paid invoice never shows here.
+    await expect(page.getByTestId("pending-status-switch")).toHaveCount(0);
+    await openVendor(page, "Rohan Mehta");
+    const rows = page.getByTestId("pending-invoice-row");
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toContainText("INV-I1");
+
+    // The owed one is selectable and pays the whole invoice.
+    await rows.filter({ hasText: "INV-I1" }).getByRole("checkbox").check();
+    await page.getByTestId("pay-vendor").click();
+    const sheet = page.getByTestId("pay-sheet");
+    await expect(sheet.getByTestId("pay-sheet-invoices")).toContainText("INV-I1");
+    await expect(sheet.getByTestId("payout-preview")).toContainText("₹5,000");
+    await sheet.getByLabel("Payment receipt").setInputFiles(receiptFile);
+    await sheet.getByRole("button", { name: /Mark paid/ }).click();
+    await expect(page.getByTestId("payout-paid")).toBeVisible();
+    expect(rec.created).toHaveLength(1);
+    expect(rec.created[0]).toMatchObject({ creatorId: "creator-1", linkIds: [], invoiceIds: ["i1"] });
+  });
+
+  test("the Paid tab shows a legacy standalone-paid invoice (paid before the direct mark-paid path was removed) alongside real payouts, with TDS blank and a way to attach a receipt", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPayments(page);
+    const legacyInvoice = {
+      id: "inv-legacy",
+      invoiceNumber: "INV-LEGACY",
+      creatorId: KABIR.id,
+      amount: "3000",
+      subtotal: "3000",
+      isGstInvoice: false,
+      gstAmount: "0",
+      status: "PAID",
+      dueDate: null,
+      paidAt: "2026-09-18T00:00:00.000Z",
+      createdAt: "2026-09-10T00:00:00.000Z",
+      creator: KABIR,
+      links: [{ id: "ll1", url: "https://instagram.com/reel/ll1", format: "reel", cost: "3000", asset: { id: "asset-cricket.buzz", handle: "cricket.buzz" } }],
+      selectable: false,
+      receipt: null,
+    };
+    let uploaded: Record<string, unknown> | null = null;
+    await page.route(`${API_URL}/payments/**`, (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/payments/paid") return route.fulfill({ json: { items: [{ kind: "invoice", paidAt: legacyInvoice.paidAt, invoice: legacyInvoice }], total: 1 } });
+      return route.fallback();
+    });
+    await page.route(`${API_URL}/fake-cloudinary`, (route) => route.fulfill({ json: { ok: true } }));
+    await page.route(`${API_URL}/invoices/inv-legacy/receipt-upload`, (route) =>
+      route.fulfill({ json: { uploadUrl: `${API_URL}/fake-cloudinary`, apiKey: "k", timestamp: 1, signature: "s", publicId: "invoice-receipts/inv-legacy/uuid" } })
+    );
+    await page.route(`${API_URL}/invoices/inv-legacy/receipt`, (route) => {
+      uploaded = route.request().postDataJSON();
+      return route.fulfill({ status: 201, json: { name: "backfill.pdf", url: "https://cdn/backfill.pdf", uploadedAt: "2026-09-28T00:00:00.000Z" } });
+    });
+    await page.goto("/payments");
+
+    await page.getByRole("tab", { name: /Paid/ }).click();
+    const row = page.getByTestId("paid-row").filter({ has: page.getByText("Kabir Studios") });
+    await expect(row).toHaveAttribute("data-kind", "invoice");
+    await expect(row).toContainText("₹3,000");
+    await expect(row).toContainText("no TDS on file");
+    await expect(row).toContainText("Attach in details");
+
+    // The one upload control lives in the expanded panel, not the collapsed row.
+    await row.getByRole("button", { name: /Show links|Hide links/ }).click();
+    await row.getByRole("button", { name: "Attach receipt" }).click();
+    await row.getByLabel("Invoice payment receipt").setInputFiles(receiptFile);
+    await expect.poll(() => uploaded).toMatchObject({ fileName: "neft-receipt.pdf" });
   });
 
   test("the receipt can be dropped onto the pay sheet as well as picked", async ({ page }) => {
@@ -480,36 +617,29 @@ test.describe("Payments — creator's own view (24 Sep)", () => {
     const myQueries: URLSearchParams[] = [];
     await page.route(`${API_URL}/payments/**`, (route) => {
       const url = new URL(route.request().url());
+      if (url.pathname === "/api/payments/me/summary") return route.fulfill({ json: SUMMARY });
       if (url.pathname === "/api/payments/me/pending") {
         myQueries.push(url.searchParams);
-        return route.fulfill({ json: { items: [L1, L2], total: 2 } });
+        return route.fulfill({ json: { items: [L1, L2], total: 2, invoices: [] } });
       }
-      if (url.pathname === "/api/payments/me/payouts") {
-        return route.fulfill({
-          json: {
-            items: [
-              {
-                id: "p-1",
-                creatorId: "creator-1",
-                subtotal: "21000",
-                isGstInvoice: false,
-                gstAmount: "0",
-                tdsPercent: "1",
-                tdsAmount: "210",
-                netAmount: "20790",
-                status: "PAID",
-                paidAt: "2026-09-22T00:00:00.000Z",
-                utr: "4521889",
-                createdAt: "2026-09-22T00:00:00.000Z",
-                receipt: { name: "receipt.pdf", url: "https://cdn/receipt.pdf", uploadedAt: "2026-09-22T00:00:00.000Z" },
-                items: [{ id: "i1", amount: "21000", link: { ...L1, cost: "21000" } }],
-              },
-            ],
-            total: 1,
-            page: 1,
-            pageSize: 100,
-          },
-        });
+      if (url.pathname === "/api/payments/me/paid") {
+        const payout = {
+          id: "p-1",
+          creatorId: "creator-1",
+          subtotal: "21000",
+          isGstInvoice: false,
+          gstAmount: "0",
+          tdsPercent: "1",
+          tdsAmount: "210",
+          netAmount: "20790",
+          status: "PAID",
+          paidAt: "2026-09-22T00:00:00.000Z",
+          utr: "4521889",
+          createdAt: "2026-09-22T00:00:00.000Z",
+          receipt: { name: "receipt.pdf", url: "https://cdn/receipt.pdf", uploadedAt: "2026-09-22T00:00:00.000Z" },
+          items: [{ id: "i1", amount: "21000", link: { ...L1, cost: "21000" } }],
+        };
+        return route.fulfill({ json: { items: [{ kind: "payout", paidAt: payout.paidAt, payout }], total: 1 } });
       }
       adminEndpointHit = true;
       return route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "no" } } });
@@ -520,6 +650,8 @@ test.describe("Payments — creator's own view (24 Sep)", () => {
     await expect(page.getByRole("tab", { name: "Internal · creator payouts" })).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "Page owner" })).toHaveCount(0);
 
+    await expect(page.getByTestId("creator-payments-kpis")).toContainText("Total dues");
+    await expect(page.getByTestId("creator-payments-kpis")).toContainText("₹47,000");
     await expect(page.getByTestId("creator-pending-summary")).toContainText("₹20,000");
     await expect(page.getByTestId("creator-pending-row")).toHaveCount(2);
     await expect(page.getByTestId("creator-pending-list")).toContainText("@memes.daily");

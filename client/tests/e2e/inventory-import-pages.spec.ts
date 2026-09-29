@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { signIn, mockApi, API_URL } from "./fixtures";
+import { signIn, mockApi, userFor, API_URL } from "./fixtures";
 
 /**
  * Inventory → "Create page" / "Import pages" (user request, 14 Sep): an
@@ -45,12 +45,12 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     await expect(page.getByTestId("create-page-button")).toBeVisible();
   });
 
-  test("a CREATOR keeps its own Add page and never sees Import", async ({ page }) => {
+  test("a CREATOR keeps its own Add page, never the admin Create page button, but can also Import (25 Sep)", async ({ page }) => {
     await signIn(page, "CREATOR");
     await mockApi(page);
     await page.goto("/inventory");
     await expect(page.getByRole("button", { name: "Add page" }).first()).toBeVisible();
-    await expect(page.getByTestId("import-pages-button")).toHaveCount(0);
+    await expect(page.getByTestId("import-pages-button")).toBeVisible();
     await expect(page.getByTestId("create-page-button")).toHaveCount(0);
   });
 
@@ -346,5 +346,155 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
 
     await page.getByRole("button", { name: "Done" }).click();
     await expect(page.getByTestId("import-pages-modal")).toHaveCount(0);
+  });
+});
+
+// 25 Sep: Creator and Plan Maker can bulk-import too — scoped differently
+// from Admin's (see server/src/modules/assets/service.js): a Creator's sheet
+// is always their own pages (no account column, no rate cards, never sees
+// other creators); a Plan Maker gets the same account-picker Admin does.
+test.describe("Inventory — Import pages: Creator and Plan Maker (25 Sep)", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("a CREATOR's preview never shows an Account or Reel rate column, and confirm sends their own account", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    await page.route(`${API_URL}/assets/import/preview`, (route) =>
+      route.fulfill({
+        json: {
+          totalRows: 1,
+          hasOwnerColumn: false,
+          owners: [],
+          summary: { ready: 1 },
+          rows: [{ rowNumber: 2, rawHandle: "@my.page", handle: "my.page", category: null, followers: 500, rateCards: [{ format: "reel", amount: 5000 }], ownerRef: null, owner: { id: "test-user-1", name: "Test User", phoneNumber: null, email: null }, ownerId: "test-user-1", status: "ready", reason: null }],
+        },
+      })
+    );
+    await page.route(`${API_URL}/assets/import/followers`, (route) => route.fulfill({ json: { profiles: { "my.page": { followers: 500, avgViews: null, avgLikes: null, avgComments: null, fullName: null } } } }));
+    let importBody: { rows: Array<Record<string, unknown>> } | null = null;
+    await page.route(`${API_URL}/assets/import`, (route) => {
+      importBody = route.request().postDataJSON();
+      return route.fulfill({ status: 201, json: { created: [{ id: "a1", handle: "my.page", ownerId: "test-user-1", approvalStatus: "pending", owner: { id: "test-user-1", name: "Test User" } }], skipped: [] } });
+    });
+
+    await page.goto("/inventory");
+    await page.getByTestId("import-pages-button").click();
+    await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(csvFile);
+
+    await expect(page.getByTestId("import-preview-row")).toHaveCount(1);
+    // Never an account picker, never a rate-card column — a creator's sheet is always their own pages.
+    await expect(page.getByTestId("import-account-picker")).toHaveCount(0);
+    await expect(page.getByTestId("import-preview-table").getByText("Reel rate")).toHaveCount(0);
+    await expect(page.getByLabel(/^Account for /)).toHaveCount(0);
+
+    await page.getByTestId("import-confirm").click();
+    // The client forwards whatever the sheet parsed (rateCards isn't editable/visible
+    // for a Creator here) — the *server* is what actually strips it for non-admins
+    // (see assets/service.js's importAssets), not the client.
+    expect(importBody!.rows).toEqual([{ handle: "my.page", ownerId: "test-user-1", category: null, pageName: null, followers: 500, rateCards: [{ format: "reel", amount: 5000 }] }]);
+    await expect(page.getByTestId("import-result")).toContainText("Pending admin approval");
+  });
+
+  // Independent review (25 Sep): the "already in Inventory" summary note used
+  // r.owner for a conflict row too, but for "conflict" that field is the
+  // caller's own intended owner, not who it actually belongs to — for a
+  // CREATOR this rendered "under Test User" (their own name) right next to a
+  // status badge saying "another account", a visible self-contradiction.
+  test("a conflict row's summary note names the real account, not the caller's own, and stays redacted for a CREATOR", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    await page.route(`${API_URL}/assets/import/preview`, (route) =>
+      route.fulfill({
+        json: {
+          totalRows: 1,
+          hasOwnerColumn: false,
+          owners: [],
+          summary: { conflict: 1 },
+          rows: [
+            {
+              rowNumber: 2,
+              rawHandle: "@taken.page",
+              handle: "taken.page",
+              category: null,
+              followers: null,
+              rateCards: [],
+              ownerRef: null,
+              owner: { id: "test-user-1", name: "Test User", phoneNumber: null, email: null },
+              ownerId: "test-user-1",
+              status: "conflict",
+              reason: "Already registered under another account — a page can't be under two accounts.",
+            },
+          ],
+        },
+      })
+    );
+
+    await page.goto("/inventory");
+    await page.getByTestId("import-pages-button").click();
+    await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(csvFile);
+
+    const note = page.getByTestId("import-already-exists");
+    await expect(note).toContainText("@taken.page — Already registered under another account");
+    // Never the caller's own name stitched onto someone else's conflict.
+    await expect(note).not.toContainText("Test User");
+  });
+
+  test("a PLAN_MAKER gets the same account-picker Admin does, and can create a new creator inline", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await mockApi(page);
+    await page.route(`${API_URL}/assets/import/preview`, (route) => route.fulfill({ json: previewResponse() }));
+    await page.route(`${API_URL}/assets/import/followers`, (route) =>
+      route.fulfill({ json: { profiles: { "big.page": { followers: 1200000, avgViews: null, avgLikes: null, avgComments: null, fullName: null }, "mystery.page": { followers: 900, avgViews: null, avgLikes: null, avgComments: null, fullName: null }, "blank.owner": { followers: 500, avgViews: null, avgLikes: null, avgComments: null, fullName: null } } } })
+    );
+    await page.route(`${API_URL}/assets/import`, (route) =>
+      route.fulfill({ status: 201, json: { created: [{ id: "a1", handle: "big.page", ownerId: "creator-1", approvalStatus: "pending", owner: owners[0] }], skipped: [] } })
+    );
+
+    await page.goto("/inventory");
+    await page.getByTestId("import-pages-button").click();
+    await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(csvFile);
+
+    // Same account-picker and per-row Account column an Admin gets.
+    await expect(page.getByTestId("import-account-picker")).toBeVisible();
+    await expect(page.getByLabel("Account for @big.page")).toBeVisible();
+    // Reel rate stays hidden — a Plan Maker's import lands pending too, no rate card.
+    await expect(page.getByTestId("import-preview-table").getByText("Reel rate")).toHaveCount(0);
+    await expect(page.getByTestId("import-new-user")).toBeVisible();
+
+    await page.getByLabel("Account for all pages").selectOption("creator-1");
+    await page.getByTestId("import-confirm").click();
+    await expect(page.getByTestId("import-result")).toContainText("Pending admin approval");
+  });
+
+  // Independent review (25 Sep) caught a client/server mismatch: a FINANCE
+  // account granted inventory.edit could reach these routes (requireAccess
+  // allows any inventory.edit holder), but the server's auto-approval/rate
+  // card write is gated on the literal ADMIN role (importAssets/createAsset),
+  // not the grant. The UI must not show admin-only extras it can't honor.
+  test("a FINANCE account granted inventory.edit sees no rate-card column and 'Pending' copy — not admin extras the server won't honor", async ({ page }) => {
+    const grantedFinance = { ...userFor("FINANCE"), permissions: { ...userFor("FINANCE").permissions, "inventory.edit": true } };
+    await page.addInitScript(
+      (s) => window.localStorage.setItem("taggify_auth", JSON.stringify(s)),
+      { user: grantedFinance, accessToken: "test-access-token", refreshToken: "test-refresh-token" }
+    );
+    await mockApi(page);
+    await page.route(`${API_URL}/assets/import/preview`, (route) => route.fulfill({ json: previewResponse() }));
+    await page.route(`${API_URL}/assets/import/followers`, (route) =>
+      route.fulfill({ json: { profiles: { "big.page": { followers: 1200000, avgViews: null, avgLikes: null, avgComments: null, fullName: null } } } })
+    );
+    await page.route(`${API_URL}/assets/import`, (route) =>
+      route.fulfill({ status: 201, json: { created: [{ id: "a1", handle: "big.page", ownerId: "creator-1", approvalStatus: "pending", owner: owners[0] }], skipped: [] } })
+    );
+
+    await page.goto("/inventory");
+    // A granted FINANCE account can still reach Import (broad inventory.edit access)...
+    await page.getByTestId("import-pages-button").click();
+    await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(csvFile);
+    // ...but never the admin-only extras the server won't actually give it.
+    await expect(page.getByTestId("import-preview-table").getByText("Reel rate")).toHaveCount(0);
+
+    await page.getByRole("row", { name: /big\.page/ }).getByLabel("Account for @big.page").selectOption("creator-1");
+    await page.getByTestId("import-confirm").click();
+    await expect(page.getByTestId("import-result")).toContainText("Pending admin approval");
   });
 });

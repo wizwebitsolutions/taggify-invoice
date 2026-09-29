@@ -11,7 +11,7 @@ import { Note } from "@/components/ui/note";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { UploadIcon, CheckCircleIcon, DownloadIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { assets as assetsApi, auth as authApi, ApiError, hasAccess, PAGE_CATEGORIES, type ImportPreview, type ImportPreviewRow, type ImportRowStatus, type ImportResult, type ImportScrapedProfile, type PageOwner } from "@/lib/api-client";
+import { assets as assetsApi, auth as authApi, ApiError, hasAccess, canUse, PAGE_CATEGORIES, type ImportPreview, type ImportPreviewRow, type ImportRowStatus, type ImportResult, type ImportScrapedProfile, type PageOwner } from "@/lib/api-client";
 import { RefreshIcon } from "@/components/icons";
 import { compactNumber, money } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -72,6 +72,17 @@ export function ownerLabel(owner: { name: string | null; phoneNumber: string | n
 }
 
 export function ImportPagesModal({ token, onClose, onImported }: { token: string; onClose: () => void; onImported: (result: ImportResult) => void }) {
+  const { user } = useAuth();
+  // 25 Sep: Creator/Plan Maker can bulk-import too — the server scopes what
+  // each role's sheet can actually do (own pages only for a Creator; pending,
+  // no rate card for anyone but an Admin). Literal role check, matching
+  // importAssets' own `user.role === "ADMIN"` exactly — hasAccess(user,
+  // "inventory.edit") is also true for a granted FINANCE account, which the
+  // server does NOT treat as admin-trusted for auto-approval/rate cards, so
+  // using it here would show rate-card fields and "approved" copy the
+  // server won't actually honor.
+  const isAdmin = user?.role === "ADMIN";
+  const isCreator = user?.role === "CREATOR";
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [fileError, setFileError] = useState("");
@@ -279,7 +290,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
         {newUser && <NewUserPassword newUser={newUser} />}
 
         {result ? (
-          <ResultView result={result} onClose={onClose} />
+          <ResultView result={result} onClose={onClose} isAdmin={isAdmin} />
         ) : (
           <>
             <div className="flex flex-col gap-3 rounded-[10px] border border-dashed border-border-strong bg-surface-2 p-4">
@@ -348,6 +359,8 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
             {preview && (
               <PreviewView
                 preview={preview}
+                isAdmin={isAdmin}
+                isCreator={isCreator}
                 ownerByRow={ownerByRow}
                 setOwnerByRow={setOwnerByRow}
                 defaultOwnerId={defaultOwnerId}
@@ -407,6 +420,8 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
 
 function PreviewView({
   preview,
+  isAdmin,
+  isCreator,
   ownerByRow,
   setOwnerByRow,
   defaultOwnerId,
@@ -435,6 +450,8 @@ function PreviewView({
   token: string;
   onUserCreated: (owner: PageOwner, password: string | null) => void;
   preview: ImportPreview;
+  isAdmin: boolean;
+  isCreator: boolean;
   ownerByRow: Record<number, string>;
   setOwnerByRow: (updater: (prev: Record<number, string>) => Record<number, string>) => void;
   defaultOwnerId: string;
@@ -570,14 +587,17 @@ function PreviewView({
         })}
       </div>
 
-      <ImportAccountPicker
-        owners={ownerOptions}
-        defaultOwnerId={defaultOwnerId}
-        setDefaultOwnerId={setDefaultOwnerId}
-        hint={needsDefault ? (preview.hasOwnerColumn ? "Some rows don't name an account the app knows." : null) : "Every row already names its account — pick one here to put them all under it instead."}
-        token={token}
-        onUserCreated={onUserCreated}
-      />
+      {/* A creator's own sheet has no account to pick — every row is theirs already. */}
+      {!isCreator && (
+        <ImportAccountPicker
+          owners={ownerOptions}
+          defaultOwnerId={defaultOwnerId}
+          setDefaultOwnerId={setDefaultOwnerId}
+          hint={needsDefault ? (preview.hasOwnerColumn ? "Some rows don't name an account the app knows." : null) : "Every row already names its account — pick one here to put them all under it instead."}
+          token={token}
+          onUserCreated={onUserCreated}
+        />
+      )}
 
       {alreadyExisting.length > 0 && (
         <div data-testid="import-already-exists">
@@ -588,7 +608,16 @@ function PreviewView({
           <ul className="mt-1 flex flex-col gap-0.5">
             {alreadyExisting.map((r) => (
               <li key={r.rowNumber}>
-                @{r.handle} — under <b>{ownerLabel(r.owner)}</b>
+                {/* "exists": r.owner really is who it's under. "conflict": r.owner is who the
+                    sheet/caller intended, not who it actually belongs to — r.reason already
+                    names the real (and, for a creator, correctly redacted) account instead. */}
+                {r.status === "exists" ? (
+                  <>
+                    @{r.handle} — under <b>{ownerLabel(r.owner)}</b>
+                  </>
+                ) : (
+                  <>@{r.handle} — {r.reason}</>
+                )}
               </li>
             ))}
           </ul>
@@ -653,24 +682,27 @@ function PreviewView({
                   <div className="min-w-0">{pageCell(row)}</div>
                   <span className="shrink-0 text-[0.72rem] tabular-nums text-text-faint">Row {row.rowNumber}</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className={cn("grid gap-2", isAdmin ? "grid-cols-2" : "grid-cols-1")}>
                   <div className="rounded-md bg-surface-2 px-2.5 py-1.5">
                     <div className="text-[0.66rem] font-medium uppercase tracking-wide text-text-faint">Followers</div>
                     <div className="tabular-nums">
                       <FollowersCell row={row} live={row.handle ? liveByHandle[row.handle] : undefined} fetching={v.placeable && liveFetching} />
                     </div>
                   </div>
-                  <div className="rounded-md bg-surface-2 px-2.5 py-1.5">
-                    <div className="text-[0.66rem] font-medium uppercase tracking-wide text-text-faint">Reel rate</div>
-                    <div className="tabular-nums">
-                      <ReelRateCell rateCards={row.rateCards} />
+                  {/* A rate card never survives a non-admin's import (server strips it) — showing it here would promise something that won't happen. */}
+                  {isAdmin && (
+                    <div className="rounded-md bg-surface-2 px-2.5 py-1.5">
+                      <div className="text-[0.66rem] font-medium uppercase tracking-wide text-text-faint">Reel rate</div>
+                      <div className="tabular-nums">
+                        <ReelRateCell rateCards={row.rateCards} />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
                 {v.placeable && (
                   <div className="grid grid-cols-1 gap-2">
                     {categoryControl(row, v)}
-                    {accountControl(row, v)}
+                    {!isCreator && accountControl(row, v)}
                   </div>
                 )}
                 {statusBadge(v)}
@@ -687,8 +719,8 @@ function PreviewView({
                 <th className="px-3 py-2.5 text-left">Page</th>
                 <th className="w-40 px-3 py-2.5 text-left">Category</th>
                 <th className="w-28 px-3 py-2.5 text-right">Followers</th>
-                <th className="w-28 px-3 py-2.5 text-right">Reel rate</th>
-                <th className="w-52 px-3 py-2.5 text-left">Account</th>
+                {isAdmin && <th className="w-28 px-3 py-2.5 text-right">Reel rate</th>}
+                {!isCreator && <th className="w-52 px-3 py-2.5 text-left">Account</th>}
                 <th className="w-40 px-3 py-2.5 text-left">Status</th>
               </tr>
             </thead>
@@ -708,10 +740,12 @@ function PreviewView({
                     <td className="px-3 py-2.5 text-right tabular-nums">
                       <FollowersCell row={row} live={row.handle ? liveByHandle[row.handle] : undefined} fetching={v.placeable && liveFetching} />
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">
-                      <ReelRateCell rateCards={row.rateCards} />
-                    </td>
-                    <td className="px-3 py-2.5">{v.placeable && ownerOptions.length > 0 ? accountControl(row, v) : <span>{ownerLabel(row.owner)}</span>}</td>
+                    {isAdmin && (
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        <ReelRateCell rateCards={row.rateCards} />
+                      </td>
+                    )}
+                    {!isCreator && <td className="px-3 py-2.5">{v.placeable && ownerOptions.length > 0 ? accountControl(row, v) : <span>{ownerLabel(row.owner)}</span>}</td>}
                     <td className="px-3 py-2.5">{statusBadge(v)}</td>
                   </tr>
                 );
@@ -749,7 +783,10 @@ function ImportAccountPicker({
   // Creating an account is POST /auth/signup, which needs users.manage — a
   // sub-admin with only inventory.manage picks an existing account instead.
   const { user } = useAuth();
-  const canCreateUser = hasAccess(user, "users.edit");
+  // Staff with users.edit, or (25 Sep) a plan maker granted inventory.edit —
+  // the same narrow "mint a plain creator login" path the single Add-page
+  // flow uses, never a general people-management grant.
+  const canCreateUser = hasAccess(user, "users.edit") || (user?.role === "PLAN_MAKER" && canUse(user, "inventory.edit"));
   const [creating, setCreating] = useState(owners.length === 0 && canCreateUser);
   // Inventory asks only name + email for a new account (24 Sep) — the
   // email is their login; the password is generated.
@@ -951,7 +988,7 @@ function ownerOptionLabel(o: PageOwner | undefined) {
   return o.name?.trim() ? (contact ? `${o.name} · ${contact}` : o.name) : contact || "—";
 }
 
-function ResultView({ result, onClose }: { result: ImportResult; onClose: () => void }) {
+function ResultView({ result, onClose, isAdmin }: { result: ImportResult; onClose: () => void; isAdmin: boolean }) {
   const byOwner = new Map<string, { owner: ImportResult["created"][number]["owner"]; handles: string[] }>();
   for (const a of result.created) {
     const entry = byOwner.get(a.owner.id) ?? { owner: a.owner, handles: [] };
@@ -965,7 +1002,13 @@ function ResultView({ result, onClose }: { result: ImportResult; onClose: () => 
           {result.created.length} page{result.created.length === 1 ? "" : "s"} imported
         </span>
         {result.skipped.length > 0 && <span> · {result.skipped.length} skipped</span>}
-        {result.created.length > 0 && <span className="block text-[0.75rem] opacity-80">Approved on creation, with the followers, average views and profile details confirmed on Instagram. Profile pictures are saved in the background.</span>}
+        {result.created.length > 0 && (
+          <span className="block text-[0.75rem] opacity-80">
+            {isAdmin
+              ? "Approved on creation, with the followers, average views and profile details confirmed on Instagram. Profile pictures are saved in the background."
+              : "Pending admin approval, with the followers, average views and profile details confirmed on Instagram. Profile pictures are saved in the background."}
+          </span>
+        )}
       </Note>
 
       {byOwner.size > 0 && (

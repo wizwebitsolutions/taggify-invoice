@@ -4,12 +4,17 @@ import { z } from "zod";
 // not a free-form percentage, so a typo can't withhold the wrong amount.
 export const TDS_PERCENTS = [1, 2, 10];
 
-export const createPayoutSchema = z.object({
-  creatorId: z.string().min(1),
-  linkIds: z.array(z.string().min(1)).min(1),
-  isGstInvoice: z.boolean().default(false),
-  tdsPercent: z.union([z.literal(1), z.literal(2), z.literal(10)]).nullable().default(null),
-});
+// linkIds = unbilled links; invoiceIds = creator-raised invoices being paid off
+// (25 Sep). A payout needs at least one of the two.
+export const createPayoutSchema = z
+  .object({
+    creatorId: z.string().min(1),
+    linkIds: z.array(z.string().min(1)).default([]),
+    invoiceIds: z.array(z.string().min(1)).default([]),
+    isGstInvoice: z.boolean().default(false),
+    tdsPercent: z.union([z.literal(1), z.literal(2), z.literal(10)]).nullable().default(null),
+  })
+  .refine((v) => v.linkIds.length + v.invoiceIds.length > 0, { message: "Select at least one link or invoice", path: ["linkIds"] });
 
 export const confirmPayoutReceiptSchema = z.object({
   publicId: z.string().min(1).max(300),
@@ -31,6 +36,11 @@ export const listPayoutsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
+
+// The Paid tab's merged ledger (28 Sep fix) — Payouts plus any standalone
+// paid invoice — is always "PAID", so no status filter is taken.
+export const listPaidQuerySchema = listPayoutsQuerySchema.omit({ status: true });
+export const listMyPaidQuerySchema = listPaidQuerySchema.omit({ creatorId: true });
 
 // Payments tab "Pending" (24 Sep redesign): payable links across vendors.
 // Unpaginated in practice (one screen of work to pay), capped at 500.

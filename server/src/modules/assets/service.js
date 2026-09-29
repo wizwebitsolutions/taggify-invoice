@@ -43,25 +43,49 @@ export async function listAssets(user) {
   );
 }
 
+/** Everything getAvgEngagement needs off the Asset row when the caller didn't already load it. */
+const ENGAGEMENT_ASSET_SELECT = {
+  profileAvgViews: true,
+  profileAvgLikes: true,
+  profileAvgComments: true,
+  profileSampleSize: true,
+  manualAvgViews: true,
+  manualAvgLikes: true,
+  manualAvgComments: true,
+};
+
 /**
  * Avg. Likes / Comments / Views across this asset's posts (creator.wldd.in's
  * "Performance Metrics" on the Assets page) — one figure per link, taken
  * from its most recent scrape, averaged across every link that's been
  * scraped at least once. Links with no snapshot yet don't count toward it.
+ *
+ * A manually entered figure (Inventory's Edit panel, 28 Sep) replaces that
+ * one number whichever automatic source produced it, and `manual` says which
+ * ones those are so the UI can mark them. `sampleSize`/`source` keep
+ * describing the automatic data underneath — a typed number isn't an average
+ * of anything, so it never claims a sample of its own.
  */
 export async function getAvgEngagement(assetId, asset = null) {
-  const links = await prisma.link.findMany({
-    where: { assetId },
-    select: { postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 } },
-  });
+  // Both reads up front and in parallel: the row is needed either way now
+  // (manual overrides apply whether or not there are scraped links), where it
+  // used to be fetched only on the no-links path.
+  const [links, row] = await Promise.all([
+    prisma.link.findMany({ where: { assetId }, select: { postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 } } }),
+    asset ?? prisma.asset.findUnique({ where: { id: assetId }, select: ENGAGEMENT_ASSET_SELECT }),
+  ]);
+
+  return withManualOverrides(automaticEngagement(links, row), row);
+}
+
+function automaticEngagement(links, row) {
   const latest = links.map((l) => l.postSnapshots[0]).filter(Boolean);
   if (latest.length === 0) {
     // No links through the app yet — fall back to the profile-level
     // averages the Apify profile scrape stored (Inventory "Create page",
     // 14 Sep), so a freshly added page isn't stuck on "N/A".
-    const profile = asset ?? (await prisma.asset.findUnique({ where: { id: assetId }, select: { profileAvgViews: true, profileAvgLikes: true, profileAvgComments: true, profileSampleSize: true } }));
-    if (profile?.profileSampleSize > 0) {
-      return { avgLikes: profile.profileAvgLikes, avgComments: profile.profileAvgComments, avgViews: profile.profileAvgViews, sampleSize: profile.profileSampleSize, source: "profile" };
+    if (row?.profileSampleSize > 0) {
+      return { avgLikes: row.profileAvgLikes, avgComments: row.profileAvgComments, avgViews: row.profileAvgViews, sampleSize: row.profileSampleSize, source: "profile" };
     }
     return { avgLikes: null, avgComments: null, avgViews: null, sampleSize: 0 };
   }
@@ -72,6 +96,17 @@ export async function getAvgEngagement(assetId, asset = null) {
     avgComments: Math.round(sum("commentsCount") / latest.length),
     avgViews: Math.round(sum("videoViews") / latest.length),
     sampleSize: latest.length,
+  };
+}
+
+function withManualOverrides(engagement, row) {
+  const overrides = { avgViews: row?.manualAvgViews ?? null, avgLikes: row?.manualAvgLikes ?? null, avgComments: row?.manualAvgComments ?? null };
+  const manual = Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== null).map(([key]) => [key, true]));
+  if (Object.keys(manual).length === 0) return engagement;
+  return {
+    ...engagement,
+    ...Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== null)),
+    manual,
   };
 }
 
@@ -341,6 +376,28 @@ async function storeProfilePicsSequentially(assetIds) {
 }
 
 /** Upserts each (assetId, format) rate — admin-only, versioned by effectiveFrom. */
+/**
+ * Inventory's Edit panel (28 Sep) — the page's own details, as opposed to its
+ * rate card. Only the keys actually sent are touched, so saving a category
+ * can't silently wipe an engagement override and vice versa; an explicit null
+ * clears one (category back to none, a figure back to the automatic scrape).
+ * Returns the asset with its engagement recomputed, so the caller sees the
+ * effective numbers rather than having to re-derive them.
+ */
+export async function updateAssetDetails(assetId, fields) {
+  const asset = await prisma.asset.findUnique({ where: { id: assetId } });
+  if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
+
+  const data = {};
+  if ("category" in fields) data.category = fields.category;
+  if ("avgViews" in fields) data.manualAvgViews = fields.avgViews;
+  if ("avgLikes" in fields) data.manualAvgLikes = fields.avgLikes;
+  if ("avgComments" in fields) data.manualAvgComments = fields.avgComments;
+
+  const updated = await prisma.asset.update({ where: { id: assetId }, data });
+  return { ...updated, engagement: await getAvgEngagement(assetId, updated) };
+}
+
 export async function updateRateCard(assetId, rateCards) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId } });
   if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Asset not found");
@@ -417,9 +474,17 @@ export function resolveOwnerRef(ownerRef, owners) {
  *                    (a page can't sensibly live under two creators)
  *   owner-missing  — no owner cell; the admin picks a default account
  *   owner-unknown  — owner cell didn't match any creator; admin picks one
+ *
+ * A CREATOR's own import (25 Sep) never reaches owner-missing/owner-unknown —
+ * every row is forced onto their own account regardless of the sheet's owner
+ * column, and the full creator list is never fetched or returned to them
+ * (an ordinary Creator has no business seeing every other creator's name,
+ * phone and email — this was a real leak before this role could reach here).
  */
-export async function previewImport(parsed) {
-  const owners = await listPageOwners();
+export async function previewImport(parsed, user) {
+  const isCreator = user?.role === "CREATOR";
+  const owners = isCreator ? [] : await listPageOwners();
+  const selfAsOwner = await selfAsOwnerFor(user);
   const handles = [...new Set(parsed.rows.map((r) => r.handle).filter(Boolean))];
   const existing = handles.length
     ? await prisma.asset.findMany({
@@ -441,8 +506,22 @@ export async function previewImport(parsed) {
     if (seen.has(key)) return { ...base, status: "duplicate", reason: "Same handle appears earlier in this sheet." };
     seen.add(key);
 
-    const { owner, reason } = resolveOwnerRef(row.ownerRef, owners);
     const matches = existingByHandle.get(key) ?? [];
+
+    // A creator's own sheet ignores whatever the owner column says — every
+    // row is theirs, full stop — and a conflict never names whose account
+    // it actually is, unconditionally: kept fully separate from the
+    // resolveOwnerRef path below so that path's unredacted messages can
+    // never be reached for a creator, whatever selfAsOwner turns out to be.
+    if (isCreator) {
+      if (!selfAsOwner) return { ...base, status: "owner-missing", reason: "Couldn't verify your account — try again." };
+      const same = matches.find((a) => a.ownerId === selfAsOwner.id);
+      if (same) return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(selfAsOwner)}.` };
+      if (matches.length > 0) return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id, status: "conflict", reason: "Already registered under another account — a page can't be under two accounts." };
+      return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id };
+    }
+
+    const { owner, reason } = resolveOwnerRef(row.ownerRef, owners);
     if (owner) {
       const same = matches.find((a) => a.ownerId === owner.id);
       if (same) return { ...base, owner, ownerId: owner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(owner)}.` };
@@ -472,16 +551,50 @@ function ownerLabel(owner) {
 }
 
 /**
+ * `req.user` off the access token only ever carries {id, role} (see
+ * requireAuth.js) — never the display fields a "you already have this page"
+ * message or a result screen's "N pages under <name>" grouping needs, so a
+ * CREATOR caller's own record is looked up fresh rather than trusted to be
+ * on the object routes.js handed in. Shared by previewImport and importAssets.
+ */
+async function selfAsOwnerFor(user) {
+  if (user?.role !== "CREATOR") return null;
+  return prisma.user.findUnique({ where: { id: user.id }, select: { id: true, name: true, phoneNumber: true, email: true } });
+}
+
+/** Whoever a clash actually belongs to — except a creator, who's never told: that's the same creator-list leak `owners: []` exists to prevent in previewImport. */
+function clashOwnerLabel(isCreator, owner) {
+  return isCreator ? "another account" : ownerLabel(owner);
+}
+
+/** The skip reason for a handle that's already in Inventory, own account or someone else's — shared by importAssets' clash and lateClash checks. */
+function clashReason(clash, owner, isCreator) {
+  const sameOwner = clash.ownerId === owner.id;
+  const under = sameOwner ? ownerLabel(owner) : clashOwnerLabel(isCreator, clash.owner);
+  return sameOwner ? `Already in Inventory under ${under}.` : `Already registered under ${under}.`;
+}
+
+/**
  * Creates the confirmed rows. Re-validates everything the preview did —
  * the client's confirmation is a list of intents, not a trusted state —
  * so a handle registered by someone else between preview and confirm is
  * skipped with a reason rather than erroring the whole batch (same
- * created-vs-skipped pattern as links' bulk upload). Only an ADMIN reaches
- * this (routes.js), and only CREATOR accounts can own pages.
+ * created-vs-skipped pattern as links' bulk upload). Reachable by ADMIN,
+ * CREATOR and PLAN_MAKER (25 Sep) — only CREATOR accounts can own pages.
+ * A CREATOR's own rows are always forced onto their own id (never trusts
+ * a client-sent ownerId for them, same as createAsset); a PLAN_MAKER picks
+ * from `owners` like an admin does. Only an ADMIN's rows are auto-approved
+ * and can carry a rate card — everyone else's land `pending`, no rates,
+ * same rule as the single "Add page" flow.
  */
 export async function importAssets(user, rows) {
-  const owners = await listPageOwners();
+  const isAdmin = user.role === "ADMIN";
+  const isCreator = user.role === "CREATOR";
+  // A creator's owner is always themselves (below) — never consults this
+  // list, so skip fetching every creator account in the system for nothing.
+  const owners = isCreator ? [] : await listPageOwners();
   const ownerById = new Map(owners.map((o) => [o.id, o]));
+  const selfAsOwner = await selfAsOwnerFor(user);
   const created = [];
   const skipped = [];
   const seen = new Set();
@@ -500,7 +613,9 @@ export async function importAssets(user, rows) {
       continue;
     }
     seen.add(key);
-    const owner = ownerById.get(input.ownerId);
+    // A creator's own bulk import is always their own pages — never whatever
+    // ownerId the client sent (same reasoning as createAsset's ownerId check).
+    const owner = isCreator ? selfAsOwner : ownerById.get(input.ownerId);
     if (!owner) {
       skipped.push({ handle, reason: "Pick a creator account for this page." });
       continue;
@@ -510,7 +625,7 @@ export async function importAssets(user, rows) {
       select: { ownerId: true, owner: { select: { name: true, phoneNumber: true } } },
     });
     if (clash) {
-      skipped.push({ handle, reason: clash.ownerId === owner.id ? `Already in Inventory under ${ownerLabel(owner)}.` : `Already registered under ${ownerLabel(clash.owner)}.` });
+      skipped.push({ handle, reason: clashReason(clash, owner, isCreator) });
       continue;
     }
     candidates.push({ input, handle, owner });
@@ -561,10 +676,13 @@ export async function importAssets(user, rows) {
       select: { ownerId: true, owner: { select: { name: true, phoneNumber: true } } },
     });
     if (lateClash) {
-      skipped.push({ handle, reason: lateClash.ownerId === owner.id ? `Already in Inventory under ${ownerLabel(owner)}.` : `Already registered under ${ownerLabel(lateClash.owner)}.` });
+      skipped.push({ handle, reason: clashReason(lateClash, owner, isCreator) });
       continue;
     }
-    const rateCards = dedupeRateCards(input.rateCards);
+    // Only an admin's rate cards survive — a non-admin's import lands
+    // pending, same as createAsset, so a rate can't be smuggled in through
+    // a sheet column instead of the single-page form.
+    const rateCards = isAdmin ? dedupeRateCards(input.rateCards) : [];
     let asset;
     try {
       asset = await prisma.asset.create({
@@ -576,11 +694,10 @@ export async function importAssets(user, rows) {
           // The sheet's Page Name until Instagram gives its own (applyProfileMetrics below keeps it when Instagram has none).
           fullName: input.pageName?.trim() || null,
           followers: Math.min(metrics.followers ?? input.followers ?? 0, 2_147_483_647),
-          // Admin-only route (routes.js) → approved on creation, same as createAsset.
-          approvalStatus: "approved",
+          approvalStatus: isAdmin ? "approved" : "pending",
           ...(rateCards.length > 0 ? { rateCards: { create: rateCards.map((rc) => ({ format: rc.format, amount: rc.amount })) } } : {}),
         },
-        select: { id: true, handle: true, ownerId: true },
+        select: { id: true, handle: true, ownerId: true, approvalStatus: true },
       });
     } catch (err) {
       // Someone registered it between the check above and the insert (two
@@ -658,10 +775,10 @@ export async function clearStaleScrapeQueue() {
  * "not shared" and "too large" cases), then the same parser/preview as an
  * uploaded file.
  */
-export async function previewImportFromSheetUrl(url) {
+export async function previewImportFromSheetUrl(url, user) {
   const csv = await fetchSheetCsv(url);
   const parsed = await parseImportSheetOrThrow(Buffer.from(csv, "utf8"), "sheet.csv");
-  return previewImport(parsed);
+  return previewImport(parsed, user);
 }
 
 // Followers/avg views fetched during an import *preview* (user request, 14

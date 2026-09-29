@@ -20,8 +20,9 @@ import { TONE_COLOR } from "@/components/charts/tone-color";
 import { STATUS_CONFIG } from "@/components/ui/status-pill";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { ArrowRightIcon, CheckIcon, DownloadIcon } from "@/components/icons";
+import { PaySheet, toPaymentInvoice } from "@/components/payments/pay-sheet";
 import { useAuth } from "@/lib/auth-context";
-import { links as linksApi, invoices as invoicesApi, assets as assetsApi, campaigns as campaignsApi, billing as billingApi, admin as adminApi, ApiError, type Invoice } from "@/lib/api-client";
+import { links as linksApi, invoices as invoicesApi, assets as assetsApi, campaigns as campaignsApi, billing as billingApi, admin as adminApi, type Invoice } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { lastNMonths } from "@/lib/dates";
 import { useState } from "react";
@@ -116,7 +117,8 @@ export function FinanceDashboard() {
   }, [queue, groupBy]);
 
   const needsCost = useMemo(() => links.filter((l) => Number(l.cost) === 0 && l.status !== "INVALID"), [links]);
-  const pendingForInvoicing = links.filter((l) => l.status !== "INVOICED" && l.status !== "INVALID").length;
+  // A post beyond its campaign booking (29 Sep) will never be invoiced, so it isn't "awaiting invoicing".
+  const pendingForInvoicing = links.filter((l) => l.status !== "INVOICED" && l.status !== "INVALID" && !l.overQuota).length;
 
   const pageWiseDues = useMemo(() => {
     const byAsset = new Map<string, { handle: string; total: number; count: number; paid: number }>();
@@ -132,10 +134,9 @@ export function FinanceDashboard() {
     return [...byAsset.values()].sort((a, b) => b.total - a.total).slice(0, 8);
   }, [links]);
 
-  const markPaid = useMutation({
-    mutationFn: (id: string) => invoicesApi.markPaid(token, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invoices"] }),
-  });
+  // Paying opens the same TDS + mandatory-receipt PaySheet the Payments tab
+  // uses (28 Sep) — an invoice is paid off exclusively through a Payout now.
+  const [payingInvoice, setPayingInvoice] = useState<Invoice | null>(null);
   const approveBillingMutation = useMutation({
     mutationFn: ({ id, approvalStatus }: { id: string; approvalStatus: "approved" | "rejected" }) => billingApi.setApproval(token, id, approvalStatus),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["billingProfiles"] }),
@@ -199,11 +200,6 @@ export function FinanceDashboard() {
                 </>
               }
             />
-            {markPaid.isError && (
-              <div className="px-[18px] pt-3">
-                <ErrorNotice message={markPaid.error instanceof ApiError ? markPaid.error.message : "Couldn't mark that invoice paid."} />
-              </div>
-            )}
             {invoicesQuery.isLoading ? (
               <TableSkeleton />
             ) : queue.length === 0 ? (
@@ -262,16 +258,18 @@ export function FinanceDashboard() {
                         </TD>
                         <TD className="hidden text-text-muted md:table-cell">{inv.isGstInvoice ? STATUS_CONFIG[inv.gstStatus].label : "Non-GST"}</TD>
                         <TD right>
-                          {/* The server only accepts mark-paid on an APPROVED invoice; a RAISED one still needs admin approval first. */}
-                          {inv.status === "APPROVED" ? (
+                          {/* Paying opens PaySheet, which only accepts an APPROVED invoice; a RAISED one still needs admin approval first. */}
+                          {(inv.overQuotaCount ?? 0) > 0 ? (
+                            // Posts beyond their booking on it (29 Sep) — not payable until rejected and re-raised.
+                            <Tag tone="bad">Over booking · re-raise</Tag>
+                          ) : inv.status === "APPROVED" ? (
                             <Button
                               size="sm"
                               variant="secondary"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                markPaid.mutate(inv.id);
+                                setPayingInvoice(inv);
                               }}
-                              disabled={markPaid.isPending}
                             >
                               Mark paid
                             </Button>
@@ -382,6 +380,24 @@ export function FinanceDashboard() {
           {count(assets.length)} pages in inventory · {count((campaignsQuery.data ?? []).length)} campaigns
         </p>
       </div>
+
+      {payingInvoice && (
+        <PaySheet
+          mode="new"
+          token={token}
+          vendor={payingInvoice.creator!}
+          links={[]}
+          invoices={[toPaymentInvoice(payingInvoice)]}
+          onRemoveLink={() => {}}
+          onRemoveInvoice={() => setPayingInvoice(null)}
+          onClose={() => setPayingInvoice(null)}
+          onPaid={() => {
+            setPayingInvoice(null);
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
+            queryClient.invalidateQueries({ queryKey: ["payments"] });
+          }}
+        />
+      )}
     </AppShell>
   );
 }

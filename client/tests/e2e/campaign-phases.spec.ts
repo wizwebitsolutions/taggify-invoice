@@ -197,6 +197,86 @@ test.describe("Campaign phases (22 Sep)", () => {
     await expect(pageSelect.locator("option")).toHaveText(["@page.a", "@page.b"]);
   });
 
+  // User report, 29 Sep — "on creator it's not showing any limit of how many
+  // post on that page ... so creator will get to know how many post gonna
+  // go". The booking is the page's assignment slots in the phase; extras
+  // still submit, but only the booked number counts.
+  test("creator: Upload links shows how many posts the chosen page was booked for, and how many are up", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    const assetB = { ...asset, id: "asset-b", handle: "page.b" };
+    const assetC = { ...asset, id: "asset-c", handle: "page.c" };
+    await page.route(`${API_URL}/campaigns`, (route) =>
+      route.fulfill({
+        json: [
+          {
+            ...campaign({ phases: undefined }),
+            creatorPhaseNumber: 1,
+            phaseCount: 1,
+            bookedAssetIds: ["asset-a", "asset-b", "asset-c"],
+            pageQuota: [
+              { assetId: "asset-a", booked: 2, submitted: 1 },
+              { assetId: "asset-b", booked: 2, submitted: 2 },
+              { assetId: "asset-c", booked: 2, submitted: 5 },
+            ],
+          },
+        ],
+      })
+    );
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [asset, assetB, assetC] }));
+    await page.goto("/dashboard");
+
+    await page.getByRole("button", { name: /Upload links/i }).first().click();
+    const modal = page.locator("form").filter({ has: page.getByRole("heading", { name: "Upload links" }) });
+    const pageSelect = modal.locator("select").nth(1);
+    const quota = modal.getByTestId("upload-quota");
+
+    await pageSelect.selectOption("asset-a");
+    await expect(quota).toContainText("1 of 2 posts");
+    await expect(quota).toContainText("1 still to upload");
+
+    await pageSelect.selectOption("asset-b");
+    await expect(quota).toContainText("2 of 2 posts");
+    await expect(quota).toContainText("that's all of them");
+
+    // Over-posted: the count the creator is held to stays at the booking.
+    await pageSelect.selectOption("asset-c");
+    await expect(quota).toContainText("5 posted, but only 2 booked");
+    await expect(quota).toContainText("the extra 3 won");
+  });
+
+  // Regression (29 Sep): the page choice was a one-time useState initializer,
+  // so opening the modal before the pages had loaded left a <select> that
+  // *showed* a page while the real choice stayed "" — no quota line, and
+  // Submit posted with no page at all.
+  test("creator: opening Upload links before their pages load still ends up on a real page", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    await page.route(`${API_URL}/campaigns`, (route) =>
+      route.fulfill({
+        json: [{ ...campaign({ phases: undefined }), creatorPhaseNumber: 1, phaseCount: 1, bookedAssetIds: ["asset-a"], pageQuota: [{ assetId: "asset-a", booked: 2, submitted: 1 }] }],
+      })
+    );
+    // Hold the pages back until the modal is already open.
+    let releaseAssets!: () => void;
+    const assetsGate = new Promise<void>((resolve) => (releaseAssets = resolve));
+    await page.route(`${API_URL}/assets`, async (route) => {
+      await assetsGate;
+      await route.fulfill({ json: [asset] });
+    });
+    await page.goto("/dashboard");
+
+    await page.getByRole("button", { name: /Upload links/i }).first().click();
+    const modal = page.locator("form").filter({ has: page.getByRole("heading", { name: "Upload links" }) });
+    await expect(modal.getByTestId("upload-not-booked")).toBeVisible(); // nothing loaded yet
+    releaseAssets();
+
+    // Once the pages arrive, a real one is selected — so the quota shows and Submit can go.
+    await expect(modal.getByTestId("upload-quota")).toContainText("1 of 2 posts");
+    await modal.locator("textarea").fill("https://instagram.com/reel/abc");
+    await expect(modal.getByRole("button", { name: /^Submit/ })).toBeEnabled();
+  });
+
   test("creator with no booked page: Upload links says so and can't submit", async ({ page }) => {
     await signIn(page, "CREATOR");
     await mockApi(page);

@@ -158,7 +158,7 @@ test.describe("Campaign page — invoices are listed, never generated here (crea
     await expect(row.getByRole("button", { name: "Mark paid" })).toHaveCount(0);
   });
 
-  test("FINANCE marks a campaign invoice paid from the campaign page", async ({ page }) => {
+  test("FINANCE marks a campaign invoice paid from the campaign page — opens the same TDS + mandatory-receipt PaySheet the Payments tab uses (28 Sep)", async ({ page }) => {
     await signIn(page, "FINANCE");
     await mockApi(page);
     await mockCampaign(page, {
@@ -180,19 +180,39 @@ test.describe("Campaign page — invoices are listed, never generated here (crea
           createdAt: new Date().toISOString(),
           overdueDays: 0,
           creator: priya,
-          items: [],
+          items: [{ id: "ii-1", amount: "500", link: link("l1") }],
         },
       ],
     });
-    let paid = false;
-    await page.route(`${API_URL}/invoices/inv-1/mark-paid`, (route) => {
-      paid = true;
-      return route.fulfill({ json: { id: "inv-1", status: "PAID" } });
+    let created: Record<string, unknown> | null = null;
+    await page.route(`${API_URL}/fake-cloudinary`, (route) => route.fulfill({ json: { ok: true } }));
+    await page.route(`${API_URL}/payments/**`, (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname.replace("/api/payments", "");
+      const method = route.request().method();
+      if (method === "POST" && path === "/payouts") {
+        created = route.request().postDataJSON();
+        return route.fulfill({ status: 201, json: { id: "p-1", creatorId: "creator-1", subtotal: "500", isGstInvoice: false, gstAmount: "0", tdsPercent: null, tdsAmount: "0", netAmount: "500", status: "DRAFT", paidAt: null, createdAt: new Date().toISOString(), creator: priya, items: [] } });
+      }
+      if (method === "GET" && path === "/payouts/p-1/receipt-upload") {
+        return route.fulfill({ json: { uploadUrl: `${API_URL}/fake-cloudinary`, apiKey: "k", timestamp: 1, signature: "s", publicId: "payout-receipts/p-1/uuid" } });
+      }
+      if (method === "POST" && path === "/payouts/p-1/receipt") {
+        return route.fulfill({ status: 201, json: { id: "p-1", creatorId: "creator-1", subtotal: "500", isGstInvoice: false, gstAmount: "0", tdsPercent: null, tdsAmount: "0", netAmount: "500", status: "PAID", paidAt: new Date().toISOString(), createdAt: new Date().toISOString(), creator: priya, items: [] } });
+      }
+      return route.fallback();
     });
 
     await page.goto("/campaigns/view?id=camp-1");
     await expect(page.getByRole("heading", { name: "Generate invoices" })).toHaveCount(0);
     await page.getByTestId("campaign-invoice-inv-1").getByRole("button", { name: "Mark paid" }).click();
-    await expect.poll(() => paid).toBe(true);
+
+    const sheet = page.getByTestId("pay-sheet");
+    await expect(sheet.getByTestId("pay-sheet-invoices")).toContainText("INV-1");
+    await sheet.getByLabel("Payment receipt").setInputFiles({ name: "receipt.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n%mock\n") });
+    await sheet.getByRole("button", { name: /Mark paid/ }).click();
+    await expect(page.getByTestId("payout-paid")).toBeVisible();
+
+    expect(created).toMatchObject({ creatorId: "creator-1", linkIds: [], invoiceIds: ["inv-1"] });
   });
 });

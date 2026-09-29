@@ -27,6 +27,10 @@ const NAVY = { red: 0.11, green: 0.271, blue: 0.529 }; // "CAMPAIGN OVERVIEW" ba
 const MED_BLUE = { red: 0.435, green: 0.659, blue: 0.863 }; // labels / category+table headers / notes band
 const LIGHT_BLUE = { red: 0.788, green: 0.855, blue: 0.973 }; // value cells / note body
 const LINK_BLUE = { red: 0.067, green: 0.333, blue: 0.8 }; // Sheets' own hyperlink colour
+// Approval status (user request, 29 Sep — only the approved plan of a pitch
+// group reads "Active"; its siblings "Not active"), on the band + tab colour.
+const ACTIVE_GREEN = { red: 0.204, green: 0.659, blue: 0.325 };
+const INACTIVE_RED = { red: 0.851, green: 0.263, blue: 0.227 };
 
 const STYLES = {
   logo: { bg: BLACK, fg: WHITE, bold: true, italic: false, align: "CENTER", size: 14 },
@@ -38,7 +42,25 @@ const STYLES = {
   note: { bg: LIGHT_BLUE, fg: BLACK, bold: false, italic: true, align: "LEFT", size: 9 },
   tableHeader: { bg: MED_BLUE, fg: WHITE, bold: true, italic: true, align: "CENTER", size: 10 },
   data: { bg: WHITE, fg: BLACK, bold: false, italic: true, align: "LEFT", size: 10 },
+  statusActive: { bg: ACTIVE_GREEN, fg: WHITE, bold: true, italic: false, align: "CENTER", size: 11 },
+  statusInactive: { bg: INACTIVE_RED, fg: WHITE, bold: true, italic: false, align: "CENTER", size: 11 },
 };
+
+/**
+ * "Active" only for an approved plan — the one that actually went ahead. A
+ * draft, one awaiting approval, or a rejected one is "Not active" (user
+ * request, 29 Sep — "only plan a is approved it would show active ... and
+ * unapproved will show not active").
+ */
+export function isActivePlan(plan) {
+  return plan.status === "APPROVED";
+}
+function statusLabel(plan) {
+  return isActivePlan(plan) ? "Active" : "Not active";
+}
+function statusBand(s, plan) {
+  s.band([isActivePlan(plan) ? "● ACTIVE — approved plan" : "● NOT ACTIVE — not approved"], isActivePlan(plan) ? "statusActive" : "statusInactive");
+}
 
 /** Google Sheets caps a tab title at 100 chars; keep comfortably under. */
 function truncate(s, max) {
@@ -56,11 +78,89 @@ function truncate(s, max) {
 const OVERVIEW_PREFIX = "Overview of ";
 const INTERNAL_PREFIX = "INTERNAL — ";
 
+const variantOf = (plan) => plan.variantLabel ?? "Plan A";
+
+/**
+ * Title shape: `[INTERNAL — ][Overview of ]<name> · <Plan X> · <Active|Not active>[ · <id6>]`.
+ * Only the plan name is ever truncated — the variant and status are what a
+ * reader scans for, and (see planTabOwnedBy) what finds the tab again.
+ *
+ * The client file identifies a plan's tabs by its variant label (unique within
+ * a pitch group's file) and carries no id — it never had one in practice
+ * (forClientPdf's output has no id, so the old suffix came out empty) and a
+ * random code has no business in a tab name the client reads. The internal
+ * file keeps the id suffix it has always had.
+ */
 export function planSheetTabTitles(plan, { internal = false } = {}) {
   const prefix = internal ? INTERNAL_PREFIX : "";
-  const suffix = ` · ${plan.id?.slice(-6) ?? ""}`;
-  const base = truncate(`${plan.name} · ${plan.variantLabel ?? "Plan A"}`, 100 - prefix.length - OVERVIEW_PREFIX.length - suffix.length);
-  return { overviewTitle: `${prefix}${OVERVIEW_PREFIX}${base}${suffix}`, pagesTitle: `${prefix}${base}${suffix}` };
+  const tail = ` · ${variantOf(plan)} · ${statusLabel(plan)}${internal ? ` · ${plan.id?.slice(-6) ?? ""}` : ""}`;
+  const name = truncate(plan.name ?? "", 100 - prefix.length - OVERVIEW_PREFIX.length - tail.length);
+  return { overviewTitle: `${prefix}${OVERVIEW_PREFIX}${name}${tail}`, pagesTitle: `${prefix}${name}${tail}` };
+}
+
+/**
+ * Whether an existing tab belongs to `plan`, whatever name or status it was
+ * written under. Internal: its id suffix. Client: its variant label followed by
+ * a status, or by the bare " · " every client tab ended with before 29 Sep.
+ */
+function planTabOwnedBy(title, plan, internal) {
+  if (internal) return title.endsWith(` · ${plan.id?.slice(-6)}`);
+  const v = ` · ${variantOf(plan)} · `;
+  return title.endsWith(`${v}Active`) || title.endsWith(`${v}Not active`) || title.endsWith(v);
+}
+
+/**
+ * Tabs are addressed by title, so any change to a title — the plan renamed,
+ * or its status flipping between Active and Not active — would otherwise make
+ * the next write add a fresh tab pair and leave the old one behind in the
+ * client's sheet for good. This finds each plan's existing tabs by the id at
+ * the end of the title and renames them in place (keeping their gid, so shared
+ * deep-links keep working), and deletes any stray duplicate a past rename
+ * already left. Pure: returns the batchUpdate requests to send.
+ *
+ * `existing` is the spreadsheet's tabs ({ title, sheetId }); `sheets` is what
+ * generatePlanSheet is about to write ({ plan, overviewTitle, pagesTitle }).
+ */
+export function reconcilePlanTabRequests(existing, sheets, { internal = false } = {}) {
+  const overviewStart = `${internal ? INTERNAL_PREFIX : ""}${OVERVIEW_PREFIX}`;
+  const requests = [];
+  // A tab is claimed by at most one plan — two siblings can never both
+  // rename (or one rename and the other delete) the same tab in one batch.
+  const claimed = new Set();
+  for (const { plan, overviewTitle, pagesTitle } of sheets) {
+    const mine = existing.filter((t) => !claimed.has(t.sheetId) && planTabOwnedBy(t.title, plan, internal));
+    // The Overview tab the plan's saved (and possibly already shared) link
+    // points at — when a rename left two candidates, that's the one to keep,
+    // so the link still lands on it instead of on a deleted tab.
+    const linkedGid = Number(/[?#&]gid=(\d+)/.exec((internal ? plan.internalSheetUrl : plan.clientSheetUrl) ?? "")?.[1]);
+    for (const [wanted, isKind] of [
+      [overviewTitle, (t) => t.title.startsWith(overviewStart)],
+      [pagesTitle, (t) => !t.title.startsWith(overviewStart)],
+    ]) {
+      const candidates = mine.filter(isKind);
+      const keep = candidates.find((t) => t.title === wanted) ?? candidates.find((t) => t.sheetId === linkedGid) ?? candidates[0];
+      if (!keep) continue; // first write of this tab — ensureSheetTabsExist creates it
+      for (const t of candidates) claimed.add(t.sheetId);
+      if (keep.title !== wanted) {
+        requests.push({ updateSheetProperties: { properties: { sheetId: keep.sheetId, title: wanted }, fields: "title" } });
+      }
+      // Leftovers of this same plan and kind — e.g. the pair a rename left behind.
+      for (const stray of candidates) if (stray !== keep) requests.push({ deleteSheet: { sheetId: stray.sheetId } });
+    }
+  }
+  return requests;
+}
+
+/** The tab itself coloured by status, so Active/Not active shows in the tab strip, not just on the page. */
+export function tabStatusRequests(sheetId, plan) {
+  return [
+    {
+      updateSheetProperties: {
+        properties: { sheetId, tabColorStyle: { rgbColor: isActivePlan(plan) ? ACTIVE_GREEN : INACTIVE_RED } },
+        fields: "tabColorStyle",
+      },
+    },
+  ];
 }
 
 // ── Row-spec builder — each "section" pushes both a values row and its
@@ -177,6 +277,7 @@ export function previewExecutionSheetTemplate() {
 function buildOverviewSection(plan, internal) {
   const s = makeSection();
   s.band(["TAGGIFY"], "logo");
+  statusBand(s, plan);
   s.plain([internal ? `${plan.name} — INTERNAL, NOT FOR CLIENT` : plan.name]);
   s.plain([`Prepared for ${plan.clientName} · ${dateStr(plan.createdAt)}`]);
   if (plan.clientContact) s.plain([plan.clientContact]);
@@ -216,6 +317,7 @@ function buildOverviewSection(plan, internal) {
 function buildPagesSection(plan, internal) {
   const s = makeSection();
   const header = ["S No", "Page Name", "Page Link", "Followers", "Format", "Post Per Profile", ...(internal ? ["Cost/Post"] : [])];
+  statusBand(s, plan);
   s.row(header, header.map(() => "tableHeader"));
 
   if (plan.items.length === 0) {

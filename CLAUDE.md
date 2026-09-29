@@ -1,6 +1,104 @@
 # invoice-taggify
 
 Ops layer for creator campaigns: link submission → screenshot approval → insight
+verification → invoicing → payout. Full design: `docs/system-design.md`. Backend
+modules/routes: `server/README.md`. Testing policy & conventions: `test.md` (read it
+before adding or changing tests).
+
+## Architecture
+- `client/` — Next.js 14 (App Router) + React Query + Tailwind.
+  - All API calls go through `client/lib/api-client.ts` (one function per backend
+    route). Never call `fetch()` directly inside a component.
+  - After any mutation, invalidate the React Query keys it affects so the UI
+    doesn't show stale data.
+  - Auth session is stored in `localStorage` under `taggify_auth`
+    (`client/lib/auth-context.tsx`). Pages are protected client-side with
+    `<RequireAuth>`, not middleware.
+- `server/` — Express + Prisma/Postgres. Each `src/modules/<name>/` has
+  `schemas.js` (zod), `service.js` and `routes.js`.
+
+## Domain rules
+- Roles: `CREATOR`, `TEAM_MEMBER`, `ADMIN`, `FINANCE`. `ADMIN`/`FINANCE` see
+  `AdminDashboard`; everyone else sees `CreatorDashboard`.
+- IMPORTANT: `<RequireAuth>` only hides pages in the UI. It is not security.
+  Every server route must check the user's role itself. Any new route needs a test
+  showing a wrong-role request is rejected.
+- Money: TODO: say how amounts are stored (paise as integers / Prisma `Decimal`),
+  the currency, and the rounding rule. Never use JS floats for money.
+- Status flow: TODO: list each status (submitted → approved → verified → invoiced →
+  paid) and which role may make each move. Never skip a step or reverse one.
+
+## Commands (run from repo root; the shell keeps its folder between commands)
+```bash
+docker compose up -d                          # local Postgres
+npm --prefix server run dev                   # API :4000 (long-running: start in background, reuse if already up)
+npm --prefix client run dev                   # web :3000 (same)
+
+npm --prefix server test                      # vitest, full suite
+npx --prefix server vitest run <file>         # one test file
+npm --prefix client run test:e2e              # playwright (needs DB + API + web running)
+npx --prefix client playwright test <file>    # one e2e file
+
+npm --prefix client run lint && npm --prefix server run lint
+npm --prefix client run build                 # catches type/build errors lint misses
+
+npx --prefix server prisma migrate dev --name <name>   # schema change → new migration
+npx --prefix server prisma db seed                      # TODO: confirm seed script
+```
+Test logins (local only): TODO: one seeded account per role, e.g. admin@test.local / …
+
+## Definition of done
+Tasks have often looked finished (clean diff, server boots) but broken in real use:
+bad links, flows that break end-to-end, crashes on real data, knock-on regressions.
+Don't report a task as done until all of these are true:
+
+1. **Tests.** Add or update a vitest test (server) or Playwright test
+   (`client/tests/e2e/`) for the changed behaviour. Run only the targeted files while
+   working, then run the full suite once at the end. For a bug fix, add a regression
+   test that fails without the fix.
+2. **Try it for real.** For UI or flow changes, run the flow with Playwright or
+   the browser (claude-in-chrome if connected, otherwise Playwright), logged in as
+   each role it applies to. "Looks right" or "type-checks" is not tested.
+3. **Check every reference.** When you add, rename or move a route, component, nav
+   entry or export, search for every place that uses it:
+   `rg "<name>" client server -g '!node_modules' -g '!.next'`.
+   Make sure each link goes where it *should*, not just that it doesn't 404.
+4. **Review, based on risk:**
+   - Multi-file, UI/flow, nav/routing change → get a fresh subagent to review the diff.
+   - Small single-file change → reviewing it yourself is enough.
+   - Release/milestone → full suite, end-to-end walkthrough (login → core flow →
+     anything with money), `/code-review` at high effort, and `/security-review` if
+     auth or payments changed.
+   - Trivial change (copy, styling, comments, docs) → lint + a quick visual check;
+     no new test needed.
+5. **Report with a checklist.** List which tests you added or ran, which flows you
+   tried and as which role, which references you checked, and which review tier you
+   used. Say plainly what you did *not* verify.
+
+If the full suite already had failures before your change, report them. Don't fix
+unrelated failures silently, and never delete or weaken tests to get a pass.
+
+## Working style
+- Keep changes small and single-purpose. Don't bundle unrelated refactors.
+- Ask before you start when a task is unclear. Don't guess halfway through.
+
+## Don't
+- Edit `.env*` files or commit secrets.
+- Add packages without asking.
+- Edit migrations that have already run, or run `prisma migrate reset` on anything
+  except a throwaway local DB.
+- Commit or push unless asked.
+
+
+
+
+
+
+
+
+<!-- # invoice-taggify
+
+Ops layer for creator campaigns: link submission → screenshot approval → insight
 verification → invoicing → payout. See `system design.md` for the full design and
 `server/README.md` for backend module/route details.
 
@@ -90,4 +188,4 @@ Other standing preferences:
 - Roles: `CREATOR`, `TEAM_MEMBER`, `ADMIN`, `FINANCE`. Dashboard content branches by
   role (`ADMIN`/`FINANCE` → `AdminDashboard`, others → `CreatorDashboard`) — when
   testing a flow, check it under the role(s) it actually applies to, not just whichever
-  account happens to be logged in.
+  account happens to be logged in. -->

@@ -66,9 +66,23 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
+/**
+ * After a successful edit, rewrite whatever Google Sheet was already generated
+ * for this plan's group (user report, 29 Sep — the shared link kept showing the
+ * plan as it was when first generated). Fired after the response and never
+ * awaited: refreshGeneratedSheets queues it and swallows (logs) its own errors,
+ * so a slow or disconnected Google account can't slow down or fail a save.
+ */
+function refreshSheetsAfterEdit(req) {
+  void plansService.refreshGeneratedSheets(req.params.id, req.user);
+}
+
 router.put("/:id", canEdit, validateBody(updatePlanSchema), async (req, res, next) => {
   try {
     res.json(await plansService.updatePlan(req.params.id, req.user, req.body));
+    // Swapping the execution-sheet link alone changes nothing the plan sheet shows.
+    const onlyExecutionSheet = Object.keys(req.body).every((key) => key === "executionSheetUrl");
+    if (!onlyExecutionSheet) refreshSheetsAfterEdit(req);
   } catch (err) {
     next(err);
   }
@@ -88,6 +102,8 @@ router.delete("/:id", canEdit, async (req, res, next) => {
 router.post("/:id/approve", canApprove, async (req, res, next) => {
   try {
     res.json(await plansService.approvePlan(req.params.id, req.user));
+    // The sheet shows Active / Not active per plan (29 Sep), so a decision changes it.
+    refreshSheetsAfterEdit(req);
   } catch (err) {
     next(err);
   }
@@ -97,6 +113,7 @@ router.post("/:id/approve", canApprove, async (req, res, next) => {
 router.post("/:id/reject", canApprove, async (req, res, next) => {
   try {
     res.json(await plansService.rejectPlan(req.params.id, req.user));
+    refreshSheetsAfterEdit(req);
   } catch (err) {
     next(err);
   }
@@ -216,6 +233,7 @@ router.post("/from-sheet", canEdit, validateBody(planFromSheetSchema), async (re
 router.post("/:id/sheet-sync", canEdit, validateBody(planSheetSyncSchema), async (req, res, next) => {
   try {
     res.json(await plansService.syncPlanFromSheet(req.params.id, req.user, req.body));
+    refreshSheetsAfterEdit(req);
   } catch (err) {
     next(err);
   }
@@ -224,6 +242,7 @@ router.post("/:id/sheet-sync", canEdit, validateBody(planSheetSyncSchema), async
 router.post("/:id/sheet-pending/add", canEdit, validateBody(addPendingPageSchema), async (req, res, next) => {
   try {
     res.json(await plansService.addPendingPage(req.params.id, req.user, req.body));
+    refreshSheetsAfterEdit(req);
   } catch (err) {
     next(err);
   }
@@ -254,6 +273,7 @@ router.post("/import-sheet-url", canEdit, validateBody(importSheetUrlSchema), as
 router.post("/:id/import-sheet-pages", canEdit, validateBody(importSheetPagesSchema), async (req, res, next) => {
   try {
     res.json(await plansService.importPlanSheetPages(req.params.id, req.user, req.body.rows));
+    refreshSheetsAfterEdit(req);
   } catch (err) {
     next(err);
   }

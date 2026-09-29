@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPlanSheetTabs, planSheetTabTitles, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, EXECUTION_TEMPLATE_TITLE } from "./planSheet.js";
+import { buildPlanSheetTabs, planSheetTabTitles, reconcilePlanTabRequests, tabStatusRequests, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, EXECUTION_TEMPLATE_TITLE } from "./planSheet.js";
 
 /**
  * user request, 10 Sep — "plan will be of google sheet, not in pdf" then
@@ -24,13 +24,21 @@ const basePlan = {
   items: [{ format: "reel", postsPerProfile: 2, displayCost: 8000, asset: { handle: "demo.page", category: "Meme page", followers: 100000 } }],
 };
 
-describe("planSheetTabTitles — unique across every plan sharing one spreadsheet", () => {
-  it("includes the plan id's suffix so two differently-id'd plans with the same name/variant never collide", () => {
-    const a = planSheetTabTitles({ ...basePlan, id: "plan-aaaaaa" });
-    const b = planSheetTabTitles({ ...basePlan, id: "plan-bbbbbb" });
+describe("planSheetTabTitles — unique within a pitch group's file", () => {
+  // Each pitch group has its own spreadsheet (Plan A, B, C… in one file), so
+  // the variant label is what keeps sibling tabs apart. The client file never
+  // actually carried the id: forClientPdf's output has none (29 Sep finding).
+  it("Plan A and Plan B of one group never collide, and the client title carries no id", () => {
+    const a = planSheetTabTitles({ ...basePlan, variantLabel: "Plan A" });
+    const b = planSheetTabTitles({ ...basePlan, variantLabel: "Plan B" });
 
     expect(a.overviewTitle).not.toBe(b.overviewTitle);
     expect(a.pagesTitle).not.toBe(b.pagesTitle);
+    expect(a.pagesTitle).not.toContain("abc123");
+  });
+
+  it("the internal file keeps its id suffix", () => {
+    expect(planSheetTabTitles(basePlan, { internal: true }).pagesTitle).toMatch(/ · abc123$/);
   });
 
   it("stays under Google Sheets' 100-char tab title limit even for a long plan name", () => {
@@ -244,5 +252,156 @@ describe("previewExecutionSheetTemplate", () => {
     expect(preview.rows[0][2]).toBe("https://instagram.com/ghantaa"); // plain URL, no =HYPERLINK(...) wrapper
     expect(preview.linkColumns).toEqual([2, 5]);
     expect(preview.totalsRow[3]).toBe(8700000 + 4300000);
+  });
+});
+
+/**
+ * User request, 29 Sep — "if there are 2 plans for same campaign, plan a and
+ * plan b, and only plan a is approved it would show active in google sheet,
+ * and unapproved will show not active in sheet tab name as well, make it
+ * highlighted in google sheet also".
+ */
+describe("Active / Not active — tab name, band and tab colour (29 Sep)", () => {
+  const approved = { ...basePlan, status: "APPROVED", variantLabel: "Plan A" };
+  const draft = { ...basePlan, status: "DRAFT", variantLabel: "Plan B" };
+
+  it("an approved plan's tabs say Active; anything else — draft, awaiting approval, rejected — says Not active", () => {
+    expect(planSheetTabTitles(approved).pagesTitle).toBe("Q1 Meme Page Push · Plan A · Active");
+    expect(planSheetTabTitles(approved).overviewTitle).toBe("Overview of Q1 Meme Page Push · Plan A · Active");
+    for (const status of ["DRAFT", "PENDING_APPROVAL", "REJECTED"]) {
+      expect(planSheetTabTitles({ ...draft, status }).pagesTitle).toBe("Q1 Meme Page Push · Plan B · Not active");
+    }
+  });
+
+  it("a long name is what gets shortened — never the variant or the status", () => {
+    const { overviewTitle } = planSheetTabTitles({ ...approved, name: "A".repeat(150) });
+    expect(overviewTitle.length).toBeLessThanOrEqual(100);
+    expect(overviewTitle).toMatch(/ · Plan A · Active$/);
+  });
+
+  it("both tabs open with a highlighted status band, green for Active and red for Not active", () => {
+    const on = buildPlanSheetTabs(approved);
+    const off = buildPlanSheetTabs(draft);
+
+    // Overview: right under the TAGGIFY logo. Pages: the first row, above the table.
+    expect(on.overviewRows[1][0]).toContain("ACTIVE");
+    expect(on.overviewRowSpecs[1]).toMatchObject({ cellTypes: ["statusActive"], merge: true });
+    expect(on.pagesRows[0][0]).toContain("ACTIVE");
+    expect(off.overviewRows[1][0]).toContain("NOT ACTIVE");
+    expect(off.pagesRowSpecs[0]).toMatchObject({ cellTypes: ["statusInactive"], merge: true });
+
+    const [green] = buildFormatRequests(7, on.pagesRowSpecs, on.pagesNumCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
+    const [red] = buildFormatRequests(7, off.pagesRowSpecs, off.pagesNumCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
+    expect(green.repeatCell.cell.userEnteredFormat.backgroundColor.green).toBeGreaterThan(green.repeatCell.cell.userEnteredFormat.backgroundColor.red);
+    expect(red.repeatCell.cell.userEnteredFormat.backgroundColor.red).toBeGreaterThan(red.repeatCell.cell.userEnteredFormat.backgroundColor.green);
+  });
+
+  it("the tab itself is coloured by status too", () => {
+    const [on] = tabStatusRequests(3, approved);
+    const [off] = tabStatusRequests(4, draft);
+    expect(on.updateSheetProperties).toMatchObject({ properties: { sheetId: 3 }, fields: "tabColorStyle" });
+    expect(on.updateSheetProperties.properties.tabColorStyle.rgbColor.green).toBeGreaterThan(0.5);
+    expect(off.updateSheetProperties.properties.tabColorStyle.rgbColor.red).toBeGreaterThan(0.8);
+  });
+});
+
+/**
+ * Tabs are found by title, so a changed title (status flip, or a renamed plan)
+ * used to add a fresh tab pair and strand the old one in the client's sheet —
+ * the live "thriftXredbull" file still has a "thriftXredbull · Plan A · " pair
+ * from before Plan A was renamed "speedXredbull". reconcilePlanTabRequests
+ * renames a plan's tabs in place instead (keeping their gid, so shared links
+ * still land) and removes such leftovers.
+ */
+describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 Sep)", () => {
+  const planA = { ...basePlan, id: "plan-aaaaaa", name: "speedXredbull", variantLabel: "Plan A", status: "APPROVED" };
+  const planB = { ...basePlan, id: "plan-bbbbbb", name: "thriftXredbull", variantLabel: "Plan B", status: "DRAFT" };
+  const sheetsFor = (...plans) => plans.map((plan) => ({ plan, ...buildPlanSheetTabs(plan) }));
+  const renames = (reqs) => reqs.filter((r) => r.updateSheetProperties).map((r) => [r.updateSheetProperties.properties.sheetId, r.updateSheetProperties.properties.title]);
+  const deletes = (reqs) => reqs.filter((r) => r.deleteSheet).map((r) => r.deleteSheet.sheetId);
+
+  it("upgrades the old untagged client tabs to the Active / Not active names, keeping the same tabs", () => {
+    const existing = [
+      { sheetId: 1, title: "Overview of speedXredbull · Plan A · " },
+      { sheetId: 2, title: "speedXredbull · Plan A · " },
+      { sheetId: 3, title: "Overview of thriftXredbull · Plan B · " },
+      { sheetId: 4, title: "thriftXredbull · Plan B · " },
+    ];
+
+    const reqs = reconcilePlanTabRequests(existing, sheetsFor(planA, planB));
+
+    expect(renames(reqs)).toEqual([
+      [1, "Overview of speedXredbull · Plan A · Active"],
+      [2, "speedXredbull · Plan A · Active"],
+      [3, "Overview of thriftXredbull · Plan B · Not active"],
+      [4, "thriftXredbull · Plan B · Not active"],
+    ]);
+    expect(deletes(reqs)).toEqual([]);
+  });
+
+  it("clears the stale pair a rename left behind — the live thriftXredbull file's case", () => {
+    const existing = [
+      { sheetId: 10, title: "Overview of thriftXredbull · Plan A · " }, // Plan A before its rename
+      { sheetId: 11, title: "thriftXredbull · Plan A · " },
+      { sheetId: 12, title: "Overview of speedXredbull · Plan A · " },
+      { sheetId: 13, title: "speedXredbull · Plan A · " },
+    ];
+
+    const reqs = reconcilePlanTabRequests(existing, sheetsFor(planA));
+
+    expect(renames(reqs)).toEqual([
+      [10, "Overview of speedXredbull · Plan A · Active"],
+      [11, "speedXredbull · Plan A · Active"],
+    ]);
+    expect(deletes(reqs).sort()).toEqual([12, 13]); // exactly one pair survives
+  });
+
+  // Found verifying on the live file: with two candidate pairs it kept the
+  // stale one and deleted the tab the plan's saved link pointed at, so an
+  // already-shared ?gid= link lost its target. The linked tab is kept now.
+  it("of two leftover Overview tabs, keeps the one the plan's saved link points at", () => {
+    const linked = { ...planA, clientSheetUrl: "https://docs.google.com/spreadsheets/d/f/edit?gid=12#gid=12" };
+    const existing = [
+      { sheetId: 10, title: "Overview of thriftXredbull · Plan A · " }, // stale, but first in the tab strip
+      { sheetId: 12, title: "Overview of speedXredbull · Plan A · " }, // what the shared link opens
+    ];
+
+    const reqs = reconcilePlanTabRequests(existing, sheetsFor(linked));
+
+    expect(renames(reqs)).toEqual([[12, "Overview of speedXredbull · Plan A · Active"]]);
+    expect(deletes(reqs)).toEqual([10]);
+  });
+
+  it("a status flip renames the same tab — Plan B approved later goes Not active → Active", () => {
+    const existing = [{ sheetId: 5, title: "thriftXredbull · Plan B · Not active" }];
+
+    const reqs = reconcilePlanTabRequests(existing, sheetsFor({ ...planB, status: "APPROVED" }));
+
+    expect(renames(reqs)).toEqual([[5, "thriftXredbull · Plan B · Active"]]);
+  });
+
+  it("already-correct tabs need no requests at all", () => {
+    const existing = sheetsFor(planA).flatMap((s, i) => [
+      { sheetId: 20 + i, title: s.overviewTitle },
+      { sheetId: 30 + i, title: s.pagesTitle },
+    ]);
+
+    expect(reconcilePlanTabRequests(existing, sheetsFor(planA))).toEqual([]);
+  });
+
+  it("never touches a tab that isn't one of these plans' — a sibling it can't see, or anything added by hand", () => {
+    const existing = [
+      { sheetId: 40, title: "thriftXredbull · Plan C · " }, // a sibling this requester can't open
+      { sheetId: 41, title: "Client's own notes" },
+    ];
+
+    expect(reconcilePlanTabRequests(existing, sheetsFor(planA, planB))).toEqual([]);
+  });
+
+  it("the internal file finds its tabs by the id suffix, across a rename", () => {
+    const existing = [{ sheetId: 50, title: "INTERNAL — oldName · Plan A · aaaaaa" }];
+    const sheets = [{ plan: planA, ...planSheetTabTitles(planA, { internal: true }) }];
+
+    expect(renames(reconcilePlanTabRequests(existing, sheets, { internal: true }))).toEqual([[50, "INTERNAL — speedXredbull · Plan A · Active · aaaaaa"]]);
   });
 });
