@@ -212,3 +212,12 @@ Opened https://docs.google.com/spreadsheets/d/1Pm6H1djQxTPoaI5ria51-Sbk1C7ldbARO
 bugs:-
 
 1.creators are able to see team?, and top of it's written admin, why it's written md, also a user can see see their creator's pages or their team memeber they've added or can add
+
+8 oct
+bugs-
+1.on sheet generation there should be edit access to that email as well who's generating sheet
+2. followers should show in million or in k
+3. option of selecting both story and reel for selected page
+4. connected google sheet expire is showing after every 7 days on sheet generation, how to make it permanent, write solution in md file or if by code do it yourself
+
+the changes should be implemented in nice ui/ux nothing messed, easy to use 

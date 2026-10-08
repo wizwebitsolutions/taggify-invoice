@@ -180,9 +180,9 @@ test.describe("Plan wizard — Step 2 (Budget & pages) hard cap", () => {
     await expect(page.getByTestId("budget-left")).toContainText("₹500");
 
     // Raising posts past the budget is refused with a message; the value stays put.
-    await page.getByLabel("Posts for @big.page").fill("2");
+    await page.getByLabel("Reel posts for @big.page").fill("2");
     await expect(page.getByTestId("budget-cap-message")).toContainText("over the ₹500 left");
-    await expect(page.getByLabel("Posts for @big.page")).toHaveValue("1");
+    await expect(page.getByLabel("Reel posts for @big.page")).toHaveValue("1");
     await expect(next).toBeEnabled();
 
     // Lowering the budget below what's picked blocks Next until it fits again.
@@ -201,18 +201,48 @@ test.describe("Plan wizard — Step 2 (Budget & pages) hard cap", () => {
     expect((saved?.items as unknown[]).map((i) => (i as { assetId: string }).assetId)).toEqual(["a1", "a3"]);
   });
 
-  test("format offers reel and story only; more than one post per page shows the phases hint", async ({ page }) => {
+  test("a page can have a reel and a story, each with its own posts; more than one post shows the phases hint (8 Oct)", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 1000, 500)] });
+    let saved: Record<string, unknown> | undefined;
+    await page.route(`${API_URL}/plans/plan-1`, (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      saved = route.request().postDataJSON();
+      return route.fulfill({ json: mockPlan(saved) });
+    });
 
     await fillStep1(page);
     await page.getByRole("textbox", { name: "Budget" }).fill("50000");
     await page.getByLabel("Select @big.page").check();
-    const format = page.getByLabel("Format for @big.page");
-    await expect(format.locator("option")).toHaveText(["reel", "story"]);
-    await page.getByLabel("Posts for @big.page").fill("3");
+    const formats = page.getByRole("group", { name: "Formats for @big.page" });
+    await expect(formats.getByRole("button")).toHaveText(["reel", "story"]);
+    await expect(formats.getByRole("button", { name: "reel" })).toHaveAttribute("aria-pressed", "true");
+    await formats.getByRole("button", { name: "story" }).click();
+    await page.getByLabel("Story posts for @big.page").fill("2");
+    await page.getByLabel("Reel posts for @big.page").fill("3");
     await expect(page.getByText(/creators will see this as 3 campaigns \(Phase 1 to 3\)/)).toBeVisible();
+    // The last format can't be switched off; unticking the page removes it.
+    await formats.getByRole("button", { name: "story" }).click();
+    await formats.getByRole("button", { name: "reel" }).click();
+    await expect(page.getByTestId("budget-cap-message")).toContainText("needs at least one format");
+    await formats.getByRole("button", { name: "story" }).click();
+    await page.getByLabel("Story posts for @big.page").fill("2");
+
+    await page.getByRole("button", { name: /Next/ }).click();
+    await expect.poll(() => saved?.items).toEqual([
+      { assetId: "a1", format: "reel", postsPerProfile: 3 },
+      { assetId: "a1", format: "story", postsPerProfile: 2 },
+    ]);
+  });
+
+  test("an inactive page isn't offered when picking pages (8 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 1000, 500), { ...asset("a2", "off.page", 500000, 1000, 500), isActive: false }] });
+    await fillStep1(page);
+    await expect(page.getByLabel("Select @big.page")).toBeVisible();
+    await expect(page.getByLabel("Select @off.page")).toHaveCount(0);
   });
 });
 
@@ -283,15 +313,15 @@ test.describe("Plan wizard — Step 3 (Pricing) and Step 4 (Preview & sheet)", (
     expect(saved?.overrideImpressions).toBe(300000);
     expect((saved?.items as { clientCost?: number }[]).every((i) => !("clientCost" in i))).toBe(true); // no per-page client price is ever sent
 
-    // Step 4 — preview + generate only; pages in one flat list, not per category.
-    await expect(page.getByText(/Overview of Q1 Push/)).toBeVisible();
-    await expect(page.getByText("3,00,000 (est.)")).toBeVisible(); // the overridden impressions
+    // Step 4 — preview + generate. Since 8 Oct the preview follows the plan's sheet
+    // format (Category breakdown by default) and lists pages per category, like the sheet's tabs.
+    await expect(page.getByText(/<> Taggify · Category breakdown/)).toBeVisible();
+    await expect(page.getByTestId("preview-breakdown")).toContainText("Meme Pages");
+    await expect(page.getByTestId("preview-breakdown")).toContainText("News Pages");
     const preview = page.getByTestId("preview-pages");
     await expect(preview.locator("tbody tr")).toHaveCount(2);
-    await expect(preview.locator("thead")).toHaveCount(1);
-    await expect(preview).not.toContainText("Meme page");
-    await expect(preview).not.toContainText("News");
-    await expect(preview.locator("tbody tr").nth(1)).toContainText("2"); // S No keeps counting
+    await expect(preview).toContainText("Meme Pages");
+    await expect(preview).toContainText("News Pages");
     await expect(page.getByText("Client-facing overview")).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: /company name/i })).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: /GST number/i })).toHaveCount(0);
@@ -463,5 +493,34 @@ test.describe("Plan wizard — Step 3 (Pricing) and Step 4 (Preview & sheet)", (
     await expect(page.getByRole("link", { name: "Open sheet ↗" })).toHaveAttribute("href", sheetUrl);
     await page.getByText("Internal sheet").locator("..").getByRole("button", { name: "Generate" }).click();
     await expect(page.getByText("Google Sheets export isn't configured yet.")).toBeVisible();
+  });
+
+  test("Step 4: the sheet format is picked here, saved on the plan, and the preview follows it (8 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await mockPlanRoutes(page, { assets: [asset("a1", "big.page", 900000, 8000, 3000, 250000)] });
+    const formats: unknown[] = [];
+    await page.route(`${API_URL}/plans/plan-1`, (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      const body = route.request().postDataJSON();
+      if ("sheetFormat" in body) formats.push(body.sheetFormat);
+      return route.fulfill({
+        json: mockPlan({ budget: 10000, ...body, items: [{ assetId: "a1", format: "reel", cost: "8000", clientCost: null, postsPerProfile: 1, asset: { handle: "big.page", followers: 900000, category: "Meme page" } }] }),
+      });
+    });
+
+    await fillStep1(page);
+    await page.getByRole("textbox", { name: "Budget" }).fill("10000");
+    await page.getByLabel("Select @big.page").check();
+    await page.getByRole("button", { name: "Next: Pricing" }).click();
+    await page.getByRole("button", { name: "Next: Preview" }).click();
+
+    const picker = page.getByRole("radiogroup", { name: "Google Sheet format" });
+    await expect(picker.getByRole("radio", { name: /Category breakdown/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("preview-breakdown")).toBeVisible();
+    await picker.getByRole("radio", { name: /Campaign summary/ }).click();
+    await expect.poll(() => formats).toEqual(["summary"]);
+    await expect(page.getByTestId("preview-summary")).toContainText("Total Deliverables");
+    await expect(picker.getByRole("radio", { name: /Campaign summary/ })).toHaveAttribute("aria-checked", "true");
   });
 });

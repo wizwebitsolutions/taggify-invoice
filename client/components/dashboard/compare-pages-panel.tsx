@@ -7,7 +7,7 @@ import { RankedBarList } from "@/components/charts/ranked-bar-list";
 import { CompareBarList } from "@/components/charts/compare-bar-list";
 import { TableSkeleton, EmptyState } from "@/components/ui/table-parts";
 import { cn } from "@/lib/utils";
-import { money, count } from "@/lib/format";
+import { money, count, followersLabel } from "@/lib/format";
 
 export interface PageMetrics {
   id: string;
@@ -18,7 +18,7 @@ export interface PageMetrics {
 }
 
 const METRICS = [
-  { key: "followers", label: "Followers", formatValue: (v: number) => count(v) },
+  { key: "followers", label: "Followers", formatValue: (v: number) => followersLabel(v) },
   { key: "linksCount", label: "Links posted", formatValue: (v: number) => count(v) },
   { key: "totalInvoiced", label: "Total invoiced", formatValue: (v: number) => money(v) },
 ];

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPlanSheetTabs, planSheetTabTitles, reconcilePlanTabRequests, tabStatusRequests, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, EXECUTION_TEMPLATE_TITLE } from "./planSheet.js";
+import { buildPlanSheetTabs, planSheetTabTitles, pageTabTitle, categoryLabel, splitByWeight, reconcilePlanTabRequests, tabStatusRequests, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, EXECUTION_TEMPLATE_TITLE } from "./planSheet.js";
 
 /**
  * user request, 10 Sep — "plan will be of google sheet, not in pdf" then
@@ -60,71 +60,83 @@ describe("planSheetTabTitles — unique within a pitch group's file", () => {
 });
 
 describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPdf() produces)", () => {
-  it("builds non-empty overview and page rows/specs for a normal plan, in lockstep", () => {
+  it("builds non-empty overview and page tabs for a normal plan, rows and specs in lockstep", () => {
     const t = buildPlanSheetTabs(basePlan);
 
-    expect(t.overviewRows.length).toBeGreaterThan(0);
     expect(t.overviewRows.length).toBe(t.overviewRowSpecs.length); // rows/specs never drift apart
-    expect(t.pagesRows.length).toBeGreaterThan(0);
-    expect(t.pagesRows.length).toBe(t.pagesRowSpecs.length);
-    expect(t.overviewNumCols).toBe(2);
-    expect(t.pagesNumCols).toBe(6);
-    // Client details (user request, 10 Sep) appear on the sheet.
+    expect(t.pageTabs).toHaveLength(1);
+    expect(t.pageTabs[0].rows.length).toBe(t.pageTabs[0].rowSpecs.length);
+    expect(t.pageTabs[0].numCols).toBe(6);
+    // Client details (user request, 10 Sep) stay on the sheet.
     expect(t.overviewRows.some((r) => r.join(" ").includes("Acme Inc"))).toBe(true);
     expect(t.overviewRows.some((r) => r.join(" ").includes("GST123"))).toBe(true);
   });
 
-  it("handles an empty-plan state without crashing", () => {
+  it("handles an empty plan without crashing (no page tabs, a note on the overview)", () => {
     const t = buildPlanSheetTabs({ ...basePlan, items: [] });
-    expect(t.pagesRows.length).toBeGreaterThan(0);
+    expect(t.pageTabs).toEqual([]);
+    expect(t.overviewRows.flat().join(" ")).toContain("No pages added yet.");
   });
 
-  it("lists every page in one flat table — no per-category blocks, one header, S No running across categories (user request, 14 Sep)", () => {
+  // 8 Oct — both sample plans put each page category in its own tab.
+  it("puts pages in one tab per category, biggest audience first; a page's row is a bare handle with a clickable link", () => {
     const t = buildPlanSheetTabs({
       ...basePlan,
       items: [
         { format: "reel", postsPerProfile: 1, displayCost: 5000, asset: { handle: "a.page", category: "Meme page", followers: 50000 } },
         { format: "story", postsPerProfile: 2, displayCost: 4000, asset: { handle: "b.page", category: "News", followers: 200000 } },
+        { format: "reel", postsPerProfile: 1, displayCost: 1000, asset: { handle: "c.page", category: null, followers: 1000 } },
       ],
     });
 
-    const flat = t.pagesRows.map((r) => r.join(" "));
-    expect(flat.some((r) => r.includes("Meme page"))).toBe(false);
-    expect(flat.some((r) => r.includes("News"))).toBe(false);
-    expect(t.pagesRows.filter((r) => r[0] === "S No")).toHaveLength(1);
-    expect(t.pagesRows.map((r) => r[0]).filter((v) => typeof v === "number")).toEqual([1, 2]);
-    // 22 Sep — bare handle as Page Name, the plain profile URL as text (no
-    // "@" prefix, no =HYPERLINK() formula) in Page Link.
-    const pageRow = t.pagesRows.find((r) => r[0] === 1);
+    expect(t.pageTabs.map((tab) => tab.title)).toEqual([
+      "News Pages — Q1 Meme Page Push · Plan A · Not active",
+      "Meme Pages — Q1 Meme Page Push · Plan A · Not active",
+      "Other Pages — Q1 Meme Page Push · Plan A · Not active",
+    ]);
+    const meme = t.pageTabs[1];
+    const pageRow = meme.rows.find((r) => r[0] === 1);
     expect(pageRow[1]).toBe("a.page");
     expect(pageRow[2]).toBe("https://instagram.com/a.page");
-    expect(flat.some((r) => r.includes("HYPERLINK") || r.includes("@a.page"))).toBe(false);
-    // …and the Page Link cell is clickable through a cell-level link (later
-    // 22 Sep — "should have hyperlink of that link as well"), never a formula.
-    const pageSpec = t.pagesRowSpecs[t.pagesRows.indexOf(pageRow)];
-    expect(pageSpec.links).toEqual({ 2: "https://instagram.com/a.page" });
+    expect(meme.rowSpecs[meme.rows.indexOf(pageRow)].links).toEqual({ 2: "https://instagram.com/a.page" });
+    expect(meme.rows.flat().join(" ")).not.toMatch(/HYPERLINK|@a\.page/);
+    // Each tab ends with a followers total.
+    expect(meme.rows.at(-1)).toEqual(["", "Total", "", "50K", "", 1]);
   });
 
-  it("the NOTES block carries only the brief typed on Step 1 — no GST/availability boilerplate (user request, 14 Sep)", () => {
-    const flat = buildPlanSheetTabs(basePlan).overviewRows.flat().join(" ");
-    expect(flat).toContain("Rush job");
-    expect(flat).not.toMatch(/inclusive of GST|exclusive of GST|subject to availability/);
+  it("a page with both a reel and a story counts its followers once in the tab total", () => {
+    const t = buildPlanSheetTabs({
+      ...basePlan,
+      items: [
+        { format: "reel", postsPerProfile: 1, displayCost: 5000, asset: { handle: "a.page", category: "News", followers: 1_000_000 } },
+        { format: "story", postsPerProfile: 2, displayCost: 2000, asset: { handle: "a.page", category: "News", followers: 1_000_000 } },
+      ],
+    });
+    expect(t.pageTabs[0].rows.at(-1)).toEqual(["", "Total", "", "1M", "", 3]);
+  });
 
-    const withoutNotes = buildPlanSheetTabs({ ...basePlan, notes: "" }).overviewRows.flat().join(" ");
-    expect(withoutNotes).not.toContain("NOTES");
+  it("notes: the format's standard notes, then the plan's own brief (8 Oct)", () => {
+    const breakdown = buildPlanSheetTabs(basePlan).overviewRows.flat().join(" ");
+    expect(breakdown).toContain("Taggify manages post visibility for 45 days");
+    expect(breakdown.indexOf("Rush job")).toBeGreaterThan(breakdown.indexOf("45 days"));
+
+    const summary = buildPlanSheetTabs({ ...basePlan, sheetFormat: "summary" }).overviewRows.flat().join(" ");
+    expect(summary).toContain("All prices mentioned above are exclusive of GST.");
+    expect(summary).toContain("Rush job");
+
+    expect(buildPlanSheetTabs({ ...basePlan, notes: "" }).overviewRows.flat().join(" ")).not.toContain("Rush job");
   });
 
   it("includes GST rows only when the plan has a gstPercent", () => {
     const withoutGst = buildPlanSheetTabs(basePlan).overviewRows.flat().join(" ");
-    const withGst = buildPlanSheetTabs({ ...basePlan, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 } }).overviewRows
-      .flat()
-      .join(" ");
+    const withGst = buildPlanSheetTabs({ ...basePlan, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 } }).overviewRows.flat().join(" ");
 
     expect(withoutGst).not.toContain("GST (18%)");
     expect(withGst).toContain("GST (18%)");
+    expect(withGst).toContain("₹9,440");
   });
 
-  it("{ internal: true } takes the full annotated plan shape (raw item.cost, internal.computed*), adds a Cost/Post column, and uses the real numbers even when a Step 3 override is set", () => {
+  it("{ internal: true } uses real costs, adds a Cost/Post column, and shows the quote, margin and budget", () => {
     const annotatedPlan = {
       ...basePlan,
       isGstPlan: true,
@@ -133,16 +145,88 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
       budgetVariance: -2000,
       overview: { ...basePlan.overview, subtotal: 8000, gstAmount: 1440, total: 9440 }, // overridden client-facing numbers
       internal: { computedFollowers: 100000, computedPosts: 2, computedImpressions: 10000, computedSubtotal: 5000, computedGstAmount: 900, computedTotal: 5900 },
-      items: [{ format: "reel", postsPerProfile: 2, cost: 5000, clientCost: 8000, asset: { handle: "demo.page", category: "Meme page", followers: 100000 } }],
+      items: [{ format: "reel", postsPerProfile: 2, cost: 2500, clientCost: 4000, asset: { handle: "demo.page", category: "Meme page", followers: 100000 } }],
     };
 
     const t = buildPlanSheetTabs(annotatedPlan, { internal: true });
     const flatOverview = t.overviewRows.flat().join(" ");
 
-    expect(t.pagesNumCols).toBe(7);
-    expect(t.pagesRows.flat()).toContain("Cost/Post");
-    expect(flatOverview).toContain("Rs. 5,000.00"); // internal.computedSubtotal, not the overridden 8000
+    expect(t.pageTabs[0].numCols).toBe(7);
+    expect(t.pageTabs[0].rows.flat()).toContain("Cost/Post");
+    expect(flatOverview).toContain("₹5,000"); // 2 × 2,500 real cost, not the overridden 8,000
+    expect(flatOverview).toContain("Quoted to client");
     expect(flatOverview).toContain("Over Budget");
+    expect(t.pageTabs[0].title).toMatch(/^INTERNAL — Meme Pages — /);
+  });
+});
+
+/** 8 Oct — the two sample plans the sheet formats are modelled on. */
+describe("sheet formats (8 Oct)", () => {
+  const twoCategories = {
+    ...basePlan,
+    isGstPlan: true,
+    gstPercent: 18,
+    overview: { totalFollowers: 9_400_000, totalPosts: 3, expectedImpressions: 900_000, subtotal: 100_000, gstAmount: 18_000, total: 118_000 },
+    items: [
+      { format: "reel", postsPerProfile: 1, displayCost: 30_000, expectedViews: 300_000, asset: { handle: "big.news", category: "News", followers: 9_000_000 } },
+      { format: "reel", postsPerProfile: 2, displayCost: 10_000, expectedViews: 400_000, asset: { handle: "biz.page", category: "Business", followers: 400_000 } },
+    ],
+  };
+
+  it("breakdown (sample 1): a row per category, with the quote split by what each category's pages cost", () => {
+    const t = buildPlanSheetTabs({ ...twoCategories, sheetFormat: "breakdown" });
+    const header = t.overviewRows.find((r) => r[0] === "Particulars");
+    expect(header).toEqual(["Particulars", "Utilization", "Followers Count (in Millions)", "Followers Range", "No. of Items", "Total Final Cost", "Expected Views/Reach (in Millions)"]);
+    const news = t.overviewRows.find((r) => r[0] === "News Pages");
+    const biz = t.overviewRows.find((r) => r[0] === "Business Pages");
+    // Pages cost 30,000 (News) and 20,000 (Business): the 1,00,000 quote splits 60/40.
+    expect(news).toEqual(["News Pages", "Instagram Reel", "9", "9M-9M", 1, "₹60,000", "0.4"]);
+    expect(biz).toEqual(["Business Pages", "Instagram Reel", "0.4", "400K-400K", 2, "₹40,000", "0.5"]);
+    expect(t.overviewRows.find((r) => r[0] === "Total")).toEqual(["Total", "", "9.4", "", 3, "₹1,00,000", "0.9"]);
+    expect(t.overviewRows.find((r) => r[4] === "GST (18%)")?.[5]).toBe("₹18,000");
+    expect(t.overviewNumCols).toBe(7);
+  });
+
+  it("summary (sample 2): one campaign-overview block with CPV", () => {
+    const t = buildPlanSheetTabs({ ...twoCategories, sheetFormat: "summary" });
+    const rows = Object.fromEntries(t.overviewRows.filter((r) => r.length === 2).map((r) => [r[0], r[1]]));
+    expect(rows).toMatchObject({
+      "Total Followers Targeted Overall": "9 Million +",
+      "Total Deliverables": 3,
+      "Expected Impressions/Views": "900K +",
+      Cost: "₹1,00,000",
+      CPV: "0.11",
+    });
+    expect(t.overviewNumCols).toBe(2);
+    // Same category page tabs either way.
+    expect(t.pageTabs.map((tab) => tab.title.split(" — ")[0])).toEqual(["News Pages", "Business Pages"]);
+  });
+
+  it("no format saved yet means breakdown", () => {
+    expect(buildPlanSheetTabs(twoCategories).overviewRows.some((r) => r[0] === "Particulars")).toBe(true);
+  });
+
+  it("category labels read like the samples' tab names", () => {
+    expect(categoryLabel("News")).toBe("News Pages");
+    expect(categoryLabel("Meme page")).toBe("Meme Pages");
+    expect(categoryLabel("coverage handles")).toBe("Coverage Handles");
+    expect(categoryLabel(null)).toBe("Other Pages");
+  });
+
+  it("categories differing only in case share one tab; long look-alike labels and dashes never collide", () => {
+    const item = (handle, category) => ({ format: "reel", postsPerProfile: 1, displayCost: 1000, asset: { handle, category, followers: 1000 } });
+    const long = "A very long category name that goes on and on";
+    const t = buildPlanSheetTabs({ ...basePlan, items: [item("a", "news"), item("b", "NEWS"), item("c", `${long} one`), item("d", `${long} two`), item("e", "News — Hindi")] });
+    const titles = t.pageTabs.map((tab) => tab.title);
+    expect(titles.filter((x) => x.startsWith("News Pages — "))).toHaveLength(1);
+    expect(new Set(titles.map((x) => x.toLowerCase())).size).toBe(titles.length);
+    expect(titles.some((x) => x.startsWith("News - Hindi Pages — "))).toBe(true);
+  });
+
+  it("a split always adds back up to the total", () => {
+    expect(splitByWeight(100, [1, 1, 1])).toEqual([33, 33, 34]);
+    expect(splitByWeight(1000, [0, 0])).toEqual([500, 500]);
+    expect(splitByWeight(0, [])).toEqual([]);
   });
 });
 
@@ -233,7 +317,8 @@ describe("buildExecutionSheetTemplate", () => {
     const t = buildExecutionSheetTemplate();
     const totalsRow = t.rows.at(-1);
 
-    expect(totalsRow).toEqual(["", "TOTAL", "", 8700000 + 4300000, "", ""]);
+    // 8,700,000 + 4,300,000, written the way creators quote it (8 Oct).
+    expect(totalsRow).toEqual(["", "TOTAL", "", "13M", "", ""]);
   });
 });
 
@@ -251,7 +336,8 @@ describe("previewExecutionSheetTemplate", () => {
     expect(preview.rows).toHaveLength(2);
     expect(preview.rows[0][2]).toBe("https://instagram.com/ghantaa"); // plain URL, no =HYPERLINK(...) wrapper
     expect(preview.linkColumns).toEqual([2, 5]);
-    expect(preview.totalsRow[3]).toBe(8700000 + 4300000);
+    expect(preview.rows[0][3]).toBe("8.7M");
+    expect(preview.totalsRow[3]).toBe("13M"); // 8,700,000 + 4,300,000
   });
 });
 
@@ -283,15 +369,15 @@ describe("Active / Not active — tab name, band and tab colour (29 Sep)", () =>
     const on = buildPlanSheetTabs(approved);
     const off = buildPlanSheetTabs(draft);
 
-    // Overview: right under the TAGGIFY logo. Pages: the first row, above the table.
-    expect(on.overviewRows[1][0]).toContain("ACTIVE");
-    expect(on.overviewRowSpecs[1]).toMatchObject({ cellTypes: ["statusActive"], merge: true });
-    expect(on.pagesRows[0][0]).toContain("ACTIVE");
-    expect(off.overviewRows[1][0]).toContain("NOT ACTIVE");
-    expect(off.pagesRowSpecs[0]).toMatchObject({ cellTypes: ["statusInactive"], merge: true });
+    // Overview and every page tab open with the status band.
+    expect(on.overviewRows[0][0]).toContain("ACTIVE");
+    expect(on.overviewRowSpecs[0]).toMatchObject({ cellTypes: ["statusActive"], merge: true });
+    expect(on.pageTabs[0].rows[0][0]).toContain("ACTIVE");
+    expect(off.overviewRows[0][0]).toContain("NOT ACTIVE");
+    expect(off.pageTabs[0].rowSpecs[0]).toMatchObject({ cellTypes: ["statusInactive"], merge: true });
 
-    const [green] = buildFormatRequests(7, on.pagesRowSpecs, on.pagesNumCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
-    const [red] = buildFormatRequests(7, off.pagesRowSpecs, off.pagesNumCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
+    const [green] = buildFormatRequests(7, on.pageTabs[0].rowSpecs, on.pageTabs[0].numCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
+    const [red] = buildFormatRequests(7, off.pageTabs[0].rowSpecs, off.pageTabs[0].numCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
     expect(green.repeatCell.cell.userEnteredFormat.backgroundColor.green).toBeGreaterThan(green.repeatCell.cell.userEnteredFormat.backgroundColor.red);
     expect(red.repeatCell.cell.userEnteredFormat.backgroundColor.red).toBeGreaterThan(red.repeatCell.cell.userEnteredFormat.backgroundColor.green);
   });
@@ -313,14 +399,14 @@ describe("Active / Not active — tab name, band and tab colour (29 Sep)", () =>
  * renames a plan's tabs in place instead (keeping their gid, so shared links
  * still land) and removes such leftovers.
  */
-describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 Sep)", () => {
+describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 Sep; category tabs 8 Oct)", () => {
   const planA = { ...basePlan, id: "plan-aaaaaa", name: "speedXredbull", variantLabel: "Plan A", status: "APPROVED" };
   const planB = { ...basePlan, id: "plan-bbbbbb", name: "thriftXredbull", variantLabel: "Plan B", status: "DRAFT" };
   const sheetsFor = (...plans) => plans.map((plan) => ({ plan, ...buildPlanSheetTabs(plan) }));
   const renames = (reqs) => reqs.filter((r) => r.updateSheetProperties).map((r) => [r.updateSheetProperties.properties.sheetId, r.updateSheetProperties.properties.title]);
   const deletes = (reqs) => reqs.filter((r) => r.deleteSheet).map((r) => r.deleteSheet.sheetId);
 
-  it("upgrades the old untagged client tabs to the Active / Not active names, keeping the same tabs", () => {
+  it("upgrades old untagged tabs: the Overview is renamed in place, the old all-pages tab makes way for category tabs", () => {
     const existing = [
       { sheetId: 1, title: "Overview of speedXredbull · Plan A · " },
       { sheetId: 2, title: "speedXredbull · Plan A · " },
@@ -332,33 +418,25 @@ describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 S
 
     expect(renames(reqs)).toEqual([
       [1, "Overview of speedXredbull · Plan A · Active"],
-      [2, "speedXredbull · Plan A · Active"],
       [3, "Overview of thriftXredbull · Plan B · Not active"],
-      [4, "thriftXredbull · Plan B · Not active"],
     ]);
-    expect(deletes(reqs)).toEqual([]);
+    expect(deletes(reqs).sort()).toEqual([2, 4]);
   });
 
-  it("clears the stale pair a rename left behind — the live thriftXredbull file's case", () => {
+  it("clears the stale Overview a rename left behind — the live thriftXredbull file's case", () => {
     const existing = [
       { sheetId: 10, title: "Overview of thriftXredbull · Plan A · " }, // Plan A before its rename
-      { sheetId: 11, title: "thriftXredbull · Plan A · " },
       { sheetId: 12, title: "Overview of speedXredbull · Plan A · " },
-      { sheetId: 13, title: "speedXredbull · Plan A · " },
     ];
 
     const reqs = reconcilePlanTabRequests(existing, sheetsFor(planA));
 
-    expect(renames(reqs)).toEqual([
-      [10, "Overview of speedXredbull · Plan A · Active"],
-      [11, "speedXredbull · Plan A · Active"],
-    ]);
-    expect(deletes(reqs).sort()).toEqual([12, 13]); // exactly one pair survives
+    expect(renames(reqs)).toEqual([[10, "Overview of speedXredbull · Plan A · Active"]]);
+    expect(deletes(reqs)).toEqual([12]); // exactly one Overview survives
   });
 
-  // Found verifying on the live file: with two candidate pairs it kept the
-  // stale one and deleted the tab the plan's saved link pointed at, so an
-  // already-shared ?gid= link lost its target. The linked tab is kept now.
+  // Found verifying on the live file: with two candidates it kept the stale
+  // one and deleted the tab the plan's saved link pointed at. The linked tab is kept now.
   it("of two leftover Overview tabs, keeps the one the plan's saved link points at", () => {
     const linked = { ...planA, clientSheetUrl: "https://docs.google.com/spreadsheets/d/f/edit?gid=12#gid=12" };
     const existing = [
@@ -372,19 +450,25 @@ describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 S
     expect(deletes(reqs)).toEqual([10]);
   });
 
-  it("a status flip renames the same tab — Plan B approved later goes Not active → Active", () => {
-    const existing = [{ sheetId: 5, title: "thriftXredbull · Plan B · Not active" }];
+  it("a status flip or a rename keeps each category's own tab — Plan B approved later goes Not active → Active", () => {
+    const existing = [{ sheetId: 5, title: "Meme Pages — oldName · Plan B · Not active" }];
 
     const reqs = reconcilePlanTabRequests(existing, sheetsFor({ ...planB, status: "APPROVED" }));
 
-    expect(renames(reqs)).toEqual([[5, "thriftXredbull · Plan B · Active"]]);
+    expect(renames(reqs)).toEqual([[5, "Meme Pages — thriftXredbull · Plan B · Active"]]);
+    expect(deletes(reqs)).toEqual([]);
+  });
+
+  it("a category no longer on the plan loses its tab", () => {
+    const existing = [
+      { sheetId: 6, title: pageTabTitle(planA, "Meme Pages") },
+      { sheetId: 7, title: pageTabTitle(planA, "News Pages") },
+    ];
+    expect(deletes(reconcilePlanTabRequests(existing, sheetsFor(planA)))).toEqual([7]);
   });
 
   it("already-correct tabs need no requests at all", () => {
-    const existing = sheetsFor(planA).flatMap((s, i) => [
-      { sheetId: 20 + i, title: s.overviewTitle },
-      { sheetId: 30 + i, title: s.pagesTitle },
-    ]);
+    const existing = sheetsFor(planA).flatMap((s, i) => [{ sheetId: 20 + i, title: s.overviewTitle }, ...s.pageTabs.map((tab, n) => ({ sheetId: 30 + n, title: tab.title }))]);
 
     expect(reconcilePlanTabRequests(existing, sheetsFor(planA))).toEqual([]);
   });
@@ -399,9 +483,27 @@ describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 S
   });
 
   it("the internal file finds its tabs by the id suffix, across a rename", () => {
-    const existing = [{ sheetId: 50, title: "INTERNAL — oldName · Plan A · aaaaaa" }];
-    const sheets = [{ plan: planA, ...planSheetTabTitles(planA, { internal: true }) }];
+    const existing = [
+      { sheetId: 50, title: "INTERNAL — Overview of oldName · Plan A · aaaaaa" },
+      { sheetId: 51, title: "INTERNAL — Meme Pages — oldName · Plan A · aaaaaa" },
+    ];
+    // The internal sheet takes the full annotated plan (real costs + internal numbers).
+    const annotated = { ...planA, internal: { computedFollowers: 100000, computedPosts: 2, computedImpressions: 10000, computedSubtotal: 8000, computedGstAmount: 0, computedTotal: 8000 }, items: [{ ...planA.items[0], cost: 3000 }] };
+    const sheets = [{ plan: annotated, ...buildPlanSheetTabs(annotated, { internal: true }) }];
 
-    expect(renames(reconcilePlanTabRequests(existing, sheets, { internal: true }))).toEqual([[50, "INTERNAL — speedXredbull · Plan A · Active · aaaaaa"]]);
+    expect(renames(reconcilePlanTabRequests(existing, sheets, { internal: true }))).toEqual([
+      [50, "INTERNAL — Overview of speedXredbull · Plan A · Active · aaaaaa"],
+      [51, "INTERNAL — Meme Pages — speedXredbull · Plan A · Active · aaaaaa"],
+    ]);
+  });
+});
+
+// 8 Oct — "followers should show in million or in k".
+describe("plan sheet followers read as K / M", () => {
+  it("page rows use 100K, not 100000, and the summary overview reads like the sample", () => {
+    const t = buildPlanSheetTabs(basePlan);
+    expect(t.pageTabs[0].rows.some((r) => r[1] === "demo.page" && r[3] === "100K")).toBe(true);
+    const summary = buildPlanSheetTabs({ ...basePlan, sheetFormat: "summary" });
+    expect(summary.overviewRows.find((r) => r[0] === "Total Followers Targeted Overall")?.[1]).toBe("100K +");
   });
 });

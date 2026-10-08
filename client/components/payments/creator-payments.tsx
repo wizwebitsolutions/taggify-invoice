@@ -10,7 +10,8 @@ import { CheckCircleIcon, ChevronRightIcon, DownloadIcon, WalletIcon } from "@/c
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { shortDate } from "@/components/payments/pay-sheet";
 import { viewsOf, paidRowView } from "@/components/payments/admin-payouts";
-import { PaymentsFilterBar, DEFAULT_FILTERS, toApiFilters, useDebounced, type FilterState } from "@/components/payments/payments-filters";
+import { pendingFoot, paidFoot } from "@/components/payments/summary-tiles";
+import { PaymentsFilterBar, DEFAULT_FILTERS, toApiFilters, useDebounced, periodLabel, type FilterState } from "@/components/payments/payments-filters";
 import NextLink from "next/link";
 import { TruncationNote, PaymentsEmpty } from "@/components/payments/admin-payouts";
 import { payments as paymentsApi, ApiError, type PaidLedgerRow, type PendingLink } from "@/lib/api-client";
@@ -34,8 +35,8 @@ export function CreatorPayments({ token }: { token: string }) {
   const pendingQuery = useQuery({ queryKey: ["payments", "me", "pending", apiFilters], queryFn: () => paymentsApi.listMyPending(token, apiFilters) });
   const paidQuery = useQuery({ queryKey: ["payments", "me", "paid", apiFilters], queryFn: () => paymentsApi.listMyPaid(token, apiFilters) });
 
-  // Tiles (25 Sep): what Taggify owes them (their unbilled links + invoices still unpaid), what falls due this month, what was paid this month, and 30+ days overdue.
-  const summaryQuery = useQuery({ queryKey: ["payments", "me", "summary"], queryFn: () => paymentsApi.mySummary(token) });
+  // Tiles (2 Oct): Pending and Paid for the filters picked below — choose a month and both show that month.
+  const summaryQuery = useQuery({ queryKey: ["payments", "me", "summary", apiFilters], queryFn: () => paymentsApi.mySummary(token, apiFilters) });
   const summary = summaryQuery.data;
 
   const pending = pendingQuery.data?.items ?? [];
@@ -47,19 +48,24 @@ export function CreatorPayments({ token }: { token: string }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="creator-payments-kpis">
+      <div className="grid grid-cols-2 gap-3" data-testid="creator-payments-kpis">
         {(
           [
-            ["Total dues", summary?.totalDues],
-            ["Due this month", summary?.dueThisMonth],
-            ["Paid this month", summary?.paidThisMonth],
-            ["30+ days", summary?.overdue30],
+            ["pending", `Pending · ${periodLabel(filters.period)}`, summary?.pending.amount, pendingFoot(summary?.pending)],
+            ["paid", `Paid · ${periodLabel(filters.period)}`, summary?.paid.amount, paidFoot(summary?.paid)],
           ] as const
-        ).map(([label, value]) => (
-          <div key={label} className="rounded-lg border border-border bg-surface p-3.5 shadow-card">
+        ).map(([key, label, value, foot]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            aria-pressed={tab === key}
+            className={cn("flex flex-col justify-start rounded-lg border bg-surface p-3.5 text-left shadow-card transition-colors", tab === key ? "border-ink" : "border-border hover:border-border-strong")}
+          >
             <p className="text-[0.75rem] text-text-muted">{label}</p>
             <p className="text-[1.25rem] font-semibold tabular-nums tracking-[-0.02em]">{money(value ?? 0)}</p>
-          </div>
+            <p className="text-[0.72rem] text-text-faint">{foot}</p>
+          </button>
         ))}
       </div>
 

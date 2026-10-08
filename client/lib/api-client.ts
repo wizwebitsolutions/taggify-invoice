@@ -343,6 +343,8 @@ export interface Asset {
   /** Free-form, e.g. "Meme page", "News page" — set at creation, editable from Inventory's Edit panel (28 Sep). */
   category?: string | null;
   approvalStatus: string;
+  /** Admin's Active / Inactive switch (8 Oct). An inactive page can't be added to new plans. */
+  isActive?: boolean;
   createdAt: string;
   rateCards: RateCard[];
   /**
@@ -680,6 +682,8 @@ export interface Plan {
   pitchGroupId: string | null;
   /** "Plan A" / "Plan B" / etc — which sibling this is within its pitch group. */
   variantLabel: string;
+  /** The Google Sheet's layout (8 Oct): "breakdown" = a row per page category, "summary" = one campaign-overview block. */
+  sheetFormat?: SheetFormat;
   /** The generated client-facing Google Sheet link (user request, 10 Sep — "plan will be of google sheet ... generate google sheet and will provide link"). Null until generated. */
   clientSheetUrl: string | null;
   /** The generated internal (real-numbers) Google Sheet link — "list of plans ... option of viewing googlesheet of plan for client or internal". Null until generated. */
@@ -807,6 +811,8 @@ export const assets = {
     request<Asset>(`/assets/${assetId}/details`, { method: "PUT", token, body }),
   setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
     request<Asset>(`/assets/${assetId}/approval`, { method: "PUT", token, body: { approvalStatus } }),
+  // Active / Inactive (8 Oct) — admins only (ADMIN role + inventory.edit, server-side).
+  setActive: (token: string, assetId: string, isActive: boolean) => request<Asset>(`/assets/${assetId}/active`, { method: "PUT", token, body: { isActive } }),
   // Inventory's manual "refresh" button — re-pulls followers/name/bio/avatar
   // from Apify right now instead of waiting for the 24h cron. Returns the
   // bare updated row (no rateCards/engagement/owner joins, unlike list()) —
@@ -1232,13 +1238,12 @@ export interface PaymentInvoice {
 export type PaidLedgerRow = { kind: "payout"; paidAt: string | null; payout: Payout } | { kind: "invoice"; paidAt: string | null; invoice: PaymentInvoice };
 export type PaidLedgerResult = { items: PaidLedgerRow[]; total: number };
 
-/** The four tiles on Payments (25 Sep): everything owed, due this calendar month, paid this month, and overdue by more than 30 days. */
+/** The Payments tiles (2 Oct): Pending and Paid for the same filters as the lists — follows the month picked. */
 export interface PaymentSummary {
-  totalDues: number;
-  dueThisMonth: number;
-  paidThisMonth: number;
-  overdue30: number;
-  dueCount: number;
+  /** Unpaid links + owed invoices. `links` counts the links inside those invoices too. */
+  pending: { amount: number; links: number; invoices: number };
+  /** Net paid out (payouts + legacy directly-paid invoices). */
+  paid: { amount: number; links: number; payments: number };
 }
 
 /** Pending/Paid tab filters (24 Sep redesign). from/to are ISO instants. */
@@ -1270,9 +1275,15 @@ export const payments = {
   /** Every vendor's payable links — the Pending tab. */
   listPending: (token: string, filters: PaymentsFilters = {}) =>
     request<PendingResult>(`/payments/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
-  /** Totals for the four Payments tiles. */
-  summary: (token: string) => request<PaymentSummary>("/payments/summary", { token }),
-  mySummary: (token: string) => request<PaymentSummary>("/payments/me/summary", { token }),
+  /** Pending/Paid tile totals for the same filters as the lists. */
+  summary: (token: string, filters: PaymentsFilters = {}) => {
+    const qs = paymentsQuery(filters);
+    return request<PaymentSummary>(`/payments/summary${qs ? `?${qs}` : ""}`, { token });
+  },
+  mySummary: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) => {
+    const qs = paymentsQuery(filters);
+    return request<PaymentSummary>(`/payments/me/summary${qs ? `?${qs}` : ""}`, { token });
+  },
   /** Creator's own payable links (server forces the owner to the caller). */
   listMyPending: (token: string, filters: Omit<PaymentsFilters, "ownerId"> = {}) =>
     request<PendingResult>(`/payments/me/pending?${paymentsQuery({ pageSize: 500, ...filters })}`, { token }),
@@ -1355,7 +1366,10 @@ export interface PlanItemInput {
 // One field set shared by create/update — every field beyond name/clientName
 // is optional, matching the wizard's "fill what you have, come back later"
 // shape (see the Plans list's completeness indicator).
+export type SheetFormat = "breakdown" | "summary";
+
 export interface PlanFields {
+  sheetFormat?: SheetFormat;
   name: string;
   clientName: string;
   clientContact?: string;
@@ -1526,7 +1540,7 @@ export const plans = {
   // sheet, not in pdf, it'll generate google sheet and will provide link"),
   // superseding the PDF downloads below as the primary Build-step action.
   generateSheet: (token: string, id: string, variant?: "client" | "internal") =>
-    request<{ spreadsheetUrl: string }>(`/plans/${id}/sheet${variant === "internal" ? "?variant=internal" : ""}`, { method: "POST", token }),
+    request<{ spreadsheetUrl: string; sharedWith?: string; shareError?: string }>(`/plans/${id}/sheet${variant === "internal" ? "?variant=internal" : ""}`, { method: "POST", token }),
   // The downloadable sample (user request, 10 Sep — "give downloadable
   // sample template for google sheet so they'll know how their execution
   // should look like") — one fixed document, not scoped to any plan.

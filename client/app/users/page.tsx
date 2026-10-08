@@ -35,7 +35,7 @@ import {
   type Asset,
 } from "@/lib/api-client";
 import { AccessEditor, AccessSummary } from "@/components/users/access-editor";
-import { initialsOf, roleLabel, money, compactNumber, personLabel } from "@/lib/format";
+import { initialsOf, roleLabel, money, personLabel, followersLabel } from "@/lib/format";
 
 const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
 
@@ -309,7 +309,7 @@ function UsersContent() {
                               const story = p.rateCards.find((r) => r.format === "story");
                               return (
                                 <div key={p.id} className="flex items-center gap-3 rounded-[10px] border border-border px-3 py-2.5">
-                                  <Cell2 primary={`@${p.handle}`} secondary={`${p.category ?? "—"} · ${compactNumber(p.followers)}`} />
+                                  <Cell2 primary={`@${p.handle}`} secondary={`${p.category ?? "—"} · ${followersLabel(p.followers)}`} />
                                   <div className="ml-auto text-right">
                                     <p className="text-[0.7rem] text-text-muted">Reel / Story</p>
                                     <p className="text-[0.78rem] font-semibold tabular-nums">

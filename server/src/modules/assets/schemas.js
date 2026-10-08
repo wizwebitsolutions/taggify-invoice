@@ -8,6 +8,8 @@ export const rateCardEntrySchema = z.object({
   amount: z.number().positive().max(9_999_999_999),
 });
 
+export const setActiveSchema = z.object({ isActive: z.boolean() });
+
 export const setApprovalSchema = z.object({
   approvalStatus: z.enum(["pending", "approved", "rejected"]),
 });

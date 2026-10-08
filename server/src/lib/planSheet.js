@@ -1,3 +1,4 @@
+import { compactFollowers } from "./followers.js";
 /**
  * Builds a Plan's Google Sheet deliverable: the row values (for
  * writeSheetTab) AND the cell formatting (for batchUpdateSpreadsheet) that
@@ -98,6 +99,27 @@ export function planSheetTabTitles(plan, { internal = false } = {}) {
   return { overviewTitle: `${prefix}${OVERVIEW_PREFIX}${name}${tail}`, pagesTitle: `${prefix}${name}${tail}` };
 }
 
+/** A page tab's separator between its category label and the plan's own title. */
+const CATEGORY_SEP = " — ";
+
+/**
+ * One page tab per category (8 Oct — both sample plans split pages that way):
+ * `[INTERNAL — ]<Category label> — <name> · <Plan X> · <status>[ · <id6>]`.
+ */
+export function pageTabTitle(plan, label, { internal = false } = {}) {
+  const prefix = internal ? INTERNAL_PREFIX : "";
+  const tail = ` · ${variantOf(plan)} · ${statusLabel(plan)}${internal ? ` · ${plan.id?.slice(-6) ?? ""}` : ""}`;
+  const head = `${prefix}${truncate(label, 40)}${CATEGORY_SEP}`;
+  return `${head}${truncate(plan.name ?? "", 100 - head.length - tail.length)}${tail}`;
+}
+
+/** The category part of a page tab title (null for the single all-pages tab older sheets had). */
+function categoryKeyOf(title, internal) {
+  const body = internal && title.startsWith(INTERNAL_PREFIX) ? title.slice(INTERNAL_PREFIX.length) : title;
+  const at = body.indexOf(CATEGORY_SEP);
+  return at > 0 ? body.slice(0, at) : null;
+}
+
 /**
  * Whether an existing tab belongs to `plan`, whatever name or status it was
  * written under. Internal: its id suffix. Client: its variant label followed by
@@ -127,26 +149,35 @@ export function reconcilePlanTabRequests(existing, sheets, { internal = false } 
   // A tab is claimed by at most one plan — two siblings can never both
   // rename (or one rename and the other delete) the same tab in one batch.
   const claimed = new Set();
-  for (const { plan, overviewTitle, pagesTitle } of sheets) {
+  const rename = (tab, title) => {
+    if (tab.title !== title) requests.push({ updateSheetProperties: { properties: { sheetId: tab.sheetId, title }, fields: "title" } });
+  };
+  for (const { plan, overviewTitle, pageTabs } of sheets) {
     const mine = existing.filter((t) => !claimed.has(t.sheetId) && planTabOwnedBy(t.title, plan, internal));
-    // The Overview tab the plan's saved (and possibly already shared) link
-    // points at — when a rename left two candidates, that's the one to keep,
-    // so the link still lands on it instead of on a deleted tab.
+    for (const t of mine) claimed.add(t.sheetId);
+
+    // Overview: the one the plan's saved (and possibly already shared) link
+    // points at wins when a rename left two candidates, so the link still lands on it.
     const linkedGid = Number(/[?#&]gid=(\d+)/.exec((internal ? plan.internalSheetUrl : plan.clientSheetUrl) ?? "")?.[1]);
-    for (const [wanted, isKind] of [
-      [overviewTitle, (t) => t.title.startsWith(overviewStart)],
-      [pagesTitle, (t) => !t.title.startsWith(overviewStart)],
-    ]) {
-      const candidates = mine.filter(isKind);
-      const keep = candidates.find((t) => t.title === wanted) ?? candidates.find((t) => t.sheetId === linkedGid) ?? candidates[0];
+    const overviews = mine.filter((t) => t.title.startsWith(overviewStart));
+    const keepOverview = overviews.find((t) => t.title === overviewTitle) ?? overviews.find((t) => t.sheetId === linkedGid) ?? overviews[0];
+    if (keepOverview) rename(keepOverview, overviewTitle);
+    for (const stray of overviews) if (stray !== keepOverview) requests.push({ deleteSheet: { sheetId: stray.sheetId } });
+
+    // Page tabs, one per category (8 Oct): each wanted tab keeps the existing
+    // tab with its exact title or, after a plan rename / status flip, the one
+    // for the same category. Anything left — a category no longer on the
+    // plan, or the single all-pages tab older sheets had — is removed.
+    const pages = mine.filter((t) => !t.title.startsWith(overviewStart));
+    const kept = new Set();
+    for (const { title } of pageTabs) {
+      const key = categoryKeyOf(title, internal);
+      const keep = pages.find((t) => !kept.has(t) && t.title === title) ?? pages.find((t) => !kept.has(t) && key && categoryKeyOf(t.title, internal) === key);
       if (!keep) continue; // first write of this tab — ensureSheetTabsExist creates it
-      for (const t of candidates) claimed.add(t.sheetId);
-      if (keep.title !== wanted) {
-        requests.push({ updateSheetProperties: { properties: { sheetId: keep.sheetId, title: wanted }, fields: "title" } });
-      }
-      // Leftovers of this same plan and kind — e.g. the pair a rename left behind.
-      for (const stray of candidates) if (stray !== keep) requests.push({ deleteSheet: { sheetId: stray.sheetId } });
+      kept.add(keep);
+      rename(keep, title);
     }
+    for (const stray of pages) if (!kept.has(stray)) requests.push({ deleteSheet: { sheetId: stray.sheetId } });
   }
   return requests;
 }
@@ -197,20 +228,23 @@ function makeSection() {
   };
 }
 
+/** The two client-facing layouts a plan's sheet can use (8 Oct); the plan stores its choice. */
+export const SHEET_FORMATS = ["breakdown", "summary"];
+
 export function buildPlanSheetTabs(plan, { internal = false } = {}) {
-  const { overviewTitle, pagesTitle } = planSheetTabTitles(plan, { internal });
-  const overview = buildOverviewSection(plan, internal);
-  const pages = buildPagesSection(plan, internal);
-  return {
-    overviewTitle,
-    overviewRows: overview.rows,
-    overviewRowSpecs: overview.rowSpecs,
-    overviewNumCols: 2,
-    pagesTitle,
-    pagesRows: pages.rows,
-    pagesRowSpecs: pages.rowSpecs,
-    pagesNumCols: internal ? 7 : 6,
-  };
+  const { overviewTitle } = planSheetTabTitles(plan, { internal });
+  const groups = groupByCategory(plan.items ?? []);
+  const overview = plan.sheetFormat === "summary" ? buildSummaryOverview(plan, internal) : buildBreakdownOverview(plan, internal, groups);
+  // Tab names must be unique (ignoring case); two long labels cut to the same 40 characters get a number.
+  const used = new Set();
+  const pageTabs = groups.map((g) => {
+    const section = buildPagesSection(plan, internal, g.items);
+    let title = pageTabTitle(plan, g.label, { internal });
+    for (let n = 2; used.has(title.toLowerCase()); n++) title = pageTabTitle(plan, `${truncate(g.label, 34)} (${n})`, { internal });
+    used.add(title.toLowerCase());
+    return { title, rows: section.rows, rowSpecs: section.rowSpecs, numCols: PAGE_HEADER.length + (internal ? 1 : 0) };
+  });
+  return { overviewTitle, overviewRows: overview.rows, overviewRowSpecs: overview.rowSpecs, overviewNumCols: overview.numCols, pageTabs };
 }
 
 // A fixed, single tab (not per-plan) — the sample template (user request,
@@ -244,13 +278,13 @@ export function buildExecutionSheetTemplate() {
   s.row(EXECUTION_TEMPLATE_HEADER, EXECUTION_TEMPLATE_HEADER.map(() => "tableHeader"));
   for (const ex of EXECUTION_TEMPLATE_EXAMPLES) {
     s.row(
-      [ex.sNo, ex.pageName, `https://instagram.com/${ex.pageHandle}`, ex.followers, ex.date, ex.postUrl],
+      [ex.sNo, ex.pageName, `https://instagram.com/${ex.pageHandle}`, compactFollowers(ex.followers), ex.date, ex.postUrl],
       EXECUTION_TEMPLATE_HEADER.map(() => "data"),
       { links: { 2: `https://instagram.com/${ex.pageHandle}`, 5: ex.postUrl } }
     );
   }
   const t = executionTemplateTotals();
-  s.row(["", "TOTAL", "", t.followers, "", ""], ["tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader"]);
+  s.row(["", "TOTAL", "", compactFollowers(t.followers), "", ""], ["tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader", "tableHeader"]);
   return { title: EXECUTION_TEMPLATE_TITLE, rows: s.rows, rowSpecs: s.rowSpecs, numCols: EXECUTION_TEMPLATE_HEADER.length };
 }
 
@@ -269,76 +303,210 @@ export function previewExecutionSheetTemplate() {
     title: EXECUTION_TEMPLATE_TITLE,
     headers: EXECUTION_TEMPLATE_HEADER,
     linkColumns: [2, 5],
-    rows: EXECUTION_TEMPLATE_EXAMPLES.map((ex) => [ex.sNo, ex.pageName, `https://instagram.com/${ex.pageHandle}`, ex.followers, ex.date, ex.postUrl]),
-    totalsRow: ["", "TOTAL", "", t.followers, "", ""],
+    rows: EXECUTION_TEMPLATE_EXAMPLES.map((ex) => [ex.sNo, ex.pageName, `https://instagram.com/${ex.pageHandle}`, compactFollowers(ex.followers), ex.date, ex.postUrl]),
+    totalsRow: ["", "TOTAL", "", compactFollowers(t.followers), "", ""],
   };
 }
 
-function buildOverviewSection(plan, internal) {
-  const s = makeSection();
-  s.band(["TAGGIFY"], "logo");
+// ── Plan sheet formats (8 Oct — "2 types of format to generate plan, user
+// will select 1"), modelled on the two sample plans shared that day:
+//  - "breakdown" (sample 1, "5 Paisa<>Taggify"): a table with one row per
+//    page category, then totals, GST and the standard notes;
+//  - "summary" (sample 2): one campaign-overview block with CPV.
+// Both put the pages in one tab per category, and print the sample's
+// standard notes followed by the plan's own brief.
+
+const BREAKDOWN_NOTES = [
+  "All media placements are subject to the availability and guidelines of each platform or partner. Taggify cannot guarantee placement on any specific channel if it becomes unavailable or if external factors intervene.",
+  "Taggify manages post visibility for 45 days from publication and is not responsible for status beyond that period.",
+  "The pricing outlined in our plan is valid for 20 days from the date it’s shared. After this period, Taggify reserves the right to modify costs based on market changes or updated project requirements.",
+  "In order to maximize reach and consistency, Taggify will adapt and repurpose content for internal and external channels as needed. The number of versions or formats may vary depending on project scope.",
+  "Our quoted fees include the cost of generating original content.",
+  "The exact count of unique deliverables may change as we refine the strategy in response to audience insights, platform performance, or client feedback.",
+  "Taggify may engage trusted subcontractors for specialized tasks. All partners are contractually bound to uphold our standards and maintain client confidentiality.",
+];
+const SUMMARY_NOTES = [
+  "All prices mentioned above are exclusive of GST.",
+  "Prices are applicable till next 20 days.",
+  "All the mentioned accounts are subject to availability. In case any of them are unavailable at the time of execution, suitable and equivalent replacements will be provided.",
+];
+
+const rupees = (n) => `₹${Math.round(Number(n) || 0).toLocaleString("en-IN")}`;
+/** 19,300,000 → "19.3" (the samples' "in Millions" columns). */
+const inMillions = (n) => (Math.round(((Number(n) || 0) / 1_000_000) * 10) / 10).toString();
+/** 86,700,000 → "86 Million +", 850,000 → "850K +" (sample 2's overview). */
+function roughly(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000) return `${Math.floor(v / 1_000_000)} Million +`;
+  if (v >= 1000) return `${Math.floor(v / 1000)}K +`;
+  return String(v);
+}
+
+/** "News" → "News Pages", "Meme page" → "Meme Pages", "Coverage Handles" stays; none → "Other Pages". */
+export function categoryLabel(category) {
+  const c = (category ?? "").trim();
+  if (!c) return "Other Pages";
+  // " — " separates a tab's category from the plan's title, so it never appears inside a label.
+  const titled = c.replace(/\s+—\s+/g, " - ").replace(/\s+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+  if (/\bhandles?$/i.test(titled)) return titled;
+  return /\bpages?$/i.test(titled) ? titled.replace(/\bpages?$/i, "Pages") : `${titled} Pages`;
+}
+
+/** Plan lines grouped by page category, biggest audience first; pages inside by followers. */
+function groupByCategory(items) {
+  // Keyed case-insensitively: "news" and "NEWS" are one category (and one tab — Sheets tab names ignore case).
+  const byKey = new Map();
+  for (const item of items) {
+    const label = categoryLabel(item.asset?.category);
+    const key = label.toLowerCase();
+    if (!byKey.has(key)) byKey.set(key, { label, items: [] });
+    byKey.get(key).items.push(item);
+  }
+  const followersOf = (list) => distinctPages(list).reduce((sum, i) => sum + (i.asset?.followers ?? 0), 0);
+  return [...byKey.values()]
+    .map(({ label, items: list }) => ({ label, items: [...list].sort((a, b) => (b.asset?.followers ?? 0) - (a.asset?.followers ?? 0)) }))
+    .sort((a, b) => followersOf(b.items) - followersOf(a.items));
+}
+
+/** One line per page: a page with a reel and a story counts its audience once. */
+function distinctPages(items) {
+  const seen = new Set();
+  return items.filter((i) => {
+    const key = i.asset?.handle ?? i;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+const posts = (items) => items.reduce((sum, i) => sum + (i.postsPerProfile ?? 1), 0);
+const lineCost = (i, internal) => (internal ? Number(i.cost) : Number(i.displayCost)) * (i.postsPerProfile ?? 1);
+
+/**
+ * Splits `total` across `weights` in proportion, in whole rupees/views that
+ * add up exactly to the rounded total (the last share takes the rounding).
+ * Used for the client's quoted total and expected views per category, so a
+ * category row never claims more than the overall figure the client sees.
+ */
+export function splitByWeight(total, weights) {
+  const whole = Math.round(Number(total) || 0);
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (weights.length === 0) return [];
+  const shares = weights.map((w) => (sum > 0 ? Math.floor((whole * w) / sum) : Math.floor(whole / weights.length)));
+  shares[shares.length - 1] += whole - shares.reduce((a, b) => a + b, 0);
+  return shares;
+}
+
+function heading(s, plan, internal) {
   statusBand(s, plan);
-  s.plain([internal ? `${plan.name} — INTERNAL, NOT FOR CLIENT` : plan.name]);
-  s.plain([`Prepared for ${plan.clientName} · ${dateStr(plan.createdAt)}`]);
+  s.band([internal ? `${plan.clientName} <> Taggify — INTERNAL, NOT FOR CLIENT` : `${plan.clientName} <> Taggify`], "navyBand");
+  s.plain([`${plan.name} · ${variantOf(plan)} · ${dateStr(plan.createdAt)}`]);
   if (plan.clientContact) s.plain([plan.clientContact]);
+  // Client details (10 Sep) stay on the sheet whichever format it uses.
   const clientDetails = [plan.clientCompany, plan.clientGstNumber && `GSTIN: ${plan.clientGstNumber}`, plan.clientAddress].filter(Boolean);
   if (clientDetails.length > 0) s.plain([clientDetails.join(" · ")]);
   s.spacer();
-
-  const followers = internal ? plan.internal.computedFollowers : plan.overview.totalFollowers;
-  const posts = internal ? plan.internal.computedPosts : plan.overview.totalPosts;
-  const impressions = internal ? plan.internal.computedImpressions : plan.overview.expectedImpressions;
-  const subtotal = internal ? plan.internal.computedSubtotal : plan.overview.subtotal;
-  const gstAmount = internal ? plan.internal.computedGstAmount : plan.overview.gstAmount;
-  const total = internal ? plan.internal.computedTotal : plan.overview.total;
-
-  s.band([internal ? "INTERNAL OVERVIEW" : "CAMPAIGN OVERVIEW"], "navyBand");
-  s.row(["Total Followers Targeted Overall", followers], ["label", "value"]);
-  s.row(["Total Posts", posts], ["label", "value"]);
-  s.row(["Expected Impressions", `${impressions} (est.)`], ["label", "value"]);
-  s.row([internal ? "Internal Cost" : "Cost", money(subtotal)], ["label", "value"]);
-  if (plan.isGstPlan) s.row([`GST (${plan.gstPercent}%)`, money(gstAmount)], ["label", "value"]);
-  s.row([plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(total)], ["label", "value"]);
-  if (internal && plan.budgetVariance != null) {
-    s.row([plan.budgetVariance < 0 ? "Over Budget" : "Under Budget", money(Math.abs(plan.budgetVariance))], ["label", "value"]);
-  }
-  s.spacer();
-
-  // Only the brief typed on Step 1 goes here — no boilerplate (user request,
-  // 14 Sep — "note in google sheet will be only the note filled by us").
-  if (plan.notes) {
-    s.band(["NOTES"], "blueBand");
-    s.band([plan.notes], "note");
-  }
-
-  return s;
 }
 
-function buildPagesSection(plan, internal) {
+/** Internal sheet only: how the pages' cost sits against the plan's budget. */
+function budgetRow(plan) {
+  return plan.budgetVariance != null ? [plan.budgetVariance < 0 ? "Over Budget" : "Under Budget", rupees(Math.abs(plan.budgetVariance))] : null;
+}
+
+function notes(s, plan, standard) {
+  s.spacer();
+  s.band(["NOTES"], "blueBand");
+  for (const n of standard) s.band([n], "note");
+  // The plan's own brief follows the standard notes (8 Oct).
+  if (plan.notes) s.band([plan.notes], "note");
+}
+
+/** Sample 1: a row per page category, totals, GST, notes. */
+function buildBreakdownOverview(plan, internal, groups) {
   const s = makeSection();
-  const header = ["S No", "Page Name", "Page Link", "Followers", "Format", "Post Per Profile", ...(internal ? ["Cost/Post"] : [])];
+  const numCols = 7;
+  heading(s, plan, internal);
+  const header = ["Particulars", "Utilization", "Followers Count (in Millions)", "Followers Range", "No. of Items", internal ? "Internal Cost" : "Total Final Cost", "Expected Views/Reach (in Millions)"];
+  s.row(header, header.map(() => "tableHeader"));
+
+  const subtotal = internal ? groups.reduce((sum, g) => sum + g.items.reduce((a, i) => a + lineCost(i, true), 0), 0) : plan.overview.subtotal;
+  const views = internal ? plan.internal.computedImpressions : plan.overview.expectedImpressions;
+  const costs = internal ? groups.map((g) => g.items.reduce((a, i) => a + lineCost(i, true), 0)) : splitByWeight(subtotal, groups.map((g) => g.items.reduce((a, i) => a + lineCost(i, false), 0)));
+  const reach = splitByWeight(views, groups.map((g) => g.items.reduce((a, i) => a + (i.expectedViews ?? 0), 0)));
+
+  let followersTotal = 0;
+  groups.forEach((g, n) => {
+    const pages = distinctPages(g.items);
+    const counts = pages.map((i) => i.asset?.followers ?? 0);
+    const followers = counts.reduce((a, b) => a + b, 0);
+    followersTotal += followers;
+    const formats = [...new Set(g.items.map((i) => (i.format === "story" ? "Story" : "Reel")))].join("/");
+    const range = counts.length ? `${compactFollowers(Math.min(...counts))}-${compactFollowers(Math.max(...counts))}` : "—";
+    s.row([g.label, `Instagram ${formats}`, inMillions(followers), range, posts(g.items), rupees(costs[n]), inMillions(reach[n])], ["label", "data", "data", "data", "data", "data", "data"]);
+  });
+  if (groups.length === 0) s.band(["No pages added yet."], "note");
+
+  const allItems = groups.flatMap((g) => g.items);
+  s.row(["Total", "", inMillions(followersTotal), "", posts(allItems), rupees(subtotal), inMillions(views)], header.map(() => "label"));
+  if (internal) {
+    s.row(["", "", "", "", "Quoted to client", rupees(plan.overview.subtotal), ""], [null, null, null, null, "label", "value", null]);
+    s.row(["", "", "", "", "Margin", rupees(plan.overview.subtotal - subtotal), ""], [null, null, null, null, "label", "value", null]);
+    const budget = budgetRow(plan);
+    if (budget) s.row(["", "", "", "", ...budget, ""], [null, null, null, null, "label", "value", null]);
+  } else if (plan.isGstPlan) {
+    s.row(["", "", "", "", `GST (${plan.gstPercent}%)`, rupees(plan.overview.gstAmount), ""], [null, null, null, null, "label", "value", null]);
+    s.row(["", "", "", "", "Total", rupees(plan.overview.total), ""], [null, null, null, null, "label", "value", null]);
+  }
+  notes(s, plan, BREAKDOWN_NOTES);
+  return { rows: s.rows, rowSpecs: s.rowSpecs, numCols };
+}
+
+/** Sample 2: one campaign-overview block with cost per view. */
+function buildSummaryOverview(plan, internal) {
+  const s = makeSection();
+  const numCols = 2;
+  heading(s, plan, internal);
+  const followers = internal ? plan.internal.computedFollowers : plan.overview.totalFollowers;
+  const deliverables = internal ? plan.internal.computedPosts : plan.overview.totalPosts;
+  const views = internal ? plan.internal.computedImpressions : plan.overview.expectedImpressions;
+  const cost = internal ? (plan.items ?? []).reduce((a, i) => a + lineCost(i, true), 0) : plan.overview.subtotal;
+
+  s.band([internal ? "INTERNAL OVERVIEW" : "CAMPAIGN OVERVIEW"], "navyBand");
+  s.row(["Total Followers Targeted Overall", roughly(followers)], ["label", "value"]);
+  s.row(["Total Deliverables", deliverables], ["label", "value"]);
+  s.row(["Expected Impressions/Views", roughly(views)], ["label", "value"]);
+  s.row([internal ? "Internal Cost" : "Cost", rupees(cost)], ["label", "value"]);
+  s.row(["CPV", views > 0 ? (cost / views).toFixed(2) : "—"], ["label", "value"]);
+  if (internal) {
+    s.row(["Quoted to client", rupees(plan.overview.subtotal)], ["label", "value"]);
+    s.row(["Margin", rupees(plan.overview.subtotal - cost)], ["label", "value"]);
+    const budget = budgetRow(plan);
+    if (budget) s.row(budget, ["label", "value"]);
+  }
+  notes(s, plan, SUMMARY_NOTES);
+  return { rows: s.rows, rowSpecs: s.rowSpecs, numCols };
+}
+
+const PAGE_HEADER = ["S No", "Page Name", "Page Link", "Followers", "Format", "Post Per Profile"];
+
+/** One category's pages (both samples' page tabs), with a followers total. */
+function buildPagesSection(plan, internal, items) {
+  const s = makeSection();
+  const header = [...PAGE_HEADER, ...(internal ? ["Cost/Post"] : [])];
   statusBand(s, plan);
   s.row(header, header.map(() => "tableHeader"));
 
-  if (plan.items.length === 0) {
-    s.band(["No pages added yet."], "note");
-    return s;
-  }
-
-  // One flat list, not a block per category (user request, 14 Sep — "it
-  // won't for each category, all pages will display, same in google sheet").
-  plan.items.forEach((item, i) => {
+  items.forEach((item, i) => {
     const handle = item.asset?.handle ?? "—";
-    // Bare handle and the profile URL as its own visible text (user request,
-    // 22 Sep — "page name showing @ in front, please remove it ... show
-    // original link not hyper links"), with the cell itself linked so a
-    // click opens the page (later that day — "should have hyperlink of that
-    // link as well"). Not a =HYPERLINK() formula: the sheet is written RAW.
+    // Bare handle and the profile URL as its own visible text (22 Sep), with
+    // the cell itself linked — not a =HYPERLINK() formula: the sheet is written RAW.
     const pageUrl = `https://instagram.com/${handle}`;
-    const row = [i + 1, handle, pageUrl, item.asset?.followers ?? 0, item.format, item.postsPerProfile];
+    const row = [i + 1, handle, pageUrl, compactFollowers(item.asset?.followers ?? 0), item.format, item.postsPerProfile];
     if (internal) row.push(money(item.cost));
     s.row(row, header.map(() => "data"), item.asset?.handle ? { links: { 2: pageUrl } } : {});
   });
+  const followers = distinctPages(items).reduce((sum, i) => sum + (i.asset?.followers ?? 0), 0);
+  s.row(["", "Total", "", compactFollowers(followers), "", posts(items), ...(internal ? [""] : [])], header.map(() => "label"));
   return s;
 }
 

@@ -18,7 +18,7 @@ vi.mock("../../lib/cloudinaryClient.js", () => ({ uploadProfilePic: (...a) => up
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-const { storeProfilePic, fetchProfilePic } = await import("./service.js");
+const { storeProfilePic, fetchProfilePic, getProfilePicSource } = await import("./service.js");
 
 const IG = "https://scontent.cdninstagram.com/pic.jpg";
 const STORED = "https://res.cloudinary.com/demo/image/upload/profile-pics/a1.jpg";
@@ -99,5 +99,26 @@ describe("fetchProfilePic — serves the stored copy first", () => {
     mockPrisma.asset.findUnique.mockResolvedValue({ profilePicUrl: null, profilePicStoredUrl: STORED });
     mockFetch.mockResolvedValue(image("only-stored"));
     expect((await fetchProfilePic("serve-3")).buffer.toString()).toBe("only-stored");
+  });
+});
+
+describe("getProfilePicSource — what GET /assets/:id/profile-pic sends (design-fix #5, 7 Oct)", () => {
+  it("a stored copy is a redirect to it, with no download", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ profilePicUrl: IG, profilePicStoredUrl: STORED });
+    expect(await getProfilePicSource("src-1")).toEqual({ redirect: STORED });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("no stored copy yet: proxies Instagram's picture", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ profilePicUrl: IG, profilePicStoredUrl: null });
+    mockFetch.mockResolvedValue(image("ig-only"));
+    const result = await getProfilePicSource("src-2");
+    expect(result.buffer.toString()).toBe("ig-only");
+    expect(mockFetch).toHaveBeenCalledWith(IG, expect.anything());
+  });
+
+  it("no picture at all is a 404", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ profilePicUrl: null, profilePicStoredUrl: null });
+    await expect(getProfilePicSource("src-3")).rejects.toMatchObject({ statusCode: 404 });
   });
 });

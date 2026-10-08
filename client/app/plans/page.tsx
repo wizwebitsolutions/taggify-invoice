@@ -10,6 +10,7 @@ import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
+import { Note } from "@/components/ui/note";
 import { Sheet } from "@/components/ui/sheet";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -25,7 +26,8 @@ import { CompletePlanSteps } from "@/components/plans/complete-plan-steps";
 import { parsePlanSheet } from "@/lib/parseAssignmentSheet";
 import { planMissing } from "@/lib/plan-missing";
 import { useAuth } from "@/lib/auth-context";
-import { plans as plansApi, ApiError, hasAccess, type Plan, canUse } from "@/lib/api-client";
+import { plans as plansApi, ApiError, hasAccess, type Plan, type SheetFormat, canUse } from "@/lib/api-client";
+import { SHEET_FORMAT_INFO, sheetFormatOf } from "@/components/plans/sheet-format";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -394,9 +396,9 @@ function PlansSection({
   // once the sheet finishes generating.
   const sheetMutation = useMutation({
     mutationFn: async ({ plan, variant, tab }: { plan: Plan; variant: "client" | "internal"; tab: Window | null }) => {
-      const { spreadsheetUrl } = await plansApi.generateSheet(token, plan.id, variant);
-      tab?.location.assign(spreadsheetUrl);
-      return spreadsheetUrl;
+      const result = await plansApi.generateSheet(token, plan.id, variant);
+      tab?.location.assign(result.spreadsheetUrl);
+      return result;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
   });
@@ -568,6 +570,7 @@ function PlansSection({
               sheetPending={sheetMutation.isPending}
               // Only on the card that was clicked — the mutation is shared across cards.
               sheetError={sheetMutation.isError && sheetMutation.variables?.plan.id === plan.id ? sheetMutation.error : null}
+              sheetShare={sheetMutation.isSuccess && sheetMutation.variables?.plan.id === plan.id ? sheetMutation.data : null}
               onExecutionSheetSaved={(updated) => {
                 setExecSheetNotice((n) => ({ ...n, [plan.id]: updated.executionSheetSyncError ? { error: updated.executionSheetSyncError } : {} }));
                 queryClient.invalidateQueries({ queryKey: ["plans"] });
@@ -652,6 +655,7 @@ function PlanCard({
   onOpenSheet,
   sheetPending,
   sheetError,
+  sheetShare,
   onExecutionSheetSaved,
   onSyncExecutionSheet,
   syncExecutionPending,
@@ -675,6 +679,8 @@ function PlanCard({
   onOpenSheet: (variant: "client" | "internal") => void;
   sheetPending: boolean;
   sheetError: unknown;
+  /** Who got edit access to the sheet just generated, or why they couldn't (8 Oct). */
+  sheetShare: { sharedWith?: string; shareError?: string } | null;
   onExecutionSheetSaved: (updated: Plan) => void;
   onSyncExecutionSheet: () => void;
   syncExecutionPending: boolean;
@@ -684,6 +690,12 @@ function PlanCard({
   refreshError: unknown;
   onCompleteDetails: () => void;
 }) {
+  const queryClient = useQueryClient();
+  // The plan's Google Sheet layout (8 Oct); saving it rewrites any sheet already generated.
+  const formatMutation = useMutation({
+    mutationFn: (f: SheetFormat) => plansApi.update(token, plan.id, { sheetFormat: f }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
+  });
   const completeness = planCompleteness(plan);
   // Two-step attach (user request, 11 Sep): the card shows a plain "Attach"
   // prompt; clicking it (or "Change" once one's attached) opens the popup
@@ -877,16 +889,41 @@ function PlanCard({
             built it decides directly) — only ever shown to someone the
             server would actually let act: Admin on anything, a Plan Maker
             only on their own plan. */}
-        {canDecide && plan.status === "DRAFT" && (
+        {/* A rejected plan can still be approved (8 Oct); only a draft can be rejected. */}
+        {canDecide && (plan.status === "DRAFT" || plan.status === "REJECTED") && (
           <div className="flex gap-2">
             <Button size="sm" className="flex-1" onClick={onApprove} disabled={workflowBusy}>
               Approve
             </Button>
-            <Button size="sm" variant="danger" className="flex-1" onClick={onReject} disabled={workflowBusy}>
-              Reject
-            </Button>
+            {plan.status === "DRAFT" && (
+              <Button size="sm" variant="danger" className="flex-1" onClick={onReject} disabled={workflowBusy}>
+                Reject
+              </Button>
+            )}
           </div>
         )}
+
+        <label className="flex items-center justify-between gap-2 text-[0.75rem] text-text-muted">
+          <span>Sheet format</span>
+          {ownsPlan ? (
+            <select
+              value={sheetFormatOf(plan)}
+              onChange={(e) => formatMutation.mutate(e.target.value as SheetFormat)}
+              disabled={formatMutation.isPending}
+              aria-label={`Sheet format for ${plan.name}`}
+              className="h-7 rounded-[6px] border border-border-strong bg-surface px-2 text-[0.75rem] text-text focus:border-ink focus:outline-none"
+            >
+              {(Object.keys(SHEET_FORMAT_INFO) as SheetFormat[]).map((f) => (
+                <option key={f} value={f}>
+                  {SHEET_FORMAT_INFO[f].label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="font-medium text-text">{SHEET_FORMAT_INFO[sheetFormatOf(plan)].label}</span>
+          )}
+        </label>
+        {formatMutation.isError && <ErrorNotice message={formatMutation.error instanceof ApiError ? formatMutation.error.message : "Couldn't change the sheet format."} />}
 
         <div className="flex gap-2">
           <Button size="sm" variant="secondary" className="flex-1" onClick={() => onOpenSheet("client")} disabled={sheetPending}>
@@ -897,6 +934,7 @@ function PlanCard({
           </Button>
         </div>
         <GoogleAwareError error={sheetError} fallback="Couldn't generate the sheet." />
+        <SheetShareNote share={sheetShare} />
         {/* Refresh from the uploaded sheet (22 Sep) — only while still a
             draft (the server refuses afterwards) and only for whoever can
             act on the plan. */}
@@ -997,4 +1035,12 @@ function PlanCard({
       </div>
     </div>
   );
+}
+
+/** After a sheet is generated (8 Oct): the generator got edit access, or why not. */
+function SheetShareNote({ share }: { share: { sharedWith?: string; shareError?: string } | null }) {
+  if (!share) return null;
+  if (share.shareError) return <Note tone="warn">{share.shareError}</Note>;
+  if (share.sharedWith) return <Note tone="ok">{share.sharedWith} can edit this sheet.</Note>;
+  return null;
 }

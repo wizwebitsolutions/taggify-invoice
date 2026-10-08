@@ -55,4 +55,8 @@ export const listPendingLinksQuerySchema = z.object({
 
 // Creator's own view — same filters minus the vendor (it's always them).
 export const listMyPendingQuerySchema = listPendingLinksQuerySchema.omit({ ownerId: true });
+
+// The Pending/Paid tiles (2 Oct) take the lists' filters, so they follow the month picked.
+export const paymentSummaryQuerySchema = listPendingLinksQuerySchema.omit({ pageSize: true });
+export const myPaymentSummaryQuerySchema = paymentSummaryQuerySchema.omit({ ownerId: true });
 export const listMyPayoutsQuerySchema = listPayoutsQuerySchema.omit({ creatorId: true, status: true });

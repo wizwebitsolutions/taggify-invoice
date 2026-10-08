@@ -10,7 +10,7 @@ import {
   getExistingSheetTabs,
   batchUpdateSpreadsheet,
 } from "../../lib/googleSheetsClient.js";
-import { makeFilePublicViewable } from "../../lib/googleDriveClient.js";
+import { makeFilePublicViewable, shareFileWithEditor } from "../../lib/googleDriveClient.js";
 import { getUserAccessToken, isGoogleOAuthConfigured } from "../../lib/googleOAuthClient.js";
 import { buildPlanSheetTabs, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, reconcilePlanTabRequests, tabStatusRequests } from "../../lib/planSheet.js";
 import { getNumbering, advancePast } from "../../lib/clientInvoiceNumbering.js";
@@ -34,7 +34,11 @@ const PLAN_INCLUDE = { items: { include: { asset: true } }, createdBy: { select:
 // gstPercent is a plain number (e.g. 18), not a fraction.
 const gstOn = (subtotal, gstPercent) => (gstPercent ? Math.round(subtotal * (Number(gstPercent) / 100) * 100) / 100 : 0);
 
-async function resolveItemCosts(items) {
+// An inactive page (8 Oct) can't be added to a plan. `alreadyOn` = the plan's
+// current pages, which stay allowed so editing an existing plan works as before.
+const inactiveError = (asset) => new ApiError(400, "PAGE_INACTIVE", `@${asset.handle} is inactive and can't be added to a plan`);
+
+async function resolveItemCosts(items, alreadyOn = new Set()) {
   if (!items || items.length === 0) return [];
   const assetIds = [...new Set(items.map((i) => i.assetId))];
   const assets = await prisma.asset.findMany({ where: { id: { in: assetIds } }, include: { rateCards: true } });
@@ -43,6 +47,7 @@ async function resolveItemCosts(items) {
   return items.map((item) => {
     const asset = assetById.get(item.assetId);
     if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", `Page ${item.assetId} not found`);
+    if (asset.isActive === false && !alreadyOn.has(asset.id)) throw inactiveError(asset);
     let cost = item.cost;
     if (cost == null) {
       const rateCard = asset.rateCards.find((rc) => rc.format === item.format);
@@ -188,7 +193,8 @@ export async function updatePlan(planId, requester, { items, ...fields }) {
   const data = { ...fields };
   const budget = fields.budget !== undefined ? fields.budget : existing.budget;
   if (items) {
-    const resolvedItems = await resolveItemCosts(items);
+    const onPlan = await prisma.planItem.findMany({ where: { planId }, select: { assetId: true } });
+    const resolvedItems = await resolveItemCosts(items, new Set(onPlan.map((i) => i.assetId)));
     assertWithinBudget(budget, resolvedItems);
     await prisma.planItem.deleteMany({ where: { planId } });
     data.items = { create: resolvedItems };
@@ -431,8 +437,11 @@ async function decidePlan(planId, requester, decision) {
   const plan = await prisma.plan.findUnique({ where: { id: planId }, include: PLAN_INCLUDE });
   if (!plan) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
   await assertCanAccessPlan(requester, plan);
-  if (plan.status !== "DRAFT") {
-    throw new ApiError(400, "INVALID_PLAN_STATUS", `Only a draft plan can be ${decision === "APPROVED" ? "approved" : "rejected"} (this one is ${plan.status})`);
+  // A rejected plan can still be approved later (8 Oct — "if a plan is
+  // rejected it can be approved again"); only a draft can be rejected.
+  const decidable = decision === "APPROVED" ? plan.status === "DRAFT" || plan.status === "REJECTED" : plan.status === "DRAFT";
+  if (!decidable) {
+    throw new ApiError(400, "INVALID_PLAN_STATUS", decision === "APPROVED" ? `Only a draft or rejected plan can be approved (this one is ${plan.status})` : `Only a draft plan can be rejected (this one is ${plan.status})`);
   }
 
   // Approving creates the real Campaign the pages actually run under (user
@@ -572,6 +581,9 @@ async function annotatePlan(plan) {
 
   return {
     ...plan,
+    // Each line's expected views (page avg views × posts) — the sheet's
+    // per-category reach in the "breakdown" format (8 Oct).
+    items: plan.items.map((item) => ({ ...item, expectedViews: (engagementByAsset.get(item.assetId)?.avgViews ?? 0) * item.postsPerProfile })),
     gstPercent,
     isGstPlan: Boolean(gstPercent),
     invoiceAttachment: invoiceAttachmentFor(plan),
@@ -630,9 +642,12 @@ export function forClientPdf(plan) {
     isGstPlan: plan.isGstPlan,
     gstPercent: plan.gstPercent,
     overview: plan.overview,
+    // Which sheet layout the plan uses (8 Oct). Not a cost, safe to pass.
+    sheetFormat: plan.sheetFormat,
     items: plan.items.map((item) => ({
       format: item.format,
       postsPerProfile: item.postsPerProfile,
+      expectedViews: item.expectedViews ?? 0,
       displayCost: Number(item.clientCost ?? item.cost),
       asset: item.asset ? { handle: item.asset.handle, category: item.asset.category, followers: item.asset.followers } : null,
     })),
@@ -861,10 +876,15 @@ export function forClientInvoice(plan) {
 // backfilled here if it doesn't already have one.
 const VARIANT_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"];
 
-export async function createPlanVariant(planId, requester, { variantLabel } = {}) {
+export async function createPlanVariant(planId, requester, { variantLabel, budget, items } = {}) {
   const source = await prisma.plan.findUnique({ where: { id: planId }, include: PLAN_INCLUDE });
   if (!source) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
   await assertCanAccessPlan(requester, source);
+  // Budget and pages may come with the request (7 Oct: the variant is filled in
+  // the plan form, then saved in one go) — same cost resolution and budget
+  // check as createPlan, done before the transaction so a refusal writes nothing.
+  const resolvedItems = items?.length ? await resolveItemCosts(items) : [];
+  assertWithinBudget(budget, resolvedItems);
 
   const pitchGroupId = source.pitchGroupId ?? source.id;
 
@@ -895,9 +915,12 @@ export async function createPlanVariant(planId, requester, { variantLabel } = {}
           clientAddress: source.clientAddress,
           notes: source.notes,
           gstPercent: source.gstPercent,
+          sheetFormat: source.sheetFormat,
+          ...(budget !== undefined ? { budget } : {}),
           pitchGroupId,
           variantLabel: label,
           createdById: requester.id,
+          ...(resolvedItems.length ? { items: { create: resolvedItems } } : {}),
         },
         include: PLAN_INCLUDE,
       });
@@ -942,6 +965,7 @@ export async function importPlanSheetPages(planId, requester, rows) {
   const handles = [...new Set(rows.map((r) => r.handle.trim().replace(/^@+/, "").toLowerCase()))];
   const existingAssets = await prisma.asset.findMany({ where: { handle: { in: handles, mode: "insensitive" } }, include: { rateCards: true } });
   const assetByHandle = new Map(existingAssets.map((a) => [a.handle.toLowerCase(), a]));
+  const onPlan = new Set((await prisma.planItem.findMany({ where: { planId }, select: { assetId: true } })).map((i) => i.assetId));
 
   let matchedCount = 0;
   let createdCount = 0;
@@ -952,6 +976,10 @@ export async function importPlanSheetPages(planId, requester, rows) {
     const cleanHandle = row.handle.trim().replace(/^@+/, "");
     let asset = assetByHandle.get(cleanHandle.toLowerCase());
 
+    if (asset && asset.isActive === false && !onPlan.has(asset.id)) {
+      failures.push({ handle: cleanHandle, reason: "This page is inactive and can't be added to a plan." });
+      continue;
+    }
     if (asset) {
       matchedCount += 1;
     } else {
@@ -1010,7 +1038,7 @@ const cleanHandle = (h) => String(h ?? "").trim().replace(/^@+/, "");
  * handle-matching / cost-resolution rules as importPlanSheetPages above,
  * minus the create-a-page branch.
  */
-async function resolveSheetRows(rows) {
+async function resolveSheetRows(rows, alreadyOn = new Set()) {
   const handles = [...new Set(rows.map((r) => cleanHandle(r.handle).toLowerCase()))].filter(Boolean);
   const assets = handles.length ? await prisma.asset.findMany({ where: { handle: { in: handles, mode: "insensitive" } }, include: { rateCards: true } }) : [];
   const assetByHandle = new Map(assets.map((a) => [a.handle.toLowerCase(), a]));
@@ -1023,6 +1051,10 @@ async function resolveSheetRows(rows) {
     const asset = assetByHandle.get(handle.toLowerCase());
     if (!asset) {
       pending.push({ ...base, reason: "Not in Inventory yet." });
+      continue;
+    }
+    if (asset.isActive === false && !alreadyOn.has(asset.id)) {
+      pending.push({ ...base, reason: "This page is inactive and can't be added to a plan." });
       continue;
     }
     const format = row.format ?? asset.rateCards[0]?.format ?? "reel";
@@ -1053,7 +1085,8 @@ async function applySheetToPlan(existing, { fields, rows }) {
   // plan's pages stay as they are. A sheet WITH pages replaces them (the
   // sheet wins), including any added in the wizard since the upload.
   const hasPageTable = rows.length > 0;
-  const { items, pending } = hasPageTable ? await resolveSheetRows(rows) : { items: null, pending: [] };
+  const onPlan = hasPageTable ? new Set((await prisma.planItem.findMany({ where: { planId }, select: { assetId: true } })).map((i) => i.assetId)) : new Set();
+  const { items, pending } = hasPageTable ? await resolveSheetRows(rows, onPlan) : { items: null, pending: [] };
   const effectiveItems = items ?? (await prisma.planItem.findMany({ where: { planId } }));
   const subtotal = clientSubtotalOf(effectiveItems);
 
@@ -1131,6 +1164,7 @@ export async function addPendingPage(planId, requester, { handle, ownerId }) {
     asset = await prisma.asset.findFirst({ where: { platform: "instagram", handle: { equals: cleanHandle(row.handle), mode: "insensitive" } } });
     if (!asset) throw err;
   }
+  if (asset.isActive === false) throw inactiveError(asset);
 
   await prisma.planItem.create({ data: { planId, assetId: asset.id, format, cost: row.cost, clientCost: row.clientCost ?? null, postsPerProfile: row.postsPerProfile ?? 1 } });
   const updated = await prisma.plan.update({
@@ -1231,7 +1265,7 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
   const group = await sheetGroup(plan, requester);
   const urlKey = internal ? "internalSheetUrl" : "clientSheetUrl";
   const sheets = group.map((p) => ({ plan: p, ...buildPlanSheetTabs(internal ? p : forClientPdf(p), { internal }) }));
-  const titles = sheets.flatMap((t) => [t.overviewTitle, t.pagesTitle]);
+  const titles = sheets.flatMap((t) => [t.overviewTitle, ...t.pageTabs.map((tab) => tab.title)]);
 
   let spreadsheetId = spreadsheetIdFromUrl(plan[urlKey]) ?? group.map((p) => spreadsheetIdFromUrl(p[urlKey])).find(Boolean) ?? null;
   if (!spreadsheetId) {
@@ -1263,7 +1297,7 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
   // URL can never be re-read by Sheets as a formula or number.
   for (const t of sheets) {
     await writeSheetTab({ accessToken, spreadsheetId, title: t.overviewTitle, rows: t.overviewRows });
-    await writeSheetTab({ accessToken, spreadsheetId, title: t.pagesTitle, rows: t.pagesRows });
+    for (const tab of t.pageTabs) await writeSheetTab({ accessToken, spreadsheetId, title: tab.title, rows: tab.rows });
   }
 
   // Styling (user request, 10 Sep — "google sheet format should be like
@@ -1273,9 +1307,13 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
     spreadsheetId,
     requests: sheets.flatMap((t) => [
       ...(gids[t.overviewTitle] != null ? [...buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols), ...tabStatusRequests(gids[t.overviewTitle], t.plan)] : []),
-      ...(gids[t.pagesTitle] != null ? [...buildFormatRequests(gids[t.pagesTitle], t.pagesRowSpecs, t.pagesNumCols), ...tabStatusRequests(gids[t.pagesTitle], t.plan)] : []),
+      ...t.pageTabs.flatMap((tab) => (gids[tab.title] != null ? [...buildFormatRequests(gids[tab.title], tab.rowSpecs, tab.numCols), ...tabStatusRequests(gids[tab.title], t.plan)] : [])),
     ]),
   });
+
+  // Edit access for whoever generated it (8 Oct). Never fails the generation:
+  // the sheet is already written, so a sharing problem is reported back instead.
+  const shared = await shareWithGenerator(accessToken, spreadsheetId, requester);
 
   const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
   let spreadsheetUrl = base;
@@ -1285,7 +1323,20 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
     if (t.plan.id === plan.id) spreadsheetUrl = url;
     await prisma.plan.update({ where: { id: t.plan.id }, data: { [urlKey]: url } });
   }
-  return { spreadsheetUrl };
+  return { spreadsheetUrl, ...shared };
+}
+
+/** Shares a generated sheet with the requester's email as an editor: `{ sharedWith }` or `{ shareError }`. */
+async function shareWithGenerator(accessToken, spreadsheetId, requester) {
+  const user = await prisma.user.findUnique({ where: { id: requester.id }, select: { email: true } });
+  if (!user?.email) return { shareError: "Your account has no email, so the sheet couldn't be shared with you for editing." };
+  try {
+    await shareFileWithEditor({ accessToken, fileId: spreadsheetId, email: user.email });
+    return { sharedWith: user.email };
+  } catch (err) {
+    console.error(`generatePlanSheet: couldn't give ${user.email} edit access to ${spreadsheetId}`, err);
+    return { shareError: `The sheet was made, but ${user.email} couldn't be given edit access (it may not be a Google account).` };
+  }
 }
 
 const EXECUTION_TEMPLATE_SETTING_KEY = "executionTemplateSpreadsheetId";

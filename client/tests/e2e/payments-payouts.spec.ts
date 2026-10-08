@@ -65,10 +65,13 @@ function payInvoice(id: string, owner: typeof ROHAN, status: "RAISED" | "APPROVE
 const INV_OPEN = payInvoice("i1", ROHAN, "RAISED", "5000", "5000");
 const INV_PAID = payInvoice("i2", ROHAN, "PAID", "3000", "3000");
 
-const SUMMARY = { totalDues: 47000, dueThisMonth: 12000, paidThisMonth: 9000, overdue30: 3000, dueCount: 4 };
+const SUMMARY = { pending: { amount: 47000, links: 12, invoices: 1 }, paid: { amount: 9000, links: 3, payments: 1 } };
+/** What the tiles show once a month is picked — so a test can tell the filtered call from the unfiltered one. */
+const SUMMARY_MONTH = { pending: { amount: 5000, links: 2, invoices: 0 }, paid: { amount: 2500, links: 1, payments: 1 } };
 
 type Recorded = {
   pendingQueries: URLSearchParams[];
+  summaryQueries: URLSearchParams[];
   created: Record<string, unknown>[];
   receipts: { id: string; body: Record<string, unknown> }[];
   cancelled: string[];
@@ -76,20 +79,23 @@ type Recorded = {
 
 /** A small stateful fake of the payments API: paying links removes them from Pending and adds a PAID payout. */
 async function mockPayments(page: Page, opts: { drafts?: Record<string, unknown>[]; uploadStatus?: number } = {}) {
-  const rec: Recorded = { pendingQueries: [], created: [], receipts: [], cancelled: [] };
+  const rec: Recorded = { pendingQueries: [], summaryQueries: [], created: [], receipts: [], cancelled: [] };
   const paidIds = new Set<string>();
   const payouts: Record<string, unknown>[] = [];
   let drafts = [...(opts.drafts ?? [])];
   let lastCreated: Record<string, unknown> | null = null;
 
   await page.route(`${API_URL}/assets/owners`, (route) => route.fulfill({ json: [ROHAN, KABIR] }));
-  await page.route(`${API_URL}/payments/summary`, (route) => route.fulfill({ json: SUMMARY }));
   await page.route(`${API_URL}/fake-cloudinary`, (route) => route.fulfill({ status: opts.uploadStatus ?? 200, json: { ok: true } }));
   await page.route(`${API_URL}/payments/**`, async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace("/api/payments", "");
     const method = route.request().method();
 
+    if (method === "GET" && path === "/summary") {
+      rec.summaryQueries.push(url.searchParams);
+      return route.fulfill({ json: url.searchParams.has("from") ? SUMMARY_MONTH : SUMMARY });
+    }
     if (method === "GET" && path === "/pending") {
       rec.pendingQueries.push(url.searchParams);
       const items = [L1, L2, L3].filter((l) => !paidIds.has(l.id));
@@ -402,24 +408,53 @@ test.describe("Payments — admin payouts (list-first, 24 Sep)", () => {
     await expect(page.getByTestId("pending-row")).toHaveCount(0);
   });
 
-  test("summary tiles: Total dues / Due this month / Paid this month / 30+ days, and Paid this month jumps to Paid filtered to this month", async ({ page }) => {
+  test("tiles: one Month picker drives Dues + Paid; Total dues stays all time (5 Oct)", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
-    await mockPayments(page);
+    const rec = await mockPayments(page);
     await page.goto("/payments");
 
     const kpis = page.getByTestId("payments-kpis");
-    await expect(kpis).toContainText("Total dues");
-    await expect(kpis).toContainText("₹47,000");
-    await expect(kpis).toContainText("Due this month");
-    await expect(kpis).toContainText("₹12,000");
-    await expect(kpis).toContainText("₹9,000");
-    await expect(kpis).toContainText("30+ days");
-    await expect(kpis).toContainText("₹3,000");
+    const total = page.getByTestId("tile-total-dues");
+    const dues = page.getByTestId("tile-month-dues");
+    const paid = page.getByTestId("tile-paid");
+    const picker = kpis.getByRole("combobox", { name: "Month" });
+    await expect(picker).toHaveValue(currentMonthKey());
+    await expect(total).toContainText("Total dues");
+    await expect(total).toContainText("₹47,000"); // unfiltered = all time
+    await expect(total).toContainText("12 links not paid yet · 1 invoice");
+    await expect(dues).toContainText("Dues this month");
+    await expect(dues).toContainText("₹5,000");
+    await expect(paid).toContainText("Paid this month");
+    await expect(paid).toContainText("₹2,500");
+    await expect(paid).toContainText("net of TDS");
+    await expect(kpis).not.toContainText("30+ days");
 
-    await kpis.getByRole("button", { name: /Paid in/ }).click();
-    await expect(page.getByRole("tab", { name: /Paid/ })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("combobox", { name: "Paid in" })).toHaveValue(currentMonthKey());
+    // The month tiles asked for exactly this calendar month.
+    const [y, m] = currentMonthKey().split("-").map(Number);
+    const monthQuery = rec.summaryQueries.find((q) => q.has("from"))!;
+    expect(new Date(monthQuery.get("from")!).getTime()).toBe(new Date(y, m - 1, 1).getTime());
+    expect(new Date(monthQuery.get("to")!).getTime()).toBe(new Date(y, m, 1).getTime() - 1);
+
+    // Picking last month re-asks for that month; Total dues doesn't move.
+    rec.summaryQueries.length = 0;
+    const prev = new Date(y, m - 2, 1);
+    const prevKey = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+    const prevName = prev.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    await picker.selectOption(prevKey);
+    await expect(kpis).toContainText(`Month:${prevName}`);
+    await expect(dues).toContainText(`Dues in ${prevName}`);
+    await expect(paid).toContainText(`Paid in ${prevName}`);
+    await expect.poll(() => rec.summaryQueries.find((q) => q.has("from"))?.get("from")).toBe(prev.toISOString());
+    expect(rec.summaryQueries.some((q) => !q.has("from"))).toBe(false);
+    await expect(total).toContainText("₹47,000");
+
+    // The vendor filter narrows all three tiles.
+    rec.summaryQueries.length = 0;
+    await page.getByRole("combobox", { name: "Page owner" }).click();
+    await page.getByRole("option", { name: /Rohan/ }).click();
+    await expect.poll(() => rec.summaryQueries.length).toBeGreaterThanOrEqual(2);
+    expect(rec.summaryQueries.every((q) => q.get("ownerId") === ROHAN.id)).toBe(true);
   });
 
   test("creator-raised invoices sit in their own Invoices category — Pending lists only uninvoiced links", async ({ page }) => {
@@ -615,9 +650,13 @@ test.describe("Payments — creator's own view (24 Sep)", () => {
     await mockApi(page);
     let adminEndpointHit = false;
     const myQueries: URLSearchParams[] = [];
+    const summaryQueries: URLSearchParams[] = [];
     await page.route(`${API_URL}/payments/**`, (route) => {
       const url = new URL(route.request().url());
-      if (url.pathname === "/api/payments/me/summary") return route.fulfill({ json: SUMMARY });
+      if (url.pathname === "/api/payments/me/summary") {
+        summaryQueries.push(url.searchParams);
+        return route.fulfill({ json: url.searchParams.has("from") ? SUMMARY_MONTH : SUMMARY });
+      }
       if (url.pathname === "/api/payments/me/pending") {
         myQueries.push(url.searchParams);
         return route.fulfill({ json: { items: [L1, L2], total: 2, invoices: [] } });
@@ -650,8 +689,10 @@ test.describe("Payments — creator's own view (24 Sep)", () => {
     await expect(page.getByRole("tab", { name: "Internal · creator payouts" })).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "Page owner" })).toHaveCount(0);
 
-    await expect(page.getByTestId("creator-payments-kpis")).toContainText("Total dues");
-    await expect(page.getByTestId("creator-payments-kpis")).toContainText("₹47,000");
+    const kpis = page.getByTestId("creator-payments-kpis");
+    await expect(kpis.getByRole("button", { name: /Pending · All time/ })).toContainText("₹47,000");
+    await expect(kpis.getByRole("button", { name: /Paid · All time/ })).toContainText("₹9,000");
+    await expect(kpis).not.toContainText("30+ days");
     await expect(page.getByTestId("creator-pending-summary")).toContainText("₹20,000");
     await expect(page.getByTestId("creator-pending-row")).toHaveCount(2);
     await expect(page.getByTestId("creator-pending-list")).toContainText("@memes.daily");
@@ -659,6 +700,13 @@ test.describe("Payments — creator's own view (24 Sep)", () => {
     await page.getByRole("textbox", { name: "Search page" }).fill("memes");
     await expect.poll(() => myQueries.at(-1)?.get("q")).toBe("memes");
     expect(myQueries.every((q) => !q.has("ownerId"))).toBe(true);
+
+    // The tiles follow the month picked (2 Oct), and never send a vendor.
+    await page.getByRole("combobox", { name: "Posted in" }).selectOption(currentMonthKey());
+    await expect(kpis.getByRole("button", { name: /Pending ·/ })).toContainText("₹5,000");
+    await expect(kpis.getByRole("button", { name: /Paid ·/ })).toContainText("₹2,500");
+    expect(summaryQueries.at(-1)?.has("from")).toBe(true);
+    expect(summaryQueries.every((q) => !q.has("ownerId"))).toBe(true);
 
     await page.getByRole("tab", { name: /Paid/ }).click();
     const card = page.getByTestId("creator-payout-card");

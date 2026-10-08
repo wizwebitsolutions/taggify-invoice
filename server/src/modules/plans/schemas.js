@@ -26,7 +26,12 @@ const overrideFields = {
   overrideCost: z.number().min(0).nullable().optional(),
 };
 
+// The plan sheet's layout (8 Oct): "breakdown" = a row per page category
+// (sample plan 1), "summary" = one campaign-overview block (sample plan 2).
+const sheetFormatSchema = z.enum(["breakdown", "summary"]);
+
 export const createPlanSchema = z.object({
+  sheetFormat: sheetFormatSchema.optional(),
   name: z.string().min(1).max(150),
   clientName: z.string().min(1).max(150),
   clientContact: z.string().max(200).optional(),
@@ -48,6 +53,7 @@ export const createPlanSchema = z.object({
 // correct edit model for what's still a short-lived pitch document — not
 // worth a separate add/remove-one-item API surface).
 export const updatePlanSchema = z.object({
+  sheetFormat: sheetFormatSchema.optional(),
   name: z.string().min(1).max(150).optional(),
   clientName: z.string().min(1).max(150).optional(),
   clientContact: z.string().max(200).nullable().optional(),
@@ -101,8 +107,13 @@ export const invoiceNumberingSchema = z.object({
 // "Plan B or other plan" (user request, 10 Sep) — variantLabel defaults to
 // the next free letter server-side (see plans/service.js's
 // createPlanVariant) when not given.
+// A variant can be saved with its own budget and pages in the same call
+// (design-fix, 7 Oct — "New variant" now opens the plan form instead of
+// creating an empty draft); client details and brief still come from the source.
 export const createVariantSchema = z.object({
   variantLabel: z.string().min(1).max(40).optional(),
+  budget: z.number().positive().optional(),
+  items: z.array(planItemSchema).max(200).optional(),
 });
 
 // Same shape/convention as campaigns/schemas.js's importSheetUrlSchema —

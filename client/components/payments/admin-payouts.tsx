@@ -7,19 +7,16 @@ import { Sheet } from "@/components/ui/sheet";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Button } from "@/components/ui/button";
 import { TableSkeleton, ErrorNotice } from "@/components/ui/table-parts";
-import { ArrowRightIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, ClockIcon, DownloadIcon, InvoiceIcon, WalletIcon } from "@/components/icons";
-import { KpiCard } from "@/components/dashboard/kpi-card";
+import { ArrowRightIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, ClockIcon, DownloadIcon, WalletIcon } from "@/components/icons";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { PaySheet, shortDate } from "@/components/payments/pay-sheet";
+import { SummaryTiles } from "@/components/payments/summary-tiles";
 import { InvoiceReceiptUpload } from "@/components/payments/invoice-receipt-upload";
 import {
   PaymentsFilterBar,
   DEFAULT_FILTERS,
   toApiFilters,
   useDebounced,
-  currentMonthKey,
-  periodRange,
-  periodLabel,
   type FilterState,
 } from "@/components/payments/payments-filters";
 import {
@@ -44,8 +41,11 @@ import { cn } from "@/lib/utils";
  * that's been paid (or sits on an unfinished draft) never shows on Pending.
  *
  * 25 Sep: creator-raised invoices sit in the same list (paid whole, alongside
- * unbilled links), the tiles are Total dues / Due this month / Paid this
- * month / 30+ days.
+ * unbilled links).
+ *
+ * 2 Oct: the old "falls due 30 days after posting" tiles (Due this month /
+ * 30+ days) are gone — an unpaid link is pending. 3 Oct: the tiles are Total
+ * dues / Dues for a month / Paid for a month — see SummaryTiles.
  *
  * 28 Sep: paying an invoice off directly (no receipt, no TDS) was removed —
  * every invoice payment now goes through this same PaySheet, so a paid
@@ -83,59 +83,18 @@ export function AdminPayouts({ token }: { token: string }) {
     queryClient.invalidateQueries({ queryKey: ["links"] });
   };
 
-  // The summary tiles are filter-independent (server-side totals): everything owed, what falls due this month, what's been paid this month, and what's 30+ days overdue.
-  const monthKey = currentMonthKey();
-  const summaryQuery = useQuery({ queryKey: ["payments", "summary"], queryFn: () => paymentsApi.summary(token) });
-
   const pending = pendingQuery.data?.items ?? [];
   const pendingInvoices = pendingQuery.data?.invoices ?? [];
   const paid = paidQuery.data?.items ?? [];
-  const summary = summaryQuery.data;
-  const monthLabel = periodLabel({ kind: "month", month: monthKey });
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 md:mx-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible md:px-0 md:pb-0" data-testid="payments-kpis">
-        <KpiCard
-          className="w-[190px] shrink-0 md:w-auto"
-          icon={ClockIcon}
-          label="Total dues"
-          value={money(summary?.totalDues ?? 0)}
-          foot={`${summary?.dueCount ?? 0} unpaid link${summary?.dueCount === 1 ? "" : "s"} & invoice${summary?.dueCount === 1 ? "" : "s"}`}
-          tone={(summary?.totalDues ?? 0) > 0 ? "violet" : undefined}
-          active={tab === "pending"}
-          onClick={() => {
-            setTab("pending");
-          }}
-        />
-        <KpiCard
-          className="w-[190px] shrink-0 md:w-auto"
-          icon={InvoiceIcon}
-          label="Due this month"
-          value={money(summary?.dueThisMonth ?? 0)}
-          foot={`Falling due in ${monthLabel}`}
-        />
-        <KpiCard
-          className="w-[190px] shrink-0 md:w-auto"
-          icon={CheckCircleIcon}
-          label={`Paid in ${monthLabel}`}
-          value={money(summary?.paidThisMonth ?? 0)}
-          foot="Payouts + invoices marked paid"
-          active={tab === "paid" && filters.period.kind === "month" && filters.period.month === monthKey}
-          onClick={() => {
-            setTab("paid");
-            setFilters({ ...DEFAULT_FILTERS, period: { kind: "month", month: monthKey } });
-          }}
-        />
-        <KpiCard
-          className="w-[190px] shrink-0 md:w-auto"
-          icon={WalletIcon}
-          label="30+ days"
-          value={money(summary?.overdue30 ?? 0)}
-          foot="Overdue by more than 30 days"
-          tone={(summary?.overdue30 ?? 0) > 0 ? "rose" : undefined}
-        />
-      </div>
+      <SummaryTiles
+        testId="payments-kpis"
+        queryKey={["payments", "summary"]}
+        filters={{ ownerId: apiFilters.ownerId, q: apiFilters.q }}
+        load={(f) => paymentsApi.summary(token, f)}
+      />
 
       <div role="tablist" aria-label="Payout status" className="flex gap-6 border-b border-border">
         {(

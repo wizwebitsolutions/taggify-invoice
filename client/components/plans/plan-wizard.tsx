@@ -16,9 +16,11 @@ import { ProgressBar } from "@/components/ui/panel";
 import { ErrorNotice, EmptyState, TableSkeleton } from "@/components/ui/table-parts";
 import { CloseIcon, SearchIcon, ArrowRightIcon, DownloadIcon, PlusIcon } from "@/components/icons";
 import { GoogleAwareError } from "@/components/integrations/google-reconnect-notice";
-import { plans as plansApi, assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Plan, type Asset, type PlanItemInput } from "@/lib/api-client";
+import { plans as plansApi, assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Plan, type Asset, type PlanItemInput, type SheetFormat } from "@/lib/api-client";
 import { parsePlanPageSheet } from "@/lib/parseAssignmentSheet";
-import { money, count, compactNumber } from "@/lib/format";
+import { money, compactNumber, followersLabel } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { SHEET_FORMAT_INFO, SheetFormatPicker, categoryLabel, sheetFormatOf, splitByWeight } from "@/components/plans/sheet-format";
 import { formatIndian } from "@/components/ui/form-field";
 
 /**
@@ -52,8 +54,17 @@ const isFormat = (f: string) => (FORMATS as readonly string[]).includes(f);
 // stored cost dropped (the rate card for reel applies instead). A legacy
 // per-page clientCost is dropped the same way — the client-facing number is
 // the overall override now (14 Sep), so the next save wipes old markups.
-const toDraft = (plan: Plan): DraftItem[] =>
-  (plan.items ?? []).map((i) => (isFormat(i.format) ? { assetId: i.assetId, format: i.format, cost: i.cost, postsPerProfile: String(i.postsPerProfile) } : { assetId: i.assetId, format: FORMATS[0], cost: "", postsPerProfile: String(i.postsPerProfile) }));
+const toDraft = (plan: Plan): DraftItem[] => {
+  const out: DraftItem[] = [];
+  for (const i of plan.items ?? []) {
+    const line = isFormat(i.format) ? { assetId: i.assetId, format: i.format, cost: i.cost, postsPerProfile: String(i.postsPerProfile) } : { assetId: i.assetId, format: FORMATS[0], cost: "", postsPerProfile: String(i.postsPerProfile) };
+    // One line per page + format (a page can have a reel and a story); two legacy formats both read as reel.
+    const same = out.find((o) => o.assetId === line.assetId && o.format === line.format);
+    if (same) same.postsPerProfile = String(Number(same.postsPerProfile) + Number(line.postsPerProfile));
+    else out.push(line);
+  }
+  return out;
+};
 const toInput = (items: DraftItem[]): PlanItemInput[] =>
   items.map((i) => ({ assetId: i.assetId, format: i.format, cost: i.cost ? Number(i.cost) : undefined, postsPerProfile: Math.max(1, Number(i.postsPerProfile) || 1) }));
 const rateFor = (asset: Asset | undefined, format: string) => Number(asset?.rateCards.find((rc) => rc.format === format)?.amount ?? 0);
@@ -383,12 +394,17 @@ function PagesStep({
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return [...assets]
+      // Inactive pages (admin switch, 8 Oct) can't be added; one already on this plan stays listed.
+      .filter((a) => a.isActive !== false || items.some((i) => i.assetId === a.id))
       .filter((a) => categoryFilter === "All" || a.category === categoryFilter)
       .filter((a) => !q || a.handle.toLowerCase().includes(q) || (a.category ?? "").toLowerCase().includes(q))
       .sort((a, b) => b.followers - a.followers);
-  }, [assets, categoryFilter, search]);
+  }, [assets, categoryFilter, search, items]);
   const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
+  // A page can carry one line per format (8 Oct — "option of selecting both story and reel").
   const itemByAsset = new Map(items.map((i) => [i.assetId, i]));
+  const linesOf = (assetId: string) => items.filter((i) => i.assetId === assetId);
+  const lineOf = (assetId: string, format: string) => items.find((i) => i.assetId === assetId && i.format === format);
 
   const newItem = (asset: Asset): DraftItem => ({ assetId: asset.id, format: formatsFor(asset)[0], cost: "", postsPerProfile: "1" });
   const costToAdd = (asset: Asset) => rateFor(asset, formatsFor(asset)[0]);
@@ -407,9 +423,9 @@ function PagesStep({
     if (costToAdd(asset) > remaining) return setCapMessage(`@${asset.handle} (${money(costToAdd(asset))}) doesn't fit in the ${money(Math.max(0, remaining))} left.`);
     setItems((prev) => [...prev, newItem(asset)]);
   }
-  function updateItem(assetId: string, patch: Partial<DraftItem>) {
+  function updateItem(assetId: string, format: string, patch: Partial<DraftItem>) {
     setCapMessage("");
-    const current = itemByAsset.get(assetId);
+    const current = lineOf(assetId, format);
     if (!current) return;
     const next = { ...current, ...patch };
     if (hasBudget) {
@@ -420,7 +436,21 @@ function PagesStep({
         return;
       }
     }
-    setItems((prev) => prev.map((i) => (i.assetId === assetId ? next : i)));
+    setItems((prev) => prev.map((i) => (i === current ? next : i)));
+  }
+  /** Turns a format on for a picked page (a new line, within the budget) or off (it keeps at least one). */
+  function toggleFormat(asset: Asset, format: string) {
+    setCapMessage("");
+    const existing = lineOf(asset.id, format);
+    if (existing) {
+      if (linesOf(asset.id).length === 1) return setCapMessage(`@${asset.handle} needs at least one format — untick the page to remove it.`);
+      setItems((prev) => prev.filter((i) => i !== existing));
+      return;
+    }
+    const cost = rateFor(asset, format);
+    if (!(cost > 0)) return setCapMessage(`@${asset.handle} has no ${format} rate yet — set one in Inventory first.`);
+    if (hasBudget && cost > remaining) return setCapMessage(`A ${format} on @${asset.handle} (${money(cost)}) doesn't fit in the ${money(Math.max(0, remaining))} left.`);
+    setItems((prev) => [...prev, { assetId: asset.id, format, cost: "", postsPerProfile: "1" }]);
   }
   function addTopN() {
     setCapMessage("");
@@ -453,8 +483,9 @@ function PagesStep({
       setSheetResultMsg(`${result.matchedCount} matched, ${result.createdCount} new page${result.createdCount === 1 ? "" : "s"} created.`);
       if (result.failures.length > 0) setSheetError(result.failures.map((f) => `@${f.handle}: ${f.reason}`).join(" "));
       const serverItems = toDraft(result.plan);
-      const serverIds = new Set(serverItems.map((i) => i.assetId));
-      setItems((prevLocal) => [...serverItems, ...prevLocal.filter((i) => !serverIds.has(i.assetId))]);
+      const key = (i: DraftItem) => `${i.assetId}:${i.format}`;
+      const serverIds = new Set(serverItems.map(key));
+      setItems((prevLocal) => [...serverItems, ...prevLocal.filter((i) => !serverIds.has(key(i)))]);
       onPlanChanged(result.plan);
       queryClient.invalidateQueries({ queryKey: ["assets"] });
     },
@@ -559,6 +590,7 @@ function PagesStep({
                 <tbody>
                   {visible.map((asset) => {
                     const item = itemByAsset.get(asset.id);
+                    const lines = linesOf(asset.id);
                     const selected = Boolean(item);
                     const formats = formatsFor(asset);
                     const priced = costToAdd(asset) > 0;
@@ -584,30 +616,46 @@ function PagesStep({
                         </TD>
                         <TD className="hidden xl:table-cell">{asset.category ? <Tag tone="neutral" dot={false}>{asset.category}</Tag> : <span className="text-text-faint">—</span>}</TD>
                         <TD right className="hidden whitespace-nowrap tabular-nums text-text-muted sm:table-cell">
-                          {count(asset.followers)} followers
+                          {followersLabel(asset.followers)} followers
                         </TD>
                         <TD>
                           {selected && item ? (
-                            <select value={item.format} onChange={(e) => updateItem(asset.id, { format: e.target.value, cost: "" })} aria-label={`Format for @${asset.handle}`} className="h-8 rounded-[6px] border border-border-strong bg-surface px-2 text-[0.78rem] capitalize text-text focus:border-ink focus:outline-none">
-                              {formats.map((f) => (
-                                <option key={f} value={f}>
-                                  {f}
-                                </option>
-                              ))}
-                            </select>
+                            <div className="flex gap-1" role="group" aria-label={`Formats for @${asset.handle}`}>
+                              {formats.map((f) => {
+                                const on = lines.some((l) => l.format === f);
+                                return (
+                                  <button
+                                    key={f}
+                                    type="button"
+                                    aria-pressed={on}
+                                    onClick={() => toggleFormat(asset, f)}
+                                    className={cn("h-7 rounded-[6px] border px-2 text-[0.75rem] capitalize transition-colors", on ? "border-ink bg-ink text-ink-fg" : "border-border-strong bg-surface text-text-2 hover:bg-surface-2")}
+                                  >
+                                    {f}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           ) : (
                             <span className="text-text-faint">—</span>
                           )}
                         </TD>
                         <TD right>
                           {selected && item ? (
-                            <IntegerField value={item.postsPerProfile} onChange={(v) => updateItem(asset.id, { postsPerProfile: v })} max={99} aria-label={`Posts for @${asset.handle}`} className="h-8 w-14 rounded-[6px] px-2 text-[0.78rem] shadow-none" />
+                            <div className="flex flex-col items-end gap-1">
+                              {lines.map((l) => (
+                                <span key={l.format} className="inline-flex items-center gap-1.5">
+                                  {lines.length > 1 && <span className="text-[0.72rem] capitalize text-text-muted">{l.format}</span>}
+                                  <IntegerField value={l.postsPerProfile} onChange={(v) => updateItem(asset.id, l.format, { postsPerProfile: v })} max={99} aria-label={`${l.format === "story" ? "Story" : "Reel"} posts for @${asset.handle}`} className="h-8 w-14 rounded-[6px] px-2 text-[0.78rem] shadow-none" />
+                                </span>
+                              ))}
+                            </div>
                           ) : (
                             <span className="text-text-faint">—</span>
                           )}
                         </TD>
                         <TD right className="hidden tabular-nums lg:table-cell">
-                          {selected && item ? money(itemCost(item, asset) * itemPosts(item)) : costToAdd(asset) ? money(costToAdd(asset)) : <span className="text-text-faint">—</span>}
+                          {selected && item ? money(lines.reduce((s, l) => s + itemCost(l, asset) * itemPosts(l), 0)) : costToAdd(asset) ? money(costToAdd(asset)) : <span className="text-text-faint">—</span>}
                         </TD>
                       </TR>
                     );
@@ -622,7 +670,7 @@ function PagesStep({
           <Card className="flex flex-col gap-2 p-[18px]">
             <div className="flex items-center justify-between text-[0.8125rem]">
               <span className="text-text-muted">Pages selected</span>
-              <b className="tabular-nums">{items.length}</b>
+              <b className="tabular-nums">{new Set(items.map((i) => i.assetId)).size}</b>
             </div>
             <div className="flex items-center justify-between text-[0.8125rem]">
               <span className="text-text-muted">Client cost so far</span>
@@ -744,12 +792,12 @@ function PriceStep({
                   const ours = itemCost(i, asset);
                   const posts = itemPosts(i);
                   return (
-                    <TR key={i.assetId}>
+                    <TR key={`${i.assetId}:${i.format}`}>
                       <TD>
                         <Cell2 primary={`@${asset?.handle ?? "—"}`} secondary={`${i.format}${posts > 1 ? ` · ${posts} posts` : ""}`} />
                       </TD>
                       <TD right className="hidden tabular-nums text-text-muted sm:table-cell">
-                        {asset ? compactNumber(asset.followers) : "—"}
+                        {asset ? followersLabel(asset.followers) : "—"}
                       </TD>
                       <TD right className="hidden tabular-nums text-text-muted md:table-cell">
                         {asset?.engagement.avgViews != null ? compactNumber(asset.engagement.avgViews * posts) : "—"}
@@ -855,14 +903,37 @@ function SendStep({
   onDone: () => void;
 }) {
   const variantMutation = useMutation({ mutationFn: () => plansApi.createVariant(token, plan.id), onSuccess: onAddVariant });
+  const [share, setShare] = useState<{ sharedWith?: string; shareError?: string } | null>(null);
   const generateMutation = useMutation({
     mutationFn: async (variant: "client" | "internal") => {
-      await plansApi.generateSheet(token, plan.id, variant);
+      const result = await plansApi.generateSheet(token, plan.id, variant);
+      setShare(result);
       return plansApi.get(token, plan.id);
     },
+    onMutate: () => setShare(null),
     onSuccess: onSaved,
   });
   const pendingVariant = generateMutation.isPending ? generateMutation.variables : null;
+  // The plan's Google Sheet layout (8 Oct), saved as soon as it's picked; the next generate uses it.
+  const format = sheetFormatOf(plan);
+  const formatMutation = useMutation({ mutationFn: (f: SheetFormat) => plansApi.update(token, plan.id, { sheetFormat: f }), onSuccess: onSaved });
+  // Pages by category, biggest audience first — the sheet's own tabs.
+  const groups = (() => {
+    // Case-insensitive, like the sheet's tabs ("news" and "NEWS" are one category).
+    const byKey = new Map<string, { label: string; items: Plan["items"] }>();
+    for (const item of plan.items) {
+      const label = categoryLabel(item.asset?.category);
+      const g = byKey.get(label.toLowerCase()) ?? { label, items: [] };
+      g.items.push(item);
+      byKey.set(label.toLowerCase(), g);
+    }
+    const followersOf = (items: Plan["items"]) => [...new Map(items.map((i) => [i.assetId, i.asset?.followers ?? 0])).values()].reduce((a, b) => a + b, 0);
+    return [...byKey.values()].map(({ label, items }) => ({ label, items, followers: followersOf(items) })).sort((a, b) => b.followers - a.followers);
+  })();
+  const categoryCosts = splitByWeight(
+    plan.overview.subtotal,
+    groups.map((g) => g.items.reduce((sum, i) => sum + Number(i.clientCost ?? i.cost) * i.postsPerProfile, 0))
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -871,48 +942,85 @@ function SendStep({
           <CardHeader title="Client sheet preview" meta={<span className="text-[0.78rem] text-text-muted">what the client will see</span>} />
           <div className="bg-surface-2 p-4 md:p-6">
             <div className="mx-auto flex max-w-[560px] flex-col gap-4 rounded-[6px] border border-border bg-surface p-5 shadow-lg">
-              <p className="text-[0.72rem] font-semibold uppercase tracking-wide text-text-muted">Overview of {plan.name}</p>
-              <div className="divide-y divide-border">
-                {[
-                  ["Total Followers Targeted Overall", count(plan.overview.totalFollowers)],
-                  ["Total Posts", String(plan.overview.totalPosts)],
-                  ["Expected Impressions", `${count(plan.overview.expectedImpressions)} (est.)`],
-                  ["Cost", money(plan.overview.subtotal)],
-                  ...(plan.isGstPlan ? [[`GST (${plan.gstPercent}%)`, money(plan.overview.gstAmount)]] : []),
-                  [plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(plan.overview.total)],
-                ].map(([label, value]) => (
-                  <div key={label} className="flex items-center justify-between py-1.5 text-[0.8125rem]">
-                    <span className="text-text-muted">{label}</span>
-                    <span className="font-semibold tabular-nums">{value}</span>
-                  </div>
-                ))}
-              </div>
-              {plan.items.length === 0 ? (
-                <p className="text-[0.8125rem] text-text-muted">No pages added yet.</p>
+              <p className="text-[0.72rem] font-semibold uppercase tracking-wide text-text-muted">
+                {plan.clientName} &lt;&gt; Taggify · {SHEET_FORMAT_INFO[format].label}
+              </p>
+              {format === "summary" ? (
+                <div className="divide-y divide-border" data-testid="preview-summary">
+                  {[
+                    ["Total Followers Targeted Overall", followersLabel(plan.overview.totalFollowers)],
+                    ["Total Deliverables", String(plan.overview.totalPosts)],
+                    ["Expected Impressions/Views", followersLabel(plan.overview.expectedImpressions)],
+                    ["Cost", money(plan.overview.subtotal)],
+                    ["CPV", plan.overview.expectedImpressions > 0 ? (plan.overview.subtotal / plan.overview.expectedImpressions).toFixed(2) : "—"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex items-center justify-between py-1.5 text-[0.8125rem]">
+                      <span className="text-text-muted">{label}</span>
+                      <span className="font-semibold tabular-nums">{value}</span>
+                    </div>
+                  ))}
+                </div>
               ) : (
-                <div className="overflow-hidden rounded-md border border-border" data-testid="preview-pages">
+                <div className="overflow-hidden rounded-md border border-border" data-testid="preview-breakdown">
                   <table className="w-full text-[0.75rem]">
                     <thead>
                       <tr className="border-b border-border text-left text-text-muted">
-                        <th className="px-3 py-1.5 font-medium">S No</th>
-                        <th className="px-3 py-1.5 font-medium">Page</th>
+                        <th className="px-3 py-1.5 font-medium">Particulars</th>
                         <th className="px-3 py-1.5 font-medium">Followers</th>
-                        <th className="px-3 py-1.5 font-medium">Format</th>
-                        <th className="px-3 py-1.5 font-medium">Posts</th>
+                        <th className="px-3 py-1.5 font-medium">Items</th>
+                        <th className="px-3 py-1.5 text-right font-medium">Total cost</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {plan.items.map((item, i) => (
-                        <tr key={`${item.assetId}-${item.format}`}>
-                          <td className="px-3 py-1.5 tabular-nums text-text-muted">{i + 1}</td>
-                          <td className="px-3 py-1.5 font-semibold">@{item.asset?.handle ?? "—"}</td>
-                          <td className="px-3 py-1.5 tabular-nums">{count(item.asset?.followers ?? 0)}</td>
-                          <td className="px-3 py-1.5 capitalize">{item.format}</td>
-                          <td className="px-3 py-1.5 tabular-nums">{item.postsPerProfile}</td>
+                      {groups.map((g, n) => (
+                        <tr key={g.label}>
+                          <td className="px-3 py-1.5 font-semibold">{g.label}</td>
+                          <td className="px-3 py-1.5 tabular-nums">{followersLabel(g.followers)}</td>
+                          <td className="px-3 py-1.5 tabular-nums">{g.items.reduce((sum, i) => sum + i.postsPerProfile, 0)}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{money(categoryCosts[n] ?? 0)}</td>
                         </tr>
                       ))}
+                      <tr className="font-semibold">
+                        <td className="px-3 py-1.5">Total</td>
+                        <td className="px-3 py-1.5 tabular-nums">{followersLabel(plan.overview.totalFollowers)}</td>
+                        <td className="px-3 py-1.5 tabular-nums">{plan.overview.totalPosts}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{money(plan.overview.subtotal)}</td>
+                      </tr>
+                      {plan.isGstPlan && (
+                        <tr>
+                          <td className="px-3 py-1.5 text-text-muted" colSpan={3}>
+                            GST ({plan.gstPercent}%) · total
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{money(plan.overview.total)}</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
+                </div>
+              )}
+              {plan.items.length === 0 ? (
+                <p className="text-[0.8125rem] text-text-muted">No pages added yet.</p>
+              ) : (
+                <div className="flex flex-col gap-3" data-testid="preview-pages">
+                  {/* One tab per category in the sheet (8 Oct). */}
+                  {groups.map((g) => (
+                    <div key={g.label} className="overflow-hidden rounded-md border border-border">
+                      <p className="border-b border-border bg-surface-2 px-3 py-1.5 text-[0.72rem] font-semibold">{g.label}</p>
+                      <table className="w-full text-[0.75rem]">
+                        <tbody className="divide-y divide-border">
+                          {g.items.map((item, i) => (
+                            <tr key={`${item.assetId}-${item.format}`}>
+                              <td className="w-8 px-3 py-1.5 tabular-nums text-text-muted">{i + 1}</td>
+                              <td className="px-3 py-1.5 font-semibold">{item.asset?.handle ?? "—"}</td>
+                              <td className="px-3 py-1.5 tabular-nums">{followersLabel(item.asset?.followers ?? 0)}</td>
+                              <td className="px-3 py-1.5 capitalize">{item.format}</td>
+                              <td className="px-3 py-1.5 tabular-nums">{item.postsPerProfile}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -926,7 +1034,15 @@ function SendStep({
               {money(plan.overview.total)} · {plan.items.length} pages
             </p>
           </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-[0.78rem] font-semibold">Sheet format</p>
+            <SheetFormatPicker value={format} onChange={(f) => f !== format && formatMutation.mutate(f)} disabled={formatMutation.isPending || generateMutation.isPending} />
+            <p className="text-[0.72rem] text-text-muted">For this plan only. Pages go in one tab per category either way; an already-generated sheet is rewritten in the new format.</p>
+            {formatMutation.isError && <GoogleAwareError error={formatMutation.error} fallback="Couldn't change the sheet format." />}
+          </div>
           {generateMutation.isError && <GoogleAwareError error={generateMutation.error} fallback="Couldn't generate the sheet." />}
+          {share?.shareError && <Note tone="warn">{share.shareError}</Note>}
+          {share?.sharedWith && <Note tone="ok">{share.sharedWith} can edit this sheet.</Note>}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5 rounded-[10px] border border-ink bg-surface-2 p-3">
               <p className="text-[0.72rem] font-semibold">Client sheet</p>

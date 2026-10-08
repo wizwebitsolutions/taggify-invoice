@@ -273,6 +273,8 @@ model Asset {
   profilePicStoredUrl String?
   category            String? // free-form, e.g. "Meme page", "News page" — not a fixed enum, same convention as RateCard.format
   approvalStatus      String    @default("pending") // pending | approved | rejected
+  // Admin switch (8 Oct): an inactive page can't be added to new plans; everything else stays the same.
+  isActive            Boolean   @default(true)
   // Profile-level engagement from the same Apify profile scrape that syncs
   // followers (Inventory "Create page", 14 Sep — "on creation automatic
   // fetching of followers count, avg views"): averaged over the profile's
@@ -700,6 +702,9 @@ model Plan {
   // annotation needed since nothing but this id is shared.
   pitchGroupId String?
   variantLabel String  @default("Plan A")
+  // The plan sheet's layout (8 Oct): "breakdown" (a row per page category)
+  // or "summary" (one campaign-overview block). Chosen per plan.
+  sheetFormat         String    @default("breakdown")
 
   // Step 3's editable client-facing overview numbers (user request, 10 Sep
   // — "client side facing overview, budget total cost, impressions that

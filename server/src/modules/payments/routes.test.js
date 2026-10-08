@@ -24,6 +24,8 @@ const confirmPayoutReceipt = vi.fn(async () => ({ id: "payout-1", status: "PAID"
 const listPendingLinks = vi.fn(async () => ({ items: [], total: 0 }));
 const listMyPendingLinks = vi.fn(async () => ({ items: [], total: 0 }));
 const listMyPayouts = vi.fn(async () => ({ items: [], total: 0 }));
+const getPaymentSummary = vi.fn(async () => ({}));
+const getMyPaymentSummary = vi.fn(async () => ({}));
 vi.mock("./service.js", () => ({
   listPayouts: (...args) => listPayouts(...args),
   createPayout: (...args) => createPayout(...args),
@@ -33,6 +35,8 @@ vi.mock("./service.js", () => ({
   listPendingLinks: (...args) => listPendingLinks(...args),
   listMyPendingLinks: (...args) => listMyPendingLinks(...args),
   listMyPayouts: (...args) => listMyPayouts(...args),
+  getPaymentSummary: (...args) => getPaymentSummary(...args),
+  getMyPaymentSummary: (...args) => getMyPaymentSummary(...args),
 }));
 
 const { default: router } = await import("./routes.js");
@@ -126,5 +130,22 @@ describe("Payments routes — 24 Sep redesign", () => {
       })
     ).toBe(201);
     expect(confirmPayoutReceipt).toHaveBeenCalledWith("payout-1", expect.anything(), expect.objectContaining({ paidOn: new Date("2026-09-20"), utr: "UTR1" }));
+  });
+
+  it("GET /payments/summary takes the list filters (month, vendor, page) and is finance.pay only (2 Oct)", async () => {
+    expect(await call({ id: "fin-1", role: "FINANCE" }, "GET", "/summary?ownerId=cr-9&q=memes&from=2026-09-01&to=2026-09-30")).toBe(200);
+    expect(getPaymentSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "fin-1" }),
+      expect.objectContaining({ ownerId: "cr-9", q: "memes", from: new Date("2026-09-01"), to: new Date("2026-09-30") })
+    );
+    expect(await call({ id: "cr-1", role: "CREATOR" }, "GET", "/summary")).toBe(403);
+    expect(await call({ id: "tm-1", role: "TEAM_MEMBER" }, "GET", "/summary")).toBe(403);
+    expect(await call({ id: "fin-1", role: "FINANCE" }, "GET", "/summary?from=not-a-date")).toBe(400);
+  });
+
+  it("GET /payments/me/summary passes the month through but never a vendor override (2 Oct)", async () => {
+    expect(await call({ id: "cr-1", role: "CREATOR" }, "GET", "/me/summary?ownerId=someone-else&from=2026-09-01")).toBe(200);
+    expect(getMyPaymentSummary.mock.calls[0][1]).toMatchObject({ from: new Date("2026-09-01") });
+    expect(getMyPaymentSummary.mock.calls[0][1].ownerId).toBeUndefined();
   });
 });

@@ -2,9 +2,10 @@ import express, { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
+import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
+import { requireRole } from "../../middleware/requireRole.js";
 import * as assetsService from "./service.js";
 import { buildImportPagesTemplate } from "../../lib/importPagesTemplate.js";
 
@@ -20,11 +21,17 @@ const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 // is enough to serve it. Proxies the fetch server-to-server instead of the
 // client hotlinking cdninstagram.com directly — see fetchProfilePic's doc
 // comment for why (user report, 11 Sep: the direct hotlink came back broken).
+// Cache: a picture is cached for a day (the 24h rescrape is the most it can
+// change); "no picture yet" for 10 minutes, so avatars on every list don't
+// re-ask on each render but a fresh scrape still shows up soon.
 router.get("/:id/profile-pic", async (req, res, next) => {
   try {
-    const { buffer, contentType } = await assetsService.fetchProfilePic(req.params.id);
+    const source = await assetsService.getProfilePicSource(req.params.id);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    if (source.redirect) return res.redirect(302, source.redirect);
+    const { buffer, contentType } = source;
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=3600");
     // THE actual bug (found 11 Sep, after "Instagram flakiness" turned out to
     // be a red herring): apiRouter's helmet() sets Cross-Origin-Resource-
     // Policy: same-origin on every response by default, which silently
@@ -35,9 +42,10 @@ router.get("/:id/profile-pic", async (req, res, next) => {
     // fetch/XHR, not embeds like <img>). Overridden here, not globally: this
     // one route is deliberately meant to be hotlinked from any origin that
     // can reach the app; every other API response stays same-origin-only.
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    // (Set above, before the redirect branch, so both responses carry it.)
     res.send(buffer);
   } catch (err) {
+    if (err?.statusCode === 404) res.setHeader("Cache-Control", "public, max-age=600");
     next(err);
   }
 });
@@ -74,6 +82,15 @@ router.put("/:id/approval", requireAccess("inventory.approve"), validateBody(set
 
 // Bulk refresh for a selection (user request, 14 Sep) — queues background
 // scrapes and returns at once; rows poll while scrapeQueuedAt is set.
+// Active / Inactive (8 Oct): admins only — the role, plus Creators edit access.
+router.put("/:id/active", requireRole("ADMIN"), requireAccess("inventory.edit"), validateBody(setActiveSchema), async (req, res, next) => {
+  try {
+    res.json(await assetsService.setAssetActive(req.params.id, req.body.isActive));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/refresh-profiles", requireAccess("inventory.edit"), validateBody(refreshProfilesSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.queueProfileRefresh(req.body.assetIds));

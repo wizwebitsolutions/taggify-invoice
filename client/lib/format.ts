@@ -29,6 +29,18 @@ export function compactNumber(v: number) {
   return `${(v / 100_000).toFixed(1).replace(/\.0$/, "")}L`; // lakh — matches en-IN grouping past 5 digits
 }
 
+/**
+ * Follower counts the way creators quote them (8 Oct — "followers should show
+ * in million or in k"): 8,700,000 → "8.7M", 850,000 → "850K". Same rule as the
+ * server's sheets/PDF (server/src/lib/followers.js) and client-v2.
+ */
+export function followersLabel(v: number | null | undefined) {
+  const n = Number(v) || 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}K`;
+  return String(n);
+}
+
 export function initialsOf(name?: string | null) {
   if (!name) return "—";
   return name

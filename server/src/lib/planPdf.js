@@ -1,4 +1,5 @@
 import PDFDocument from "pdfkit";
+import { compactFollowers } from "./followers.js";
 
 /**
  * Renders a Plan to a PDF buffer — the client-facing pitch document
@@ -111,7 +112,7 @@ function renderPlan(doc, plan, { internal = false } = {}) {
   const gstAmount = internal ? plan.internal.computedGstAmount : plan.overview.gstAmount;
   const total = internal ? plan.internal.computedTotal : plan.overview.total;
   const overviewRows = [
-    ["Total Followers Targeted Overall", num(internal ? o.computedFollowers : o.totalFollowers)],
+    ["Total Followers Targeted Overall", compactFollowers(internal ? o.computedFollowers : o.totalFollowers)],
     ["Total Posts", num(internal ? o.computedPosts : o.totalPosts)],
     ["Expected Impressions", `${num(internal ? o.computedImpressions : o.expectedImpressions)} (est.)`],
     [internal ? "Internal Cost" : "Cost", money(subtotal)],
@@ -170,7 +171,7 @@ function renderPlan(doc, plan, { internal = false } = {}) {
       const row = {
         sno: String(i + 1),
         page: asset.handle ?? "—",
-        followers: num(asset.followers ?? 0),
+        followers: compactFollowers(asset.followers ?? 0),
         format: cap(item.format),
         posts: num(item.postsPerProfile),
         // Real per-post cost — only ever drawn when `internal` is true (see

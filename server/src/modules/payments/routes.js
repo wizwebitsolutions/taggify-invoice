@@ -12,6 +12,8 @@ import {
   listMyPayoutsQuerySchema,
   listPaidQuerySchema,
   listMyPaidQuerySchema,
+  paymentSummaryQuerySchema,
+  myPaymentSummaryQuerySchema,
 } from "./schemas.js";
 import * as paymentsService from "./service.js";
 
@@ -22,9 +24,9 @@ router.use(requireAuth);
 // the service forces ownerId/creatorId to the caller, so this only ever
 // returns links on pages they own and payouts made to them. Registered
 // before the finance.pay gate below so it isn't caught by it.
-router.get("/me/summary", requireOwnAccess("finance.view"), async (req, res, next) => {
+router.get("/me/summary", requireOwnAccess("finance.view"), validateQuery(myPaymentSummaryQuerySchema), async (req, res, next) => {
   try {
-    res.json(await paymentsService.getMyPaymentSummary(req.user));
+    res.json(await paymentsService.getMyPaymentSummary(req.user, req.query));
   } catch (err) {
     next(err);
   }
@@ -58,9 +60,9 @@ router.get("/me/paid", requireOwnAccess("finance.view"), validateQuery(listMyPai
 // is admin/finance only.
 router.use(requireAccess("finance.pay"));
 
-router.get("/summary", async (req, res, next) => {
+router.get("/summary", validateQuery(paymentSummaryQuerySchema), async (req, res, next) => {
   try {
-    res.json(await paymentsService.getPaymentSummary(req.user));
+    res.json(await paymentsService.getPaymentSummary(req.user, req.query));
   } catch (err) {
     next(err);
   }

@@ -19,8 +19,6 @@ import { refreshPostQuotaForLinks } from "../../lib/postQuota.js";
  */
 
 const GST_RATE = 0.18;
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DUE_AFTER_DAYS = 30; // an unbilled link falls due this long after it was posted (or submitted)
 const OWED_INVOICE_STATUSES = ["RAISED", "APPROVED"];
 const paise = (n) => Math.round(n * 100) / 100;
 
@@ -335,7 +333,7 @@ export async function listPayouts(actor, filters = {}) {
  * A PAID invoice that never went through a Payout — the direct-mark-paid
  * bypass this file used to allow (now removed; see invoices/service.js).
  * Exactly the filter getPaymentSummary's tile math already uses, factored
- * out here so the "Paid this month" tile and the Paid list can't drift
+ * out here so the Paid tile and the Paid list can't drift
  * apart again the way they did before this fix.
  */
 export function standalonePaidInvoicesWhere(filters = {}) {
@@ -505,59 +503,44 @@ export async function listPendingLinks(actor, filters = {}) {
 }
 
 /**
- * Money owed, sliced for the four Payments tiles (25 Sep). Pure so the month
- * and 30-day boundaries are testable: an unbilled link falls due DUE_AFTER_DAYS
- * after it was posted (or submitted); an invoice on its own dueDate (raise date
- * + 30 days when it has none). "30+ days" = due more than 30 days ago. A link
- * on an invoice is counted once, through the invoice.
+ * The Payments tiles (2 Oct): Pending and Paid for exactly the filters the
+ * lists below use (vendor, page search, month), so a tile always agrees with
+ * its tab. Pending = unbilled links (pendingLinksWhere, by posted month) plus
+ * owed invoices (pendingInvoicesWhere, by raised month); a link on an invoice
+ * is counted once, through the invoice, and a draft payout's links are still
+ * pending (they show in the list's draft banner instead). Paid = the Paid tab's ledger — PAID
+ * payouts' net plus legacy standalone-paid invoices, by paid month. Replaces
+ * the old "falls due 30 days after posting" tiles (Due this month / 30+ days):
+ * an unpaid link is simply pending, however old.
  */
-export function computeDues(links, invoices, now = new Date()) {
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const overdueBefore = new Date(now.getTime() - 30 * DAY_MS);
-  const entries = [
-    ...links.map((l) => ({ amount: Number(l.cost), due: new Date(new Date(l.postedAt ?? l.createdAt).getTime() + DUE_AFTER_DAYS * DAY_MS) })),
-    ...invoices.map((inv) => ({ amount: Number(inv.amount), due: inv.dueDate ? new Date(inv.dueDate) : new Date(new Date(inv.createdAt).getTime() + DUE_AFTER_DAYS * DAY_MS) })),
-  ];
-  const sum = (list) => paise(list.reduce((t, e) => t + e.amount, 0));
-  return {
-    totalDues: sum(entries),
-    dueThisMonth: sum(entries.filter((e) => e.due >= monthStart && e.due < nextMonthStart)),
-    overdue30: sum(entries.filter((e) => e.due < overdueBefore)),
-    dueCount: entries.length,
-  };
-}
-
-/** Totals for the Payments tiles. `ownerId` scopes it to one vendor (always the caller on the creator side). */
-export async function getPaymentSummary(actor, { ownerId } = {}) {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const thisMonth = { gte: monthStart, lt: nextMonthStart };
-  const [links, invoices, paidPayouts, paidInvoices] = await Promise.all([
-    prisma.link.findMany({
-      // Links on a PAID payout (paid out before payouts raised invoices) aren't owed any more; a DRAFT payout's still are.
-      where: {
-        status: { in: [...INVOICEABLE_STATUSES] },
-        invoiceItem: null,
-        // A post beyond its campaign booking isn't a due (29 Sep).
-        overQuota: false,
-        OR: [{ payoutItem: null }, { payoutItem: { payout: { status: "DRAFT" } } }],
-        ...(ownerId ? { asset: { ownerId } } : {}),
-      },
-      select: { cost: true, postedAt: true, createdAt: true },
-    }),
-    prisma.invoice.findMany({ where: { status: { in: OWED_INVOICE_STATUSES }, ...(ownerId ? { creatorId: ownerId } : {}) }, select: { amount: true, dueDate: true, createdAt: true } }),
-    prisma.payout.aggregate({ where: { status: "PAID", paidAt: thisMonth, ...(ownerId ? { creatorId: ownerId } : {}) }, _sum: { netAmount: true } }),
-    // Invoices marked paid in the Invoices section. Ones a payout produced or paid are already in the payout figure.
-    prisma.invoice.aggregate({
-      where: { status: "PAID", paidAt: thisMonth, items: { none: { link: { payoutItem: { isNot: null } } } }, ...(ownerId ? { creatorId: ownerId } : {}) },
-      _sum: { amount: true },
-    }),
+export async function getPaymentSummary(actor, filters = {}) {
+  // Unlike the Pending list, a DRAFT payout's links still count: they aren't paid until its receipt is attached.
+  const { payoutItem: _unpaidOnly, ...listWhere } = pendingLinksWhere(filters);
+  const linkWhere = { ...listWhere, AND: [{ OR: [{ payoutItem: null }, { payoutItem: { payout: { status: "DRAFT" } } }] }] };
+  const invoiceWhere = pendingInvoicesWhere(filters);
+  const paidFilters = { ...filters, creatorId: filters.ownerId };
+  const payoutWhere = payoutsWhere({ ...paidFilters, status: "PAID" });
+  const standaloneWhere = standalonePaidInvoicesWhere(paidFilters);
+  const [pendingLinks, pendingInvoices, pendingInvoiceLinks, paidPayouts, paidPayoutLinks, paidInvoices, paidInvoiceLinks] = await Promise.all([
+    prisma.link.aggregate({ where: linkWhere, _sum: { cost: true }, _count: { _all: true } }),
+    prisma.invoice.aggregate({ where: invoiceWhere, _sum: { amount: true }, _count: { _all: true } }),
+    prisma.invoiceItem.count({ where: { invoice: invoiceWhere } }),
+    prisma.payout.aggregate({ where: payoutWhere, _sum: { netAmount: true }, _count: { _all: true } }),
+    prisma.payoutItem.count({ where: { payout: payoutWhere } }),
+    prisma.invoice.aggregate({ where: standaloneWhere, _sum: { amount: true }, _count: { _all: true } }),
+    prisma.invoiceItem.count({ where: { invoice: standaloneWhere } }),
   ]);
   return {
-    ...computeDues(links, invoices, now),
-    paidThisMonth: paise(Number(paidPayouts._sum.netAmount ?? 0) + Number(paidInvoices._sum.amount ?? 0)),
+    pending: {
+      amount: paise(Number(pendingLinks._sum.cost ?? 0) + Number(pendingInvoices._sum.amount ?? 0)),
+      links: pendingLinks._count._all + pendingInvoiceLinks,
+      invoices: pendingInvoices._count._all,
+    },
+    paid: {
+      amount: paise(Number(paidPayouts._sum.netAmount ?? 0) + Number(paidInvoices._sum.amount ?? 0)),
+      links: paidPayoutLinks + paidInvoiceLinks,
+      payments: paidPayouts._count._all + paidInvoices._count._all,
+    },
   };
 }
 
@@ -566,8 +549,9 @@ export function listMyPendingLinks(actor, filters = {}) {
   return listPendingLinks(actor, { ...filters, ownerId: actor.id });
 }
 
-export function getMyPaymentSummary(actor) {
-  return getPaymentSummary(actor, { ownerId: actor.id });
+/** Creator side: same tiles, forced to pages the caller owns. */
+export function getMyPaymentSummary(actor, filters = {}) {
+  return getPaymentSummary(actor, { ...filters, ownerId: actor.id });
 }
 
 /** Creator side: only their own PAID payouts — no drafts (nothing's been paid yet) and never anyone else's. */

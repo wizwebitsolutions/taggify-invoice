@@ -298,3 +298,35 @@ export function WalletIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Payouts month picker (5 Oct). */
+export function CalendarIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+
+/** "Dues this month" tile (5 Oct). */
+export function TargetIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <circle cx="12" cy="12" r="5" />
+      <circle cx="12" cy="12" r="1.5" />
+    </svg>
+  );
+}
+
+/** "Paid this month" tile (5 Oct). */
+export function LayersIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 3.5 3.5 8 12 12.5 20.5 8 12 3.5Z" />
+      <path d="m3.5 12 8.5 4.5 8.5-4.5" />
+      <path d="m3.5 16 8.5 4.5 8.5-4.5" />
+    </svg>
+  );
+}

@@ -288,6 +288,18 @@ const profilePicInFlight = new Map(); // assetId -> Promise<{ buffer, contentTyp
  * concurrent callers (see profilePicInFlight above) rather than each firing
  * its own separate request.
  */
+/**
+ * Where GET /assets/:id/profile-pic should send the browser (design-fix #5,
+ * 7 Oct — avatars are on nearly every screen): the stored Cloudinary copy
+ * as a redirect, so the CDN and the browser cache serve it and the API stops
+ * streaming bytes; otherwise the proxied Instagram picture via fetchProfilePic.
+ */
+export async function getProfilePicSource(assetId) {
+  const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { profilePicStoredUrl: true } });
+  if (asset?.profilePicStoredUrl) return { redirect: asset.profilePicStoredUrl };
+  return fetchProfilePic(assetId);
+}
+
 export async function fetchProfilePic(assetId) {
   const cached = profilePicCache.get(assetId);
   if (cached && Date.now() - cached.cachedAt < PROFILE_PIC_CACHE_TTL_MS) {
@@ -844,4 +856,15 @@ export async function parseImportSheetOrThrow(buffer, fileName) {
     if (err instanceof ImportParseError) throw new ApiError(400, "IMPORT_SHEET_INVALID", err.message);
     throw err;
   }
+}
+
+/**
+ * Admin's Active / Inactive switch for a page (8 Oct). Inactive only stops the
+ * page being added to new plans; it stays everywhere else (campaigns, posts,
+ * payouts, plans it's already on).
+ */
+export async function setAssetActive(assetId, isActive) {
+  const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { id: true } });
+  if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Page not found");
+  return prisma.asset.update({ where: { id: assetId }, data: { isActive } });
 }

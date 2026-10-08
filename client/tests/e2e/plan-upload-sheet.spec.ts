@@ -184,7 +184,7 @@ test.describe("Plans — Upload plan from a Google Sheet", () => {
     expect(patched).toEqual({ clientContact: "Rohit" });
 
     const pages = steps.getByTestId("step-pages");
-    await expect(pages.getByTestId("pending-page-brand.new")).toContainText("12,000 followers");
+    await expect(pages.getByTestId("pending-page-brand.new")).toContainText("12K followers"); // K / M since 8 Oct
     await pages.getByRole("button", { name: "Add to inventory" }).click();
     expect(added).toEqual({ handle: "brand.new" });
     await expect(pages).toContainText("Every page in the sheet is on the plan now.");

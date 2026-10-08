@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ApiError } from "../../middleware/errorHandler.js";
 
 const mockPrisma = {
-  link: { findMany: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
+  link: { findMany: vi.fn(), count: vi.fn(), updateMany: vi.fn(), aggregate: vi.fn() },
+  invoiceItem: { count: vi.fn(async () => 0) },
   invoice: { findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
   linkStatusEvent: { createMany: vi.fn() },
   payoutItem: { findMany: vi.fn(), count: vi.fn(async () => 0) },
@@ -36,7 +37,6 @@ const {
   listMyPendingLinks,
   listMyPayouts,
   pendingInvoicesWhere,
-  computeDues,
   getPaymentSummary,
   getMyPaymentSummary,
   standalonePaidInvoicesWhere,
@@ -557,15 +557,15 @@ describe("creator's own Payments view — scoped to the caller, whatever the que
     expect(mockPrisma.invoice.findMany.mock.calls[0][0].where.creatorId).toBe("creator-1");
   });
 
-  it("summary: always scoped to the caller", async () => {
-    mockPrisma.link.findMany.mockResolvedValue([]);
-    mockPrisma.payout.aggregate.mockResolvedValue({ _sum: { netAmount: null } });
-    mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { amount: null } });
-    await getMyPaymentSummary(creator);
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where.asset).toEqual({ ownerId: "creator-1" });
-    expect(mockPrisma.invoice.findMany.mock.calls[0][0].where.creatorId).toBe("creator-1");
+  it("summary: always scoped to the caller, even if another vendor's id is passed", async () => {
+    mockPrisma.link.aggregate.mockResolvedValue({ _sum: { cost: null }, _count: { _all: 0 } });
+    mockPrisma.payout.aggregate.mockResolvedValue({ _sum: { netAmount: null }, _count: { _all: 0 } });
+    mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { amount: null }, _count: { _all: 0 } });
+    await getMyPaymentSummary(creator, { ownerId: "creator-2" });
+    expect(mockPrisma.link.aggregate.mock.calls[0][0].where.asset).toEqual({ ownerId: "creator-1" });
+    expect(mockPrisma.invoice.aggregate.mock.calls[0][0].where.creatorId).toBe("creator-1"); // owed invoices
+    expect(mockPrisma.invoice.aggregate.mock.calls[1][0].where.creatorId).toBe("creator-1"); // standalone-paid invoices
     expect(mockPrisma.payout.aggregate.mock.calls[0][0].where.creatorId).toBe("creator-1");
-    expect(mockPrisma.invoice.aggregate.mock.calls[0][0].where.creatorId).toBe("creator-1");
   });
 
   it("paid: forces creatorId to the caller and status to PAID (no drafts, no one else's)", async () => {
@@ -576,52 +576,54 @@ describe("creator's own Payments view — scoped to the caller, whatever the que
   });
 });
 
-describe("computeDues — the four Payments tiles (25 Sep)", () => {
-  const now = new Date("2026-09-25T10:00:00");
-  const day = (d) => new Date(now.getTime() + d * 24 * 60 * 60 * 1000);
-
-  it("an unbilled link falls due 30 days after it was posted, or submitted if not posted yet", () => {
-    // posted 5 Sep -> due 5 Oct (next month); submitted 1 Sep, never posted -> due 1 Oct (next month)
-    const r = computeDues([{ cost: 100, postedAt: new Date("2026-09-05T00:00:00"), createdAt: day(-30) }, { cost: 50, postedAt: null, createdAt: new Date("2026-09-01T00:00:00") }], [], now);
-    expect(r).toMatchObject({ totalDues: 150, dueThisMonth: 0, overdue30: 0, dueCount: 2 });
+describe("getPaymentSummary — Pending / Paid tiles that follow the filters (2 Oct)", () => {
+  beforeEach(() => {
+    // Calls, in order: owed invoices, then standalone-paid invoices.
+    mockPrisma.link.aggregate.mockResolvedValue({ _sum: { cost: 300 }, _count: { _all: 3 } });
+    mockPrisma.invoice.aggregate
+      .mockResolvedValueOnce({ _sum: { amount: 900 }, _count: { _all: 1 } })
+      .mockResolvedValueOnce({ _sum: { amount: 250.5 }, _count: { _all: 1 } });
+    mockPrisma.invoiceItem.count.mockResolvedValueOnce(2).mockResolvedValueOnce(1);
+    mockPrisma.payout.aggregate.mockResolvedValue({ _sum: { netAmount: 1000 }, _count: { _all: 2 } });
+    mockPrisma.payoutItem.count.mockResolvedValueOnce(4);
   });
 
-  it("due this month = due date inside the current calendar month", () => {
-    const r = computeDues([{ cost: 100, postedAt: new Date("2026-08-28T00:00:00"), createdAt: day(-40) }], [{ amount: 400, dueDate: new Date("2026-09-30T00:00:00"), createdAt: day(-5) }, { amount: 900, dueDate: new Date("2026-10-01T00:00:00"), createdAt: day(-5) }], now);
-    expect(r.dueThisMonth).toBe(500); // link due 27 Sep + invoice due 30 Sep; the 1 Oct one is next month
-    expect(r.totalDues).toBe(1400);
-  });
-
-  it("30+ days = due more than 30 days ago: 30 days ago exactly is not yet, 31 is", () => {
-    const r = computeDues([], [
-      { amount: 100, dueDate: day(-30), createdAt: day(-60) },
-      { amount: 200, dueDate: day(-31), createdAt: day(-60) },
-    ], now);
-    expect(r.overdue30).toBe(200);
-  });
-
-  it("an invoice with no due date falls back to raised date + 30 days", () => {
-    expect(computeDues([], [{ amount: 100, dueDate: null, createdAt: day(-45) }], now).overdue30).toBe(0); // due 15 days ago
-    expect(computeDues([], [{ amount: 100, dueDate: null, createdAt: day(-70) }], now).overdue30).toBe(100); // due 40 days ago
-  });
-});
-
-describe("getPaymentSummary (25 Sep)", () => {
-  it("counts unbilled links + owed invoices as dues, and payouts + directly-paid invoices as paid this month", async () => {
-    mockPrisma.link.findMany.mockResolvedValue([{ cost: 100, postedAt: null, createdAt: new Date() }]);
-    mockPrisma.invoice.findMany.mockResolvedValue([{ amount: 900, dueDate: new Date(), createdAt: new Date() }]);
-    mockPrisma.payout.aggregate.mockResolvedValue({ _sum: { netAmount: 1000 } });
-    mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { amount: 250.5 } });
-
+  it("pending = unbilled links + owed invoices; paid = payouts' net + standalone-paid invoices, with link counts", async () => {
     const r = await getPaymentSummary(finance);
+    expect(r).toEqual({
+      pending: { amount: 1200, links: 5, invoices: 1 },
+      paid: { amount: 1250.5, links: 5, payments: 3 },
+    });
+  });
 
-    expect(r).toMatchObject({ totalDues: 1000, paidThisMonth: 1250.5 });
-    // links already on an invoice are counted through the invoice, never twice; no vendor scope for Finance
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where).toMatchObject({ invoiceItem: null });
-    // links already on a PAID payout (paid before payouts raised invoices) aren't owed; a DRAFT payout's still are
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where.OR).toEqual([{ payoutItem: null }, { payoutItem: { payout: { status: "DRAFT" } } }]);
-    expect(mockPrisma.link.findMany.mock.calls[0][0].where.asset).toBeUndefined();
+  it("no 30-day due concept: an old unpaid link is pending, with no date limit unless a month is picked", async () => {
+    const r = await getPaymentSummary(finance);
+    expect(r).not.toHaveProperty("overdue30");
+    expect(r).not.toHaveProperty("dueThisMonth");
+    const { where } = mockPrisma.link.aggregate.mock.calls[0][0];
+    expect(where.OR).toBeUndefined(); // no posted-date range
+    expect(where).toMatchObject({ invoiceItem: null, overQuota: false });
+  });
+
+  it("a picked month narrows pending by posted date, owed invoices by raised date, and paid by paid date", async () => {
+    const from = new Date("2026-09-01T00:00:00");
+    const to = new Date("2026-09-30T23:59:59.999");
+    await getPaymentSummary(finance, { from, to, ownerId: "creator-1", q: "memes" });
+    const range = { gte: from, lte: to };
+    const linkWhere = mockPrisma.link.aggregate.mock.calls[0][0].where;
+    expect(linkWhere.OR).toEqual([{ postedAt: range }, { postedAt: null, createdAt: range }]);
+    expect(linkWhere.asset).toEqual({ ownerId: "creator-1", handle: { contains: "memes", mode: "insensitive" } });
+    expect(mockPrisma.invoice.aggregate.mock.calls[0][0].where).toMatchObject({ creatorId: "creator-1", createdAt: range });
+    expect(mockPrisma.payout.aggregate.mock.calls[0][0].where).toMatchObject({ status: "PAID", creatorId: "creator-1", paidAt: range });
+    expect(mockPrisma.invoice.aggregate.mock.calls[1][0].where).toMatchObject({ status: "PAID", creatorId: "creator-1", paidAt: range });
+  });
+
+  it("a link on a DRAFT payout is still pending (not paid until the receipt is in); one on a PAID payout isn't", async () => {
+    await getPaymentSummary(finance);
+    const { where } = mockPrisma.link.aggregate.mock.calls[0][0];
+    expect(where.payoutItem).toBeUndefined();
+    expect(where.AND).toEqual([{ OR: [{ payoutItem: null }, { payoutItem: { payout: { status: "DRAFT" } } }] }]);
     // invoices a payout produced/paid are already in the payout figure
-    expect(mockPrisma.invoice.aggregate.mock.calls[0][0].where.items).toEqual({ none: { link: { payoutItem: { isNot: null } } } });
+    expect(mockPrisma.invoice.aggregate.mock.calls[1][0].where.items).toEqual({ none: { link: { payoutItem: { isNot: null } } } });
   });
 });

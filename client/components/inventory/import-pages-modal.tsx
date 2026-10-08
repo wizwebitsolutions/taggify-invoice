@@ -13,7 +13,7 @@ import { UploadIcon, CheckCircleIcon, DownloadIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { assets as assetsApi, auth as authApi, ApiError, hasAccess, canUse, PAGE_CATEGORIES, type ImportPreview, type ImportPreviewRow, type ImportRowStatus, type ImportResult, type ImportScrapedProfile, type PageOwner } from "@/lib/api-client";
 import { RefreshIcon } from "@/components/icons";
-import { compactNumber, money } from "@/lib/format";
+import { compactNumber, money, followersLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -965,7 +965,7 @@ function FollowersCell({ row, live, fetching }: { row: ImportPreviewRow; live: I
   if (live) {
     return (
       <span title={live.avgViews != null ? `Avg views ${compactNumber(live.avgViews)}` : undefined} data-testid="live-followers">
-        {compactNumber(live.followers)}
+        {followersLabel(live.followers)}
         {live.avgViews != null && <span className="block text-[0.7rem] text-text-faint">{compactNumber(live.avgViews)} avg views</span>}
       </span>
     );
@@ -976,7 +976,7 @@ function FollowersCell({ row, live, fetching }: { row: ImportPreviewRow; live: I
   }
   return (
     <span>
-      {row.followers === null ? <span className="text-text-faint">—</span> : compactNumber(row.followers)}
+      {row.followers === null ? <span className="text-text-faint">—</span> : followersLabel(row.followers)}
       {fetching && <span className="block text-[0.7rem] text-text-faint">fetching…</span>}
     </span>
   );

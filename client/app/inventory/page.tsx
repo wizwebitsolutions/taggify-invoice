@@ -22,7 +22,7 @@ import { ImportPagesModal } from "@/components/inventory/import-pages-modal";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/lib/auth-context";
 import { assets as assetsApi, auth as authApi, LINK_FORMATS as FORMATS, ApiError, hasAccess, type Asset, canUse } from "@/lib/api-client";
-import { money, count, roleLabel, initialsOf, compactNumber, personLabel } from "@/lib/format";
+import { money, count, roleLabel, initialsOf, compactNumber, followersLabel, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -337,6 +337,7 @@ function PagesSection({
                 index={i}
                 token={token}
                 editable={isAdmin}
+                canSetActive={isFullAdmin && isAdmin}
                 selectable={canSelect}
                 selected={selectedAssetIds.has(asset.id)}
                 onToggleSelect={() => toggleSelected(asset.id)}
@@ -450,6 +451,7 @@ function AssetRow({
   index,
   token,
   editable,
+  canSetActive,
   selectable,
   selected,
   onToggleSelect,
@@ -459,6 +461,8 @@ function AssetRow({
   index: number;
   token: string;
   editable: boolean;
+  /** Active / Inactive (8 Oct): PUT /assets/:id/active is ADMIN role + inventory.edit. */
+  canSetActive: boolean;
   selectable: boolean;
   selected: boolean;
   onToggleSelect: () => void;
@@ -498,6 +502,8 @@ function AssetRow({
   });
   const approvalMutation = useMutation({ mutationFn: (approvalStatus: "approved" | "rejected") => assetsApi.setApproval(token, asset.id, approvalStatus), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
   const refreshMutation = useMutation({ mutationFn: () => assetsApi.refreshProfile(token, asset.id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
+  const active = asset.isActive !== false;
+  const activeMutation = useMutation({ mutationFn: (on: boolean) => assetsApi.setActive(token, asset.id, on), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
 
   const reelRate = asset.rateCards.find((rc) => rc.format === "reel");
   const campaigns = asset.campaigns ?? [];
@@ -557,9 +563,10 @@ function AssetRow({
                 </a>
                 {asset.approvalStatus === "pending" && <Tag tone="wait">Pending</Tag>}
                 {asset.approvalStatus === "rejected" && <Tag tone="bad">Rejected</Tag>}
+                {!active && <Tag tone="neutral">Inactive</Tag>}
               </div>
               <p className="text-[0.75rem] text-text-muted sm:hidden">
-                {awaitingScrape ? "Fetching from Instagram…" : compactNumber(asset.followers)}
+                {awaitingScrape ? "Fetching from Instagram…" : followersLabel(asset.followers)}
                 {asset.category ? ` · ${asset.category}` : ""}
               </p>
             </div>
@@ -575,7 +582,7 @@ function AssetRow({
           ) : (
             <>
               <span title={`${count(asset.followers)} followers`} className="font-medium">
-                {compactNumber(asset.followers)}
+                {followersLabel(asset.followers)}
               </span>
               {asset.lastScrapeError && !asset.lastScrapedAt && (
                 <span className="block text-[0.72rem] text-rose" title={asset.lastScrapeError} data-testid="scrape-failed">
@@ -637,6 +644,18 @@ function AssetRow({
                 <RefreshIcon className={cn("h-3 w-3", refreshMutation.isPending && "animate-spin")} />
               </button>
             )}
+            {canSetActive && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => activeMutation.mutate(!active)}
+                disabled={activeMutation.isPending}
+                title={active ? "Inactive pages can't be added to new plans. Everything else stays the same." : "Let this page be added to plans again"}
+                aria-label={`${active ? "Deactivate" : "Activate"} @${asset.handle}`}
+              >
+                {active ? "Deactivate" : "Activate"}
+              </Button>
+            )}
             {editable && (
               <button type="button" onClick={() => setEditing((v) => !v)} className="text-[0.78rem] font-medium text-blue hover:text-text">
                 {editing ? "Close" : "Edit"}
@@ -645,11 +664,12 @@ function AssetRow({
           </div>
         </TD>
       </TR>
-      {(editing || refreshMutation.isError || approvalMutation.isError) && (
+      {(editing || refreshMutation.isError || approvalMutation.isError || activeMutation.isError) && (
         <tr className="border-b border-border bg-surface-2">
           <td colSpan={cols} className="px-[18px] py-3">
             {refreshMutation.isError && <ErrorNotice message={refreshMutation.error instanceof ApiError ? refreshMutation.error.message : "Couldn't refresh from Instagram."} />}
             {approvalMutation.isError && <ErrorNotice message={approvalMutation.error instanceof ApiError ? approvalMutation.error.message : "Couldn't update approval status."} />}
+            {activeMutation.isError && <ErrorNotice message={activeMutation.error instanceof ApiError ? activeMutation.error.message : "Couldn't change whether this page is active."} />}
             {editing && (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_1fr]">
                 <div>

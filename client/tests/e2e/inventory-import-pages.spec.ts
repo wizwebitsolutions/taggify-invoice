@@ -220,7 +220,7 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     // Only placeable handles are asked for; the live count replaces the sheet's, a missing profile is flagged.
     await expect(page.getByTestId("live-followers-status")).toContainText("Followers and avg views are live");
     expect(followersBody).toEqual({ handles: ["big.page", "mystery.page", "blank.owner"] });
-    await expect(rows.nth(0)).toContainText("13.5L");
+    await expect(rows.nth(0)).toContainText("1.4M"); // 1,350,000 followers, written as K / M since 8 Oct
     await expect(rows.nth(0)).toContainText("82K avg views");
     // 22 Sep — a page Instagram doesn't know is flagged "link broken / not found" and never imported.
     await expect(rows.nth(1).getByTitle("Not found on Instagram")).toBeVisible();

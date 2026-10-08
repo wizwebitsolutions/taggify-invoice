@@ -18,7 +18,7 @@ import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { ChevronRightIcon, CheckIcon, ArrowRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { links as linksApi, assets as assetsApi, billing as billingApi, plans as plansApi, campaigns as campaignsApi, hasAccess, type Link as LinkRow, type Plan, type Asset, type BillingProfile, type Campaign } from "@/lib/api-client";
-import { money, count, initialsOf, roleLabel, personLabel } from "@/lib/format";
+import { money, initialsOf, roleLabel, personLabel, followersLabel } from "@/lib/format";
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / DAY));
@@ -349,7 +349,7 @@ function DetailPanel({
       <Card className="flex flex-col" data-testid="approval-detail">
         {header(`@${a.handle}`, `${a.owner?.name ?? "—"} · ${a.category ?? "uncategorised"}`)}
         <div className="grid grid-cols-3 gap-2 p-[18px]">
-          <Stat label="Followers" value={count(a.followers)} />
+          <Stat label="Followers" value={followersLabel(a.followers)} />
           <Stat label="Reel rate" value={a.rateCards.find((r) => r.format === "reel") ? money(Number(a.rateCards.find((r) => r.format === "reel")!.amount)) : "—"} />
           <Stat label="Added" value={new Date(a.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })} />
         </div>

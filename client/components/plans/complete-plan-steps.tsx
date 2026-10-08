@@ -10,7 +10,7 @@ import { ErrorNotice } from "@/components/ui/table-parts";
 import { CheckCircleIcon } from "@/components/icons";
 import { plans as plansApi, assets as assetsApi, ApiError, type Plan } from "@/lib/api-client";
 import { planMissing, type MissingStepKey } from "@/lib/plan-missing";
-import { money, count } from "@/lib/format";
+import { money, followersLabel } from "@/lib/format";
 import { useAuth } from "@/lib/auth-context";
 
 /**
@@ -146,7 +146,7 @@ export function CompletePlanSteps({ token, plan, onClose }: { token: string; pla
                       )}
                     </p>
                     <p className="truncate text-[0.72rem] text-text-faint">
-                      {[p.category, p.followers != null ? `${count(p.followers)} followers` : null, p.format, `${money(p.cost ?? 0)} × ${p.postsPerProfile}`].filter(Boolean).join(" · ")}
+                      {[p.category, p.followers != null ? `${followersLabel(p.followers)} followers` : null, p.format, `${money(p.cost ?? 0)} × ${p.postsPerProfile}`].filter(Boolean).join(" · ")}
                     </p>
                   </div>
                   <Button size="sm" onClick={() => addMutation.mutate(p.handle)} disabled={addMutation.isPending}>

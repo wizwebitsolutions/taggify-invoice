@@ -313,6 +313,11 @@ export async function reviewScreenshot(linkId, admin, { approved, note }) {
   // Checked before the screenshot row is touched, so a refused review
   // leaves nothing half-done (transitionLinkStatus would refuse too).
   if (link.status === "INVOICED") throw ALREADY_INVOICED("review its screenshot");
+  // Only a proof waiting for review can be decided (7 Oct): a stale list (Content's
+  // status menu, Approvals) must not move an already-reviewed or verified post back.
+  if (link.status !== "PENDING_SCREENSHOT_REVIEW") {
+    throw new ApiError(400, "INVALID_STATUS", `Link must be PENDING_SCREENSHOT_REVIEW, is ${link.status}`);
+  }
 
   await prisma.screenshot.update({
     where: { linkId },

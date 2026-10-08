@@ -16,3 +16,20 @@ export async function makeFilePublicViewable({ accessToken, fileId }) {
     throw new Error(`Google Drive API error sharing file: ${res.status} ${await res.text()}`);
   }
 }
+
+/**
+ * Edit access for one person (8 Oct — "on sheet generation there should be
+ * edit access to that email as well who's generating sheet"). No Google
+ * notification email: they get the link in the app straight away. Re-sharing
+ * someone who already has access is a no-op on Google's side.
+ */
+export async function shareFileWithEditor({ accessToken, fileId, email }) {
+  const res = await fetch(`${DRIVE_API}/files/${fileId}/permissions?sendNotificationEmail=false`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "user", role: "writer", emailAddress: email }),
+  });
+  if (!res.ok) {
+    throw new Error(`Google Drive API error sharing file with ${email}: ${res.status} ${await res.text()}`);
+  }
+}

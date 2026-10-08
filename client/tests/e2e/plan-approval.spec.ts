@@ -145,4 +145,39 @@ test.describe("Plan approval workflow", () => {
     await page.getByRole("button", { name: "Delete plan" }).click();
     await expect.poll(() => deleted).toBe(true);
   });
+
+  // 8 Oct — "if a plan is rejected it can be approved again".
+  test("a rejected plan shows Approve again, but no Reject", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [draftPlan({ status: "REJECTED", createdBy: { id: "some-plan-maker", name: "Planner" } })] }));
+    let approved = false;
+    await page.route(`${API_URL}/plans/*/approve`, (route) => {
+      approved = true;
+      return route.fulfill({ json: draftPlan({ status: "APPROVED" }) });
+    });
+
+    await openPlansTab(page);
+    await expect(page.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Approve" }).click();
+    await expect.poll(() => approved).toBe(true);
+  });
+
+  test("the card shows the plan's sheet format, and its owner can change it (8 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [draftPlan({ createdBy: { id: "some-plan-maker", name: "Planner" } })] }));
+    let body: Record<string, unknown> | null = null;
+    await page.route(`${API_URL}/plans/*`, (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      body = route.request().postDataJSON();
+      return route.fulfill({ json: draftPlan({ sheetFormat: "summary" }) });
+    });
+
+    await openPlansTab(page);
+    const select = page.getByRole("combobox", { name: /Sheet format for/ });
+    await expect(select).toHaveValue("breakdown");
+    await select.selectOption("summary");
+    await expect.poll(() => body).toEqual({ sheetFormat: "summary" });
+  });
 });

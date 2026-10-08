@@ -143,6 +143,20 @@ describe("INVOICED is terminal — only rejecting the invoice releases a link", 
   });
 });
 
+// 7 Oct — Content's status menu (and Approvals) can act on a stale row. A proof
+// review on a post that has already moved on must not walk it backwards.
+describe("reviewScreenshot only decides a proof that's waiting for review", () => {
+  for (const status of ["SUBMITTED", "SCREENSHOT_APPROVED", "INSIGHTS_PENDING", "INSIGHTS_APPROVED", "SCREENSHOT_REJECTED", "INVALID"]) {
+    it(`refuses a ${status} post without touching the screenshot or status`, async () => {
+      mockPrisma.screenshot = { update: vi.fn() };
+      mockPrisma.link.findUnique.mockResolvedValue({ id: "l1", status, submittedById: "c1" });
+      await expect(reviewScreenshot("l1", admin, { approved: true })).rejects.toMatchObject({ code: "INVALID_STATUS", statusCode: 400 });
+      expect(mockPrisma.screenshot.update).not.toHaveBeenCalled();
+      expect(mockPrisma.link.update).not.toHaveBeenCalled();
+    });
+  }
+});
+
 describe("reviseLinkCost — per-page cost revision (newTask.md #10)", () => {
   it("updates the link's cost and logs a revision with the previous value", async () => {
     mockPrisma.link.findUnique.mockResolvedValue({ id: "link-1", cost: 1000, status: "SCREENSHOT_APPROVED" });
