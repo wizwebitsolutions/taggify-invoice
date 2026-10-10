@@ -22,6 +22,7 @@ import adminRoutes from "./modules/admin/routes.js";
 import plansRoutes from "./modules/plans/routes.js";
 import googleAuthRoutes from "./modules/integrations/googleAuthRoutes.js";
 import { startCronJobs } from "./modules/jobs/index.js";
+import { startKeepAlive } from "./modules/jobs/keepAlive.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,6 +89,7 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`invoice-taggify server listening on :${PORT}`);
   startCronJobs();
+  startKeepAlive();
   clearStaleScrapeQueue().catch((err) => console.error("clearStaleScrapeQueue failed", err));
 });
 
