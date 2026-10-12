@@ -435,14 +435,8 @@ export function AdminDashboard() {
 
         {isAdmin && (
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Panel
-              title="Recent job runs"
-              action={
-                <PanelAction onClick={() => router.push("/job-runs")}>
-                  View all <ArrowRightIcon className="h-3 w-3" />
-                </PanelAction>
-              }
-            >
+            {/* 12 Oct: the /job-runs page was replaced by Bulk Tracker, so no "View all". */}
+            <Panel title="Recent job runs">
               {jobRunsQuery.isLoading ? (
                 <TableSkeleton rows={3} />
               ) : recentJobRuns.length === 0 ? (

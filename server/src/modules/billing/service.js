@@ -52,11 +52,27 @@ export async function update(id, actor, data) {
   const clean = { ...data };
   if (clean.gstin === "") clean.gstin = null;
   if (clean.msme === "") clean.msme = null;
-  return prisma.billingProfile.update({
+  const updated = await prisma.billingProfile.update({
     where: { id },
     data: { ...clean, ...(isReviewer ? {} : { approvalStatus: "pending" }) },
     include: { user: { select: { id: true, name: true, phoneNumber: true, email: true } } },
   });
+  // 12 Oct: someone editing another account's payout details leaves a trail
+  // (only the fields that actually changed).
+  if (profile.userId !== actor.id) {
+    const before = {};
+    const after = {};
+    for (const [k, v] of Object.entries(clean)) {
+      if (profile[k] !== v) {
+        before[k] = profile[k];
+        after[k] = v;
+      }
+    }
+    if (Object.keys(after).length > 0) {
+      await prisma.permissionAuditLog.create({ data: { targetId: profile.userId, actorId: actor.id, action: "billing_profile_update", before: { billingProfileId: id, ...before }, after: { billingProfileId: id, ...after } } });
+    }
+  }
+  return updated;
 }
 
 export async function setApproval(id, approvalStatus) {

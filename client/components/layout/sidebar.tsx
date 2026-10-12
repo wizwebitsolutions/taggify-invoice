@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ComponentType } from "react";
+import { Radar } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/ui/logo";
@@ -12,7 +13,6 @@ import {
   InventoryIcon,
   AssetIcon,
   TeamIcon,
-  ClockIcon,
   ChevronDownIcon,
   CheckCircleIcon,
   WalletIcon,
@@ -48,6 +48,10 @@ type NavItem = {
    *  access). Their visibility is roles + this switch; global keys never
    *  apply to them. */
   ownKey?: PermissionKey;
+  /** 12 Oct: an opt-in key (api-client OPT_IN_KEYS) — the item shows for
+   *  exactly the accounts holding it, whatever their role, own-scope roles
+   *  included. Overrides every other rule above. */
+  optInKey?: PermissionKey;
 };
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -117,9 +121,9 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // "Team management is available to Creator accounts" fallback and
       // users routes: GET/POST /users/me/team both requireRole("CREATOR")).
       { key: "team", label: "Team", icon: TeamIcon, href: "/team", roles: ["CREATOR"], ownKey: "users.view" },
-      // Gated on finance.edit server-side (23 Sep) — a plain Finance
-      // account holds it by baseline, matching the route.
-      { key: "job-runs", label: "Job runs", icon: ClockIcon, href: "/job-runs", roles: ["ADMIN"], permissionKey: "finance.edit" },
+      // 12 Oct — replaces "Job runs". Opt-in: ADMIN by default, any other
+      // account only once an admin grants Bulk Tracker on People → Edit access.
+      { key: "bulk-track", label: "Bulk Tracker", icon: Radar, href: "/bulk-track", optInKey: "bulkTrack.view" },
     ],
   },
 ];
@@ -130,6 +134,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 type NavUser = { role?: Role; permissions?: Permissions; ownAccess?: Partial<Record<string, boolean>> } | null | undefined;
 
 function canSeeNavItem(item: NavItem, user: NavUser) {
+  if (item.optInKey) return hasAccess(user, item.optInKey);
   const roleAllowed = !item.roles || (!!user?.role && item.roles.includes(user.role));
   // Creator / Team member / Plan maker (24 Sep): their role list plus their
   // own-content switch — never a global key.

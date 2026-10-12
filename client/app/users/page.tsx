@@ -12,6 +12,8 @@ import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, TeamIcon, AssetIcon, SearchIcon } from "@/components/icons";
 import { PageHeader } from "@/components/ui/page-header";
+import { EditDetailsModal } from "@/components/users/edit-details-modal";
+import { KeyRound, Mail, Pencil, ShieldCheck } from "lucide-react";
 import { Tabs } from "@/components/ui/chips";
 import { Tag } from "@/components/ui/tag";
 import { Card, CardHeader, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
@@ -29,6 +31,8 @@ import {
   defaultOwnAccess,
   hasOwnAccess,
   isOwnScopeRole,
+  isOptInKey,
+  OPT_IN_KEYS,
   type User,
   type Role,
   type Permissions,
@@ -46,7 +50,8 @@ const ROLES: Role[] = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER
 const accessBaseline = (role: Role): Permissions => (isOwnScopeRole(role) ? defaultOwnAccess(role) : ROLE_DEFAULT_PERMISSIONS[role]);
 const accessOf = (u: User): Permissions =>
   isOwnScopeRole(u.role)
-    ? (Object.fromEntries(PERMISSION_KEYS.map((k) => [k, hasOwnAccess(u, k)])) as Permissions)
+    ? // Opt-in keys (Bulk Tracker) live on the effective map for every role, not on ownAccess.
+      (Object.fromEntries(PERMISSION_KEYS.map((k) => [k, isOptInKey(k) ? u.permissions?.[k] === true : hasOwnAccess(u, k)])) as Permissions)
     : (u.permissions as Permissions);
 // Only these can be reset / have their email changed by a non-full admin (mirrors admin/service.js).
 const SUB_ADMIN_RESETTABLE_ROLES: Role[] = ["CREATOR", "TEAM_MEMBER"];
@@ -89,6 +94,7 @@ function UsersContent() {
   const [showCreate, setShowCreate] = useState(false);
   const [resettingUser, setResettingUser] = useState<User | null>(null);
   const [emailUser, setEmailUser] = useState<User | null>(null);
+  const [detailsUser, setDetailsUser] = useState<User | null>(null);
   const [editingAccessUser, setEditingAccessUser] = useState<User | null>(null);
   const [tab, setTab] = useState<Role | "ALL">("CREATOR");
   const [search, setSearch] = useState("");
@@ -136,7 +142,8 @@ function UsersContent() {
   // baseline section taken away).
   const hasGrantedAccess = (u: User) => u.role === "FINANCE" && deviatesFromBaseline(u.role, u.permissions);
   // An own-scope account with a section switched off (24 Sep).
-  const hasLimitedAccess = (u: User) => isOwnScopeRole(u.role) && deviatesFromBaseline(u.role, accessOf(u));
+  // A Bulk Tracker grant (opt-in, 12 Oct) is extra access, not a limit — left out of this check.
+  const hasLimitedAccess = (u: User) => isOwnScopeRole(u.role) && PERMISSION_KEYS.some((k) => !isOptInKey(k) && accessOf(u)[k] !== accessBaseline(u.role)[k]);
 
   return (
     <AppShell
@@ -252,22 +259,11 @@ function UsersContent() {
                             </TD>
                             <TD className="hidden whitespace-nowrap text-text-muted xl:table-cell">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</TD>
                             <TD right onClick={(e) => e.stopPropagation()}>
-                              <div className="flex flex-col items-end gap-1">
-                                {canResetPassword(u) && (
-                                  <button type="button" onClick={() => setResettingUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
-                                    Reset password
-                                  </button>
-                                )}
-                                {canResetPassword(u) && (
-                                  <button type="button" onClick={() => setEmailUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
-                                    Change email
-                                  </button>
-                                )}
-                                {u.id !== user?.id && canEditAccess(u) && (
-                                  <button type="button" onClick={() => setEditingAccessUser(u)} className="whitespace-nowrap text-[0.75rem] font-medium text-blue hover:text-text">
-                                    Edit access
-                                  </button>
-                                )}
+                              <div className="flex items-center justify-end gap-1">
+                                {actorIsFullAdmin && <IconAction icon={Pencil} label="Edit details" onClick={() => setDetailsUser(u)} />}
+                                {canResetPassword(u) && <IconAction icon={Mail} label="Change email" onClick={() => setEmailUser(u)} />}
+                                {canResetPassword(u) && <IconAction icon={KeyRound} label="Reset password" onClick={() => setResettingUser(u)} />}
+                                {u.id !== user?.id && canEditAccess(u) && <IconAction icon={ShieldCheck} label="Edit access" onClick={() => setEditingAccessUser(u)} />}
                               </div>
                             </TD>
                           </TR>
@@ -285,19 +281,17 @@ function UsersContent() {
                       title={selected.name ?? "—"}
                       meta={<span className="text-[0.78rem] text-text-muted">{roleLabel(selected.role)} · {selected.email ?? selected.phoneNumber ?? "—"}</span>}
                       action={
-                        canResetPassword(selected) ? (
-                          <div className="flex gap-2">
-                            <Button size="sm" variant="secondary" onClick={() => setEmailUser(selected)}>
-                              Change email
-                            </Button>
-                            <Button size="sm" variant="secondary" onClick={() => setResettingUser(selected)}>
-                              Reset password
-                            </Button>
+                        actorIsFullAdmin || canResetPassword(selected) ? (
+                          <div className="flex gap-1">
+                            {actorIsFullAdmin && <IconAction icon={Pencil} label="Edit details" onClick={() => setDetailsUser(selected)} />}
+                            {canResetPassword(selected) && <IconAction icon={Mail} label="Change email" onClick={() => setEmailUser(selected)} />}
+                            {canResetPassword(selected) && <IconAction icon={KeyRound} label="Reset password" onClick={() => setResettingUser(selected)} />}
                           </div>
                         ) : undefined
                       }
                     />
                     <div className="flex flex-col gap-4 p-[18px]">
+                      {actorIsFullAdmin && <DetailsSummary person={selected} />}
                       <div>
                         <p className="mb-2 text-[0.8125rem] font-semibold">Pages</p>
                         {(pagesByOwner.get(selected.id) ?? []).length === 0 ? (
@@ -327,9 +321,9 @@ function UsersContent() {
                           <p className="mb-2 text-[0.8125rem] font-semibold">{isOwnScopeRole(selected.role) ? "Access (own content only)" : "Access"}</p>
                           <AccessSummary value={accessOf(selected)} role={selected.role} />
                           {selected.id !== user?.id && canEditAccess(selected) && (
-                            <Button size="sm" variant="secondary" className="mt-3" onClick={() => setEditingAccessUser(selected)}>
-                              Edit access
-                            </Button>
+                            <div className="mt-3">
+                              <IconAction icon={ShieldCheck} label="Edit access" onClick={() => setEditingAccessUser(selected)} />
+                            </div>
                           )}
                         </div>
                       )}
@@ -359,6 +353,15 @@ function UsersContent() {
         />
       )}
 
+      {detailsUser && (
+        <EditDetailsModal
+          token={token}
+          targetUser={detailsUser}
+          onClose={() => setDetailsUser(null)}
+          onSaved={() => setDetailsUser(null)}
+        />
+      )}
+
       {editingAccessUser && (
         <EditAccessModal
           token={token}
@@ -371,6 +374,50 @@ function UsersContent() {
         />
       )}
     </AppShell>
+  );
+}
+
+/**
+ * A compact icon action (12 Oct — "use icons instead of text"). The label is
+ * the accessible name and the hover tooltip, so screen readers (and tests)
+ * still find "Reset password", "Change email", "Edit access", "Edit details".
+ */
+function IconAction({ icon: Icon, label, onClick }: { icon: typeof Pencil; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="grid h-8 w-8 place-items-center rounded-md border border-border bg-surface text-text-2 shadow-card transition-colors hover:border-border-strong hover:bg-surface-2 hover:text-text"
+    >
+      <Icon className="h-4 w-4" strokeWidth={2} />
+    </button>
+  );
+}
+
+/** Read-only contact + address in the person panel — check details without opening the editor. */
+function DetailsSummary({ person }: { person: User }) {
+  const address = [person.addressLine1, person.addressLine2, [person.state, person.pincode].filter(Boolean).join(" ")].filter(Boolean);
+  const row = (label: string, value: string | null | undefined) => (
+    <div className="flex justify-between gap-3 text-[0.8125rem]">
+      <span className="text-text-muted">{label}</span>
+      <span className="min-w-0 text-right tabular-nums">{value || <span className="text-text-faint">—</span>}</span>
+    </div>
+  );
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="person-details">
+      <div className="flex flex-col gap-1.5">
+        <p className="mb-0.5 text-[0.8125rem] font-semibold">Contact</p>
+        {row("Email", person.email)}
+        {row("Phone", person.phoneNumber)}
+        {row("Secondary", person.secondaryPhone)}
+      </div>
+      <div>
+        <p className="mb-2 text-[0.8125rem] font-semibold">Address</p>
+        {address.length === 0 ? <p className="text-[0.8125rem] text-text-faint">Not added</p> : <p className="whitespace-pre-line text-[0.8125rem]">{address.join("\n")}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -405,7 +452,9 @@ function EditAccessModal({
   });
 
   // Own-scope roles: send only their own switches (anything else is a 400 on the server).
-  const payload = ownScope ? (Object.fromEntries((OWN_CAPABILITIES[targetUser.role] ?? []).map((k) => [k, values[k]])) as Partial<Permissions>) : values;
+  const payload = ownScope
+    ? (Object.fromEntries([...(OWN_CAPABILITIES[targetUser.role] ?? []), ...OPT_IN_KEYS].map((k) => [k, values[k]])) as Partial<Permissions>)
+    : values;
   const saveMutation = useMutation({
     mutationFn: () => adminApi.updatePermissions(token, targetUser.id, payload as Permissions),
     onSuccess: onSaved,
@@ -631,7 +680,7 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
   const hasCustomAccess = PERMISSION_KEYS.some((k) => permissions[k] !== accessBaseline(role)[k]);
   // Own-scope roles: only their own switches go to the server.
   const permissionsPayload = isOwnScopeRole(role)
-    ? (Object.fromEntries((OWN_CAPABILITIES[role] ?? []).map((k) => [k, permissions[k]])) as Permissions)
+    ? (Object.fromEntries([...(OWN_CAPABILITIES[role] ?? []), ...OPT_IN_KEYS].map((k) => [k, permissions[k]])) as Permissions)
     : permissions;
 
   const createMutation = useMutation({

@@ -20,6 +20,7 @@ const PERMISSION_SECTIONS = {
   links: ["view", "edit", "approve"],
   finance: ["view", "edit", "approve", "pay"],
   plans: ["view", "edit", "approve"],
+  bulkTrack: ["view"],
 } as const;
 const PERMISSION_KEYS = Object.entries(PERMISSION_SECTIONS).flatMap(([s, actions]) => actions.map((a) => `${s}.${a}`));
 const allTrue = () => Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
@@ -103,11 +104,12 @@ export async function mockApi(page: Page) {
     // instead, which its `.map()` then threw on — no test happened to open
     // a link's detail panel under plain mockApi() until campaign-detail.spec.ts did.
     const PAGINATED = ["/api/links", "/api/invoices", "/api/payments/payouts", "/api/payments/pending", "/api/payments/me/pending", "/api/payments/me/payouts"];
+    if (path === "/api/bulk-track/sheet-sources") return route.fulfill({ json: { sources: [], total: 0 } });
     if (PAGINATED.includes(path)) {
       return route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 100 } });
     }
     // Everything else the app reads on nav destinations (/api/campaigns,
-    // /api/assets, /api/billing-profiles, /api/admin/users, /api/admin/job-runs,
+    // /api/assets, /api/billing-profiles, /api/admin/users, /api/admin/job-runs (admin dashboard panel),
     // /api/users/me/team, /api/notifications, /api/links/:id/timeline,
     // /api/links/:id/cost-revisions) is a plain array.
     return route.fulfill({ json: [] });

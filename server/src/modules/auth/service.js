@@ -14,7 +14,7 @@ import { issueOtp, consumeOtp } from "../../lib/auth/emailOtp.js";
 import { issueTrustedDevice, verifyTrustedDevice, revokeTrustedDevices } from "../../lib/auth/trustedDevice.js";
 import { isOtpBypassEmail } from "../../lib/auth/otpBypass.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, computeNewAccountOverlay, isFullAdmin, isOwnScopeRole, ownOverlayFor } from "../../lib/permissions.js";
+import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, computeNewAccountOverlay, clampOptInToActor, isFullAdmin, isOwnScopeRole, ownOverlayFor, OPT_IN_KEYS } from "../../lib/permissions.js";
 
 const BCRYPT_ROUNDS = 12;
 // A valid bcrypt hash of a random string nobody knows — compared against
@@ -78,7 +78,13 @@ export async function signup({ email, phoneNumber, name, role, permissions }, ac
   // CREATOR / TEAM_MEMBER / PLAN_MAKER (24 Sep): their overlay is own-content
   // switches only — any global key is a 400 (lib/permissions.js ownOverlayFor).
   const ownScope = isOwnScopeRole(role);
-  const ownOverlay = ownScope ? ownOverlayFor(role, requested) : null;
+  // An opt-in grant (Bulk Tracker, 12 Oct) is clamped to what the actor holds.
+  let ownRequested = requested;
+  if (ownScope && OPT_IN_KEYS.some((k) => requested[k] === true)) {
+    const actorRecord = actor?.id ? await prisma.user.findUnique({ where: { id: actor.id } }) : null;
+    ownRequested = clampOptInToActor(actorRecord, requested);
+  }
+  const ownOverlay = ownScope ? ownOverlayFor(role, ownRequested) : null;
   const defaultGrant = role === "ADMIN";
   // For ADMIN, always compute — even an empty request must still clamp a
   // restricted actor's own missing keys (the escalation computeNewAccountOverlay

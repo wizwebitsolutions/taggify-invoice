@@ -4,8 +4,9 @@ import { requireRole } from "../../middleware/requireRole.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
 import { prisma } from "../../lib/prisma.js";
-import { getEffectivePermissions, getOwnCapabilities } from "../../lib/permissions.js";
-import { updatePermissionsSchema, updateUserEmailSchema } from "./schemas.js";
+import { getEffectivePermissions, getOwnCapabilities, isFullAdmin } from "../../lib/permissions.js";
+import { updatePermissionsSchema, updateUserEmailSchema, updateUserDetailsSchema } from "./schemas.js";
+import { createBillingProfileSchema } from "../billing/schemas.js";
 import { invoiceNumberingSchema } from "../plans/schemas.js";
 import { getNumbering, setNumbering } from "../../lib/clientInvoiceNumbering.js";
 import { repairInvoicedLinks } from "../../lib/repairInvoicedLinks.js";
@@ -16,8 +17,8 @@ import { financeGoogleSheetExportJob } from "../jobs/financeGoogleSheetExport.js
 const router = Router();
 // No blanket requireRole("ADMIN") here any more (15 Sep) — each route below
 // is gated individually via requireAccess() so a non-admin role granted one
-// of these six sections can reach it, while /job-runs (the one route with
-// no permission key at all) keeps its own explicit requireRole("ADMIN").
+// of these six sections can reach it, while GET /admin/job-runs (keyed on
+// finance.edit) and the run-now triggers follow the same rule.
 router.use(requireAuth);
 
 // Proforma Invoice numbering (user request, 17 Sep — "admin, finance will
@@ -41,8 +42,16 @@ router.put("/invoice-numbering", requireAccess("finance.edit"), validateBody(inv
 
 router.get("/users", requireAccess("users.view"), async (req, res, next) => {
   try {
+    // 12 Oct — contact + address (People → Edit details) go only to a full
+    // admin, the one actor who can edit them; a sub-admin or granted role
+    // with users.view keeps the old, narrower list.
+    const actor = await prisma.user.findUnique({ where: { id: req.user.id }, select: { role: true, permissions: true } });
+    const details = isFullAdmin(actor) ? { secondaryPhone: true, addressLine1: true, addressLine2: true, state: true, pincode: true } : {};
     const users = await prisma.user.findMany({
-      select: { id: true, phoneNumber: true, email: true, emailVerifiedAt: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true },
+      select: {
+        id: true, phoneNumber: true, email: true, emailVerifiedAt: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true,
+        ...details,
+      },
       orderBy: { createdAt: "desc" },
     });
     // Every row carries its *effective* permissions (role defaults merged
@@ -85,6 +94,24 @@ router.put(
 router.put("/users/:id/email", requireAccess("users.edit"), validateBody(updateUserEmailSchema), async (req, res, next) => {
   try {
     res.json(await adminService.updateUserEmail(req.user.id, req.params.id, req.body.email));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Edit someone's name / phone / address (12 Oct) — full admins only, enforced in the service.
+router.put("/users/:id/details", requireAccess("users.edit"), validateBody(updateUserDetailsSchema), async (req, res, next) => {
+  try {
+    res.json(await adminService.updateUserDetails(req.user.id, req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Add a billing profile on someone else's account (12 Oct) — full admins only.
+router.post("/users/:id/billing-profiles", requireAccess("users.edit"), validateBody(createBillingProfileSchema), async (req, res, next) => {
+  try {
+    res.status(201).json(await adminService.createBillingProfileFor(req.user.id, req.params.id, req.body));
   } catch (err) {
     next(err);
   }

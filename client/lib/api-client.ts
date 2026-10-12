@@ -161,7 +161,17 @@ export const PERMISSION_SECTIONS = {
   links: ["view", "edit", "approve"],
   finance: ["view", "edit", "approve", "pay"],
   plans: ["view", "edit", "approve"],
+  // 12 Oct — Bulk Tracker (server lib/permissions.js OPT_IN_KEYS).
+  bulkTrack: ["view"],
 } as const;
+/**
+ * Opt-in keys (12 Oct): grantable to any role — own-scope roles included —
+ * and off for everyone but ADMIN until an admin turns them on. The server's
+ * effective `permissions` map carries them for every role, so hasAccess()
+ * is the gate for all accounts.
+ */
+export const OPT_IN_KEYS = ["bulkTrack.view"] as const;
+export const isOptInKey = (key: string) => (OPT_IN_KEYS as readonly string[]).includes(key);
 export type PermissionSection = keyof typeof PERMISSION_SECTIONS;
 export type PermissionAction = "view" | "edit" | "approve" | "pay";
 export type PermissionKey = {
@@ -277,6 +287,9 @@ export interface User {
   /** Own-content switches for CREATOR / TEAM_MEMBER / PLAN_MAKER (24 Sep); all-false for staff. */
   ownAccess?: Partial<Record<string, boolean>>;
 }
+
+/** The contact + address fields People → Edit details can change (server admin/service.js DETAIL_FIELDS). */
+export type UserDetailField = "name" | "phoneNumber" | "secondaryPhone" | "addressLine1" | "addressLine2" | "state" | "pincode";
 
 export interface BillingProfile {
   id: string;
@@ -1343,6 +1356,12 @@ export const admin = {
   resetPassword: (token: string, userId: string) =>
     request<{ generatedPassword: string }>(`/admin/users/${userId}/reset-password`, { method: "POST", token }),
   // Change a user's email — their login (24 Sep). The new address starts unverified; they're signed out everywhere.
+  // People → Edit details (12 Oct) — full admins only, server-enforced. Send
+  // only what changed; "" clears a field. Email stays on updateUserEmail.
+  updateUserDetails: (token: string, userId: string, body: Partial<Record<UserDetailField, string>>) =>
+    request<Pick<User, "id" | UserDetailField>>(`/admin/users/${userId}/details`, { method: "PUT", token, body }),
+  createBillingProfileFor: (token: string, userId: string, body: { pan: string; name: string; gstin?: string; msme?: string; bankAccountNumber: string; ifscCode: string }) =>
+    request<BillingProfile>(`/admin/users/${userId}/billing-profiles`, { method: "POST", token, body }),
   updateUserEmail: (token: string, userId: string, email: string) =>
     request<{ id: string; email: string; emailVerified: boolean }>(`/admin/users/${userId}/email`, { method: "PUT", token, body: { email } }),
   // Sub-admin permission edits (newTask.md, 8 Sep) — only the keys being
@@ -1580,4 +1599,119 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<Role, Permissions> = {
   PLAN_MAKER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
   CREATOR: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
   TEAM_MEMBER: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])) as Permissions,
+};
+
+// ── Bulk Tracker (12 Oct) — server modules/bulkTrack ───────────────────
+export type BulkRowStatus = "queued" | "done" | "failed" | "broken" | "not_fetched";
+
+export interface BulkBatch {
+  id: string;
+  sourceType: "manual" | "sheet";
+  sheetSourceId: string | null;
+  status: "running" | "done";
+  totalCount: number;
+  successCount: number;
+  failedCount: number;
+  createdAt: string;
+  sheetSource?: { sheetUrl: string } | null;
+}
+
+export interface BulkBatchProfile {
+  id: string;
+  username: string;
+  profileUrl: string;
+  category: string | null;
+  status: BulkRowStatus;
+  failureReason: string | null;
+  followers: number | null;
+}
+
+export interface BulkPostMetrics {
+  id: string;
+  permalink: string;
+  status: BulkRowStatus;
+  postType: "reel" | "post" | null;
+  failureReason: string | null;
+  views: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  reposts: number | null;
+  saves: number | null;
+}
+
+export interface BulkPostRow extends BulkPostMetrics {
+  createdAt: string;
+}
+
+export interface BulkBatchDetail {
+  batch: BulkBatch;
+  profiles: BulkBatchProfile[];
+  posts: BulkPostMetrics[];
+}
+
+export interface BulkSheetSource {
+  id: string;
+  name: string | null;
+  sheetUrl: string;
+  gid: string;
+  profileLinkCol: string | null;
+  postLinkCol: string | null;
+  categoryCol: string | null;
+  followersCol: string | null;
+  dateCol: string | null;
+  pageNameCol: string | null;
+  fetchFollowers: boolean;
+  fetchEngagement: boolean;
+  lastCheckedAt: string | null;
+  createdAt: string;
+}
+
+export interface BulkSheetPreview {
+  headers: string[];
+  sampleRow: Record<string, string> | null;
+  rowCount: number;
+  rows: Record<string, string>[];
+}
+
+export interface BulkSheetSourceInput {
+  sheetUrl: string;
+  gid?: string;
+  name?: string;
+  profileLinkCol?: string;
+  postLinkCol?: string;
+  categoryCol?: string;
+  followersCol?: string;
+  dateCol?: string;
+  pageNameCol?: string;
+  fetchFollowers: boolean;
+  fetchEngagement: boolean;
+}
+
+/** `null` = manual entries (source=internal); an id = that sheet's posts. */
+const bulkPostsQuery = (sheetSourceId: string | null) =>
+  sheetSourceId ? `?source=sheet&sheetSourceId=${encodeURIComponent(sheetSourceId)}` : "?source=internal";
+
+export const bulkTrack = {
+  createBatch: (token: string, body: { profileLinks: string[]; postLinks: string[] }) =>
+    request<{ batchId: string; queued: { profiles: number; posts: number }; skipped: { profiles: number; posts: number } }>("/bulk-track/batches", { method: "POST", token, body }),
+  batches: (token: string) => request<BulkBatch[]>("/bulk-track/batches", { token }),
+  batch: (token: string, id: string) => request<BulkBatchDetail>(`/bulk-track/batches/${id}`, { token }),
+  exportBatch: (token: string, id: string) => downloadBinary(`${API_URL}/bulk-track/batches/${id}/export`, token, `bulk-track-${id}.xlsx`),
+  refreshBatch: (token: string, id: string) => request<{ queued: number }>(`/bulk-track/batches/${id}/refresh`, { method: "POST", token }),
+  deleteBatch: (token: string, id: string) =>
+    request<{ success: true; deleted: { posts: number; profiles: number } }>(`/bulk-track/batches/${id}`, { method: "DELETE", token }),
+  posts: (token: string, sheetSourceId: string | null) => request<BulkPostRow[]>(`/bulk-track/posts${bulkPostsQuery(sheetSourceId)}`, { token }),
+  refreshPosts: (token: string, sheetSourceId: string | null) =>
+    request<{ queued: number }>(`/bulk-track/posts/refresh${bulkPostsQuery(sheetSourceId)}`, { method: "POST", token }),
+  previewSheet: (token: string, body: { sheetUrl: string; gid?: string }) =>
+    request<BulkSheetPreview>("/bulk-track/sheet-sources/preview", { method: "POST", token, body }),
+  connectSheet: (token: string, body: BulkSheetSourceInput) =>
+    request<{ sheetSourceId: string; batchId: string; imported: { rows: number; profiles: number; posts: number } }>("/bulk-track/sheet-sources", { method: "POST", token, body }),
+  sheetSources: (token: string, page: number, pageSize: number) =>
+    request<{ sources: BulkSheetSource[]; total: number }>(`/bulk-track/sheet-sources?page=${page}&pageSize=${pageSize}`, { token }),
+  checkSheet: (token: string, id: string) =>
+    request<{ newRowsFound: number; batchId: string | null; imported: { rows: number; profiles: number; posts: number } }>(`/bulk-track/sheet-sources/${id}/check`, { method: "POST", token }),
+  deleteSheet: (token: string, id: string) =>
+    request<{ success: true; deleted: { posts: number; profiles: number; batches: number } }>(`/bulk-track/sheet-sources/${id}`, { method: "DELETE", token }),
 };

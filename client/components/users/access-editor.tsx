@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
-import { PERMISSION_SECTIONS, OWN_CAPABILITIES, isOwnScopeRole, type PermissionAction, type PermissionKey, type PermissionSection, type Permissions, type Role } from "@/lib/api-client";
+import { PERMISSION_SECTIONS, OWN_CAPABILITIES, isOwnScopeRole, isOptInKey, type PermissionAction, type PermissionKey, type PermissionSection, type Permissions, type Role } from "@/lib/api-client";
 
 /**
  * Per-section access editor (user request, 23 Sep — "user selects Invoices,
@@ -56,6 +56,13 @@ export const SECTION_META: Record<PermissionSection, { label: string; view: stri
       edit: { label: "Edit", hint: "Create, edit and delete any plan, sheets, client invoice" },
       approve: { label: "Approve", hint: "Approve or reject any plan" },
     },
+  },
+  // 12 Oct — opt-in (any role, off by default except Admin). Rows are always
+  // the account's own batches; only an Admin sees everyone's.
+  bulkTrack: {
+    label: "Bulk Tracker",
+    view: "Use the Bulk Tracker — market-research Instagram scraping of any profile or post links",
+    actions: {},
   },
 };
 
@@ -110,7 +117,8 @@ const keyOf = (section: PermissionSection, action: PermissionAction) => `${secti
 function sectionsFor(role?: Role): PermissionSection[] {
   if (!isOwnScopeRole(role)) return SECTION_ORDER;
   const allowed = OWN_CAPABILITIES[role!] ?? [];
-  return SECTION_ORDER.filter((s) => allowed.includes(keyOf(s, "view")));
+  // Opt-in sections (Bulk Tracker) can be given to any role, own-scope too.
+  return SECTION_ORDER.filter((s) => allowed.includes(keyOf(s, "view")) || isOptInKey(keyOf(s, "view")));
 }
 function actionsOf(section: PermissionSection, role?: Role) {
   const all = PERMISSION_SECTIONS[section].filter((a) => a !== "view") as PermissionAction[];
@@ -165,7 +173,7 @@ export function AccessEditor({
     <div className="flex flex-col gap-2" data-testid="access-editor">
       {isOwnScopeRole(role) && (
         <p className="text-[0.75rem] text-text-muted" data-testid="access-own-note">
-          Only ever their own content — nothing here gives access to anyone else&apos;s. Everything starts on; uncheck to take a section away.
+          Only ever their own content — nothing here gives access to anyone else&apos;s. Everything starts on (except Bulk Tracker, which is off until you grant it); uncheck to take a section away.
         </p>
       )}
       {sectionsFor(role).map((section) => {

@@ -2,7 +2,8 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../../lib/prisma.js";
 import { generatePassword } from "../../lib/auth/passwordGenerator.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, clampPatchToActor, isFullAdmin, isOwnScopeRole, ownOverlayFor } from "../../lib/permissions.js";
+import * as billingService from "../billing/service.js";
+import { getEffectivePermissions, getOwnCapabilities, sanitizePermissionsInput, clampPatchToActor, clampOptInToActor, isFullAdmin, isOwnScopeRole, ownOverlayFor } from "../../lib/permissions.js";
 
 const BCRYPT_ROUNDS = 12;
 export const ROLES = ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"];
@@ -187,7 +188,7 @@ export async function updateUserPermissions(actorId, targetId, patch) {
   // Own-scope roles (24 Sep): own-content switches only (400 on any global
   // key); stored minimally — only what's switched off.
   const merged = isOwnScopeRole(target.role)
-    ? ownOverlayFor(target.role, requested, before)
+    ? ownOverlayFor(target.role, clampOptInToActor(actor, requested), before)
     : { ...(before ?? {}), ...clampPatchToActor(actor, requested) };
 
   const [row] = await prisma.$transaction([
@@ -197,4 +198,69 @@ export async function updateUserPermissions(actorId, targetId, patch) {
 
   const { passwordHash: _omit, ...updated } = row;
   return { ...updated, permissions: getEffectivePermissions(updated), ownAccess: getOwnCapabilities(updated) };
+}
+
+export const DETAIL_FIELDS = ["name", "phoneNumber", "secondaryPhone", "addressLine1", "addressLine2", "state", "pincode"];
+
+function assertFullAdmin(actor) {
+  if (!isFullAdmin(actor)) throw new ApiError(403, "FULL_ADMIN_ONLY", "Only a full admin can edit someone else's details.");
+}
+
+/**
+ * People → Edit details (12 Oct): a full admin edits another account's
+ * name, phone, secondary phone and address. Full admins only (user
+ * decision) — a sub-admin or a role granted users.edit gets 403. Only the
+ * fields that actually change are written, and audit-logged before/after.
+ * "" clears a field. The login email is untouched (see updateUserEmail).
+ */
+export async function updateUserDetails(actorId, userId, patch) {
+  const actor = await loadActor(actorId);
+  assertFullAdmin(actor);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+
+  const before = {};
+  const after = {};
+  for (const field of DETAIL_FIELDS) {
+    if (!(field in patch)) continue;
+    const value = patch[field] === "" ? null : patch[field];
+    if (value === user[field]) continue;
+    before[field] = user[field];
+    after[field] = value;
+  }
+  if (Object.keys(after).length === 0) return publicDetails(user);
+
+  if (after.phoneNumber) {
+    const holder = await prisma.user.findUnique({ where: { phoneNumber: after.phoneNumber } });
+    if (holder && holder.id !== userId) throw new ApiError(409, "PHONE_ALREADY_REGISTERED", "Another account already uses this phone number");
+  }
+
+  try {
+    const [updated] = await prisma.$transaction([
+      prisma.user.update({ where: { id: userId }, data: after }),
+      prisma.permissionAuditLog.create({ data: { targetId: userId, actorId, action: "details_change", before, after } }),
+    ]);
+    return publicDetails(updated);
+  } catch (err) {
+    if (err?.code === "P2002") throw new ApiError(409, "PHONE_ALREADY_REGISTERED", "Another account already uses this phone number");
+    throw err;
+  }
+}
+
+function publicDetails(user) {
+  return Object.fromEntries([["id", user.id], ...DETAIL_FIELDS.map((f) => [f, user[f] ?? null])]);
+}
+
+/** People → Edit details → Billing: a full admin adds a billing profile on someone else's account (starts pending, like any other). */
+export async function createBillingProfileFor(actorId, userId, data) {
+  const actor = await loadActor(actorId);
+  assertFullAdmin(actor);
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+  if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  const created = await billingService.create(userId, data);
+  // A payout bank account added on someone else's behalf is money — leave a trail.
+  await prisma.permissionAuditLog.create({
+    data: { targetId: userId, actorId, action: "billing_profile_create", before: null, after: { billingProfileId: created.id, pan: created.pan, bankAccountNumber: created.bankAccountNumber, ifscCode: created.ifscCode } },
+  });
+  return created;
 }

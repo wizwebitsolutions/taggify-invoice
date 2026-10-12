@@ -6,7 +6,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Sheet } from "@/components/ui/sheet";
 import { AVATAR_TONE, canSeeNavKey, type SidebarUser } from "@/components/layout/sidebar";
-import { BellIcon, TeamIcon, ClockIcon, AssetIcon, WalletIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
+import { Radar } from "lucide-react";
+
+import { BellIcon, TeamIcon, AssetIcon, WalletIcon, MoonIcon, SunIcon, LogoutIcon, ChevronRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { notifications as notificationsApi } from "@/lib/api-client";
@@ -149,8 +151,8 @@ export function MoreSheet({ onClose, user }: { onClose: () => void; user: Sideba
       {canSeeNavKey("users", authUser) && (
         <MenuRow href="/users" onClose={onClose} icon={<TeamIcon className="h-4 w-4" />} label="People" />
       )}
-      {canSeeNavKey("job-runs", authUser) && (
-        <MenuRow href="/job-runs" onClose={onClose} icon={<ClockIcon className="h-4 w-4" />} label="Job runs" />
+      {canSeeNavKey("bulk-track", authUser) && (
+        <MenuRow href="/bulk-track" onClose={onClose} icon={<Radar className="h-4 w-4" />} label="Bulk Tracker" />
       )}
       {/* Payouts + receivables for finance.pay; a creator's own payouts (24 Sep). */}
       {canSeeNavKey("payments", authUser) && (

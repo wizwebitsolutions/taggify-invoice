@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { RequireAuth } from "@/components/auth/require-auth";
+import { BillingProfileForm, type BillingProfileValues } from "@/components/billing/billing-profile-form";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
@@ -450,71 +451,26 @@ function BillingTab({ token, isReviewer }: { token: string; isReviewer: boolean 
 
 /** Add (no `profile`) or edit (with one) a billing profile — same form, prefilled for an edit. */
 function BillingProfileModal({ token, profile, onClose, onSaved }: { token: string; profile?: BillingProfile; onClose: () => void; onSaved: () => void }) {
-  const [pan, setPan] = useState(profile?.pan ?? "");
-  const [name, setName] = useState(profile?.name ?? "");
-  const [gstin, setGstin] = useState(profile?.gstin ?? "");
-  const [msme, setMsme] = useState(profile?.msme ?? "");
-  const [bankAccountNumber, setBankAccountNumber] = useState(profile?.bankAccountNumber ?? "");
-  const [ifscCode, setIfscCode] = useState(profile?.ifscCode ?? "");
-
-  const createMutation = useMutation({
-    mutationFn: () =>
+  const saveMutation = useMutation({
+    mutationFn: (v: BillingProfileValues) =>
       profile
-        ? billingApi.update(token, profile.id, { pan: pan.toUpperCase(), name, gstin: gstin || null, msme: msme || null, bankAccountNumber, ifscCode: ifscCode.toUpperCase() })
-        : billingApi.create(token, { pan: pan.toUpperCase(), name, gstin: gstin || undefined, msme: msme || undefined, bankAccountNumber, ifscCode: ifscCode.toUpperCase() }),
+        ? billingApi.update(token, profile.id, { pan: v.pan, name: v.name, gstin: v.gstin || null, msme: v.msme || null, bankAccountNumber: v.bankAccountNumber, ifscCode: v.ifscCode })
+        : billingApi.create(token, { pan: v.pan, name: v.name, gstin: v.gstin || undefined, msme: v.msme || undefined, bankAccountNumber: v.bankAccountNumber, ifscCode: v.ifscCode }),
     onSuccess: onSaved,
   });
 
   return (
     <Sheet onClose={onClose} panelClassName="md:max-w-[460px]">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          createMutation.mutate();
-        }}
-        className="flex flex-col gap-5 overflow-y-auto p-6 pt-1"
-        data-testid="billing-profile-form"
-      >
+      <div className="flex flex-col gap-5 overflow-y-auto p-6 pt-1">
         <h2 className="text-lg font-semibold">{profile ? `Edit billing profile — ${profile.pan}` : "Add a billing profile"}</h2>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="PAN">
-            <TextField required value={pan} onChange={(v) => setPan(v.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="ABCDE1234F" maxLength={10} aria-label="PAN" />
-            <FieldError message={pan ? VALIDATORS.pan(pan) : null} />
-          </Field>
-          <Field label="Name on PAN">
-            <TextField required value={name} onChange={setName} aria-label="Name on PAN" />
-          </Field>
-          <Field label="GSTIN (optional)">
-            <TextField value={gstin} onChange={(v) => setGstin(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 15))} placeholder="27ABCDE1234F1Z5" maxLength={15} aria-label="GSTIN" />
-            <FieldError message={VALIDATORS.gstin(gstin)} />
-          </Field>
-          <Field label="MSME number (optional)">
-            <TextField value={msme} onChange={setMsme} />
-          </Field>
-          <Field label="Bank account number">
-            <TextField required inputMode="numeric" value={bankAccountNumber} onChange={(v) => setBankAccountNumber(digitsOnly(v, 18))} maxLength={18} aria-label="Bank account number" />
-            <FieldError message={bankAccountNumber ? VALIDATORS.bankAccount(bankAccountNumber) : null} />
-          </Field>
-          <Field label="IFSC code">
-            <TextField required value={ifscCode} onChange={(v) => setIfscCode(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 11))} placeholder="HDFC0001234" maxLength={11} aria-label="IFSC code" />
-            <FieldError message={ifscCode ? VALIDATORS.ifsc(ifscCode) : null} />
-          </Field>
-        </div>
-
-        {createMutation.isError && (
-          <ErrorNotice message={createMutation.error instanceof ApiError ? createMutation.error.message : `Couldn't ${profile ? "save" : "add"} this billing profile.`} />
-        )}
-
-        <div className="flex gap-2.5">
-          <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" className="flex-1" disabled={createMutation.isPending || Boolean(VALIDATORS.pan(pan) || VALIDATORS.gstin(gstin) || VALIDATORS.ifsc(ifscCode) || VALIDATORS.bankAccount(bankAccountNumber)) || !name.trim()}>
-            {createMutation.isPending ? (profile ? "Saving…" : "Adding…") : profile ? "Save changes" : "Add profile"}
-          </Button>
-        </div>
-      </form>
+        <BillingProfileForm
+          profile={profile}
+          onSubmit={(v) => saveMutation.mutate(v)}
+          onCancel={onClose}
+          submitting={saveMutation.isPending}
+          error={saveMutation.isError ? (saveMutation.error instanceof ApiError ? saveMutation.error.message : `Couldn't ${profile ? "save" : "add"} this billing profile.`) : null}
+        />
+      </div>
     </Sheet>
   );
 }

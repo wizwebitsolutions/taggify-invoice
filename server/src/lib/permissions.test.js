@@ -23,7 +23,8 @@ import { ApiError } from "../middleware/errorHandler.js";
 
 describe("key model (23 Sep — per-action keys)", () => {
   it("has one key per section × action, every one shaped <section>.<action>", () => {
-    expect(PERMISSION_KEYS).toHaveLength(17);
+    // 17 section keys + bulkTrack.view (12 Oct).
+    expect(PERMISSION_KEYS).toHaveLength(18);
     for (const key of PERMISSION_KEYS) {
       const [section, action] = key.split(".");
       expect(SECTIONS[section]).toContain(action);
@@ -293,5 +294,58 @@ describe("own-scope roles: own-content switches instead of global grants (24 Sep
     for (const role of ["CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) {
       expect(OWN_CAPABILITIES[role], role).not.toContain("finance.pay");
     }
+  });
+});
+
+describe("opt-in keys (12 Oct — bulkTrack.view, grantable to any role)", () => {
+  it("is on for ADMIN and off for every other role by default", () => {
+    expect(getEffectivePermissions({ role: "ADMIN", permissions: null })["bulkTrack.view"]).toBe(true);
+    for (const role of ["FINANCE", "CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) {
+      expect(hasPermission({ role, permissions: null }, "bulkTrack.view")).toBe(false);
+    }
+  });
+
+  it("can be granted to a staff role and taken away from an admin", () => {
+    expect(hasPermission({ role: "FINANCE", permissions: { "bulkTrack.view": true } }, "bulkTrack.view")).toBe(true);
+    expect(hasPermission({ role: "ADMIN", permissions: { "bulkTrack.view": false } }, "bulkTrack.view")).toBe(false);
+  });
+
+  it("can be granted to an own-scope role without opening any global key", () => {
+    const creator = { role: "CREATOR", permissions: { "bulkTrack.view": true } };
+    const effective = getEffectivePermissions(creator);
+    expect(effective["bulkTrack.view"]).toBe(true);
+    expect(Object.entries(effective).filter(([, v]) => v).map(([k]) => k)).toEqual(["bulkTrack.view"]);
+    // Their own-content switches are untouched by the grant (all still on).
+    const own = getOwnCapabilities(creator);
+    for (const key of OWN_CAPABILITIES.CREATOR) expect(own[key]).toBe(true);
+    expect(own["bulkTrack.view"]).toBe(true);
+  });
+
+  it("ownOverlayFor accepts the grant, keeps it across later patches, and drops it when switched off", () => {
+    const granted = ownOverlayFor("CREATOR", { "bulkTrack.view": true });
+    expect(granted).toEqual({ "bulkTrack.view": true });
+    const laterPatch = ownOverlayFor("CREATOR", { "finance.edit": false }, granted);
+    expect(laterPatch).toEqual({ "finance.edit": false, "bulkTrack.view": true });
+    expect(getOwnCapabilities({ role: "CREATOR", permissions: laterPatch })["finance.edit"]).toBe(false);
+    expect(ownOverlayFor("CREATOR", { "bulkTrack.view": false }, laterPatch)).toEqual({ "finance.edit": false });
+    expect(ownOverlayFor("CREATOR", { "bulkTrack.view": false }, granted)).toBeNull();
+  });
+
+  it("still rejects any other global key for an own-scope role", () => {
+    expect(() => ownOverlayFor("CREATOR", { "bulkTrack.view": true, "finance.pay": true })).toThrow(ApiError);
+  });
+
+  it("a restricted actor can't grant it if they don't hold it", () => {
+    const actor = { role: "ADMIN", permissions: { "bulkTrack.view": false } };
+    expect(clampPatchToActor(actor, { "bulkTrack.view": true })).toEqual({ "bulkTrack.view": false });
+  });
+});
+
+describe("clampOptInToActor (12 Oct)", () => {
+  it("drops an opt-in grant the actor doesn't hold, keeps it when they do", async () => {
+    const { clampOptInToActor } = await import("./permissions.js");
+    expect(clampOptInToActor({ role: "ADMIN", permissions: { "bulkTrack.view": false } }, { "bulkTrack.view": true, "finance.view": false })).toEqual({ "bulkTrack.view": false, "finance.view": false });
+    expect(clampOptInToActor({ role: "ADMIN", permissions: null }, { "bulkTrack.view": true })).toEqual({ "bulkTrack.view": true });
+    expect(clampOptInToActor(null, { "bulkTrack.view": true })).toEqual({ "bulkTrack.view": false });
   });
 });

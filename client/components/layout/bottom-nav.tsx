@@ -31,7 +31,7 @@ export function BottomNav({ active, user }: { active: string; user: SidebarUser 
   // switched off shouldn't get the tab here either).
   const { user: authUser } = useAuth();
   const tabs = TABS.filter((t) => canSeeNavKey(t.key, authUser));
-  const isMore = active === "profile" || active === "team" || active === "users" || active === "job-runs" || active === "plans" || active === "payments";
+  const isMore = active === "profile" || active === "team" || active === "users" || active === "bulk-track" || active === "plans" || active === "payments";
 
   return (
     <>

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockPrisma = {
   billingProfile: { findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn(), create: vi.fn() },
   user: { findUnique: vi.fn() },
+  permissionAuditLog: { create: vi.fn() },
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
@@ -25,6 +26,10 @@ describe("update — who may edit a billing profile, and what it does to approva
 
     const { data } = mockPrisma.billingProfile.update.mock.calls[0][0];
     expect(data).toEqual({ name: "New Name", gstin: null });
+    // 12 Oct: an edit on someone else's profile is audit-logged, changed fields only.
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith({
+      data: { targetId: "creator-1", actorId: "admin-1", action: "billing_profile_update", before: { billingProfileId: "bp-1", name: undefined, gstin: undefined }, after: { billingProfileId: "bp-1", name: "New Name", gstin: null } },
+    });
   });
 
   it("the owner edits their own profile, which goes back to pending", async () => {
@@ -33,6 +38,8 @@ describe("update — who may edit a billing profile, and what it does to approva
     await update("bp-1", { id: "creator-1", role: "CREATOR" }, { bankAccountNumber: "123456789" });
 
     expect(mockPrisma.billingProfile.update.mock.calls[0][0].data).toEqual({ bankAccountNumber: "123456789", approvalStatus: "pending" });
+    // The owner's own edit isn't an admin action — no audit row.
+    expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
   });
 
   it("another creator is refused, even with a stored finance grant (regression (24 Sep — own-scope roles never get global access)); a FINANCE account is allowed", async () => {

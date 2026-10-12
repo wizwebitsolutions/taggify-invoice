@@ -40,7 +40,21 @@ export const SECTIONS = {
   links: ["view", "edit", "approve"],
   finance: ["view", "edit", "approve", "pay"],
   plans: ["view", "edit", "approve"],
+  // 12 Oct: Bulk Tracker (market-research Instagram scraping, ported from
+  // affiliate-creator-tool). One key: "may use the tool" — rows are always
+  // scoped to the user's own batches unless they are a full admin.
+  bulkTrack: ["view"],
 };
+
+/**
+ * Opt-in keys (12 Oct — "every user whom we give access to"): grantable to
+ * ANY role, own-scope roles included, and OFF by default for everyone but
+ * ADMIN. Unlike every other key they don't widen an own-scope account's reach
+ * to someone else's data — the feature itself only ever shows the user their
+ * own rows — so a CREATOR can hold one without breaking the own-scope rule.
+ * Stored on the overlay as `true` when granted (absence = off).
+ */
+export const OPT_IN_KEYS = ["bulkTrack.view"];
 
 export const PERMISSION_KEYS = Object.entries(SECTIONS).flatMap(([section, actions]) => actions.map((a) => `${section}.${a}`));
 
@@ -135,6 +149,15 @@ export function getOwnCapabilities(user) {
   for (const [section, actions] of Object.entries(SECTIONS)) {
     if (out[`${section}.view`] === false) for (const a of actions) out[`${section}.${a}`] = false;
   }
+  Object.assign(out, optInGrants(user.permissions));
+  return out;
+}
+
+/** {key: true} for each opt-in key the stored overlay grants — off when absent. */
+export function optInGrants(stored) {
+  const out = {};
+  if (!stored || typeof stored !== "object") return out;
+  for (const key of OPT_IN_KEYS) if (stored[key] === true) out[key] = true;
   return out;
 }
 
@@ -153,7 +176,8 @@ export function hasOwnCapability(user, key) {
 export function ownStoredOverlay(role, stored) {
   const allowed = OWN_CAPABILITIES[role] ?? [];
   if (!stored || typeof stored !== "object") return {};
-  const entries = Object.entries(stored);
+  // Opt-in grants live alongside the off-switches; they aren't part of the shape check.
+  const entries = Object.entries(stored).filter(([k]) => !OPT_IN_KEYS.includes(k));
   const ownShape = entries.every(([k, v]) => allowed.includes(k) && v === false);
   return ownShape ? Object.fromEntries(entries) : {};
 }
@@ -166,7 +190,7 @@ export function ownStoredOverlay(role, stored) {
  */
 export function ownOverlayFor(role, requested, existing = null) {
   const allowed = OWN_CAPABILITIES[role] ?? [];
-  const bad = Object.keys(requested ?? {}).filter((k) => !allowed.includes(k) && requested[k] === true);
+  const bad = Object.keys(requested ?? {}).filter((k) => !allowed.includes(k) && !OPT_IN_KEYS.includes(k) && requested[k] === true);
   if (bad.length > 0) {
     throw new ApiError(400, "OWN_SCOPE_ONLY", `These can't be given to this role: ${bad.join(", ")}. A ${role.toLowerCase().replace("_", " ")} only ever gets access to their own content.`);
   }
@@ -175,6 +199,10 @@ export function ownOverlayFor(role, requested, existing = null) {
   for (const key of allowed) {
     const value = typeof requested?.[key] === "boolean" ? requested[key] : typeof current[key] === "boolean" ? current[key] : true;
     if (value === false) merged[key] = false;
+  }
+  for (const key of OPT_IN_KEYS) {
+    const value = typeof requested?.[key] === "boolean" ? requested[key] : existing?.[key] === true;
+    if (value === true) merged[key] = true;
   }
   return Object.keys(merged).length > 0 ? merged : null;
 }
@@ -212,7 +240,8 @@ export function applyViewImplication(map) {
 export function getEffectivePermissions(user) {
   // Own-scope roles never hold a global key, whatever an old or tampered
   // overlay says — their switches are getOwnCapabilities.
-  if (isOwnScopeRole(user?.role)) return allFalse();
+  // The only exception is an opt-in key (OPT_IN_KEYS) an admin granted them.
+  if (isOwnScopeRole(user?.role)) return { ...allFalse(), ...optInGrants(user.permissions) };
   const effective = { ...roleDefaults(user?.role) };
   const overlay = expandLegacyOverlay(user?.permissions);
   if (overlay) {
@@ -302,6 +331,18 @@ export function computeNewAccountOverlay(actorUser, requestedOverlay, role) {
   const overlay = {};
   for (const key of PERMISSION_KEYS) if (wanted[key] !== defaults[key]) overlay[key] = wanted[key];
   return overlay;
+}
+
+/**
+ * Opt-in grants for an own-scope target go through ownOverlayFor, which has
+ * no actor — so clamp them here first: an actor can only hand out an opt-in
+ * key they hold themselves (same rule clampPatchToActor applies to staff).
+ */
+export function clampOptInToActor(actorUser, requested) {
+  const actorEffective = getEffectivePermissions(actorUser);
+  const out = { ...(requested ?? {}) };
+  for (const key of OPT_IN_KEYS) if (out[key] === true && actorEffective[key] !== true) out[key] = false;
+  return out;
 }
 
 export function clampPatchToActor(actorUser, requestedPatch) {

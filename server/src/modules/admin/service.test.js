@@ -6,11 +6,12 @@ const mockPrisma = {
   refreshToken: { updateMany: vi.fn() },
   trustedDevice: { deleteMany: vi.fn() },
   permissionAuditLog: { create: vi.fn() },
+  billingProfile: { findUnique: vi.fn(), create: vi.fn() },
   $transaction: vi.fn(async (ops) => Promise.all(ops)),
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
-const { resetUserPassword, updateUserPermissions, updateUserRole, updateUserEmail } = await import("./service.js");
+const { resetUserPassword, updateUserPermissions, updateUserRole, updateUserEmail, updateUserDetails, createBillingProfileFor } = await import("./service.js");
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -386,5 +387,71 @@ describe("updateUserEmail — admin fixes a user's login email (24 Sep)", () => 
     expect(result.emailVerified).toBe(true);
     expect(mockPrisma.user.update).not.toHaveBeenCalled();
     expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateUserDetails (12 Oct, People: Edit details, full admins only)", () => {
+  const creator = { id: "cr-1", role: "CREATOR", name: "Old Name", phoneNumber: "+919000000001", secondaryPhone: null, addressLine1: "1 Old St", addressLine2: null, state: "MH", pincode: "400001", passwordHash: "x" };
+  const users = (actor, extra = {}) =>
+    mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+      if (where.id === actor.id) return actor;
+      if (where.id === "cr-1") return creator;
+      if (where.phoneNumber) return extra[where.phoneNumber] ?? null;
+      return null;
+    });
+
+  it("a full admin edits a creator; only changed fields are written and audit-logged; blank clears", async () => {
+    users(fullAdmin);
+    mockPrisma.user.update.mockImplementation(async ({ data }) => ({ ...creator, ...data }));
+    const out = await updateUserDetails("actor-1", "cr-1", { name: "New Name", addressLine1: "", state: "MH", pincode: "411001" });
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({ where: { id: "cr-1" }, data: { name: "New Name", addressLine1: null, pincode: "411001" } });
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith({
+      data: { targetId: "cr-1", actorId: "actor-1", action: "details_change", before: { name: "Old Name", addressLine1: "1 Old St", pincode: "400001" }, after: { name: "New Name", addressLine1: null, pincode: "411001" } },
+    });
+    expect(out).toMatchObject({ id: "cr-1", name: "New Name", addressLine1: null, state: "MH" });
+    expect(out).not.toHaveProperty("passwordHash");
+  });
+
+  it("a restricted sub-admin and a granted planner are refused (403 FULL_ADMIN_ONLY)", async () => {
+    users(subAdminWithUsers);
+    await expectApiError(updateUserDetails("actor-2", "cr-1", { name: "X" }), "FULL_ADMIN_ONLY", 403);
+    users(grantedPlanner);
+    await expectApiError(updateUserDetails("actor-3", "cr-1", { name: "X" }), "FULL_ADMIN_ONLY", 403);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("a phone another account already uses is a 409", async () => {
+    users(fullAdmin, { "+919000000002": { id: "someone-else" } });
+    await expectApiError(updateUserDetails("actor-1", "cr-1", { phoneNumber: "+919000000002" }), "PHONE_ALREADY_REGISTERED", 409);
+  });
+
+  it("nothing actually changed: no write, no audit row", async () => {
+    users(fullAdmin);
+    await updateUserDetails("actor-1", "cr-1", { name: "Old Name" });
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("a missing target is a 404", async () => {
+    users(fullAdmin);
+    await expectApiError(updateUserDetails("actor-1", "nobody", { name: "X" }), "USER_NOT_FOUND", 404);
+  });
+});
+
+describe("createBillingProfileFor (12 Oct)", () => {
+  const body = { pan: "ABCDE1234F", name: "Some One", bankAccountNumber: "123456789", ifscCode: "HDFC0001234" };
+
+  it("a full admin adds a pending profile on the target's account", async () => {
+    mockPrisma.user.findUnique.mockImplementation(async ({ where }) => (where.id === "actor-1" ? fullAdmin : { id: "cr-1" }));
+    mockPrisma.billingProfile.findUnique.mockResolvedValue(null);
+    mockPrisma.billingProfile.create.mockImplementation(async ({ data }) => data);
+    const out = await createBillingProfileFor("actor-1", "cr-1", body);
+    expect(out).toMatchObject({ ...body, userId: "cr-1", approvalStatus: "pending" });
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ targetId: "cr-1", actorId: "actor-1", action: "billing_profile_create" }) }));
+  });
+
+  it("a restricted sub-admin is refused", async () => {
+    mockPrisma.user.findUnique.mockImplementation(async () => subAdminWithUsers);
+    await expectApiError(createBillingProfileFor("actor-2", "cr-1", body), "FULL_ADMIN_ONLY", 403);
+    expect(mockPrisma.billingProfile.create).not.toHaveBeenCalled();
   });
 });

@@ -37,12 +37,12 @@ export function startCronJobs() {
   cron.schedule(reminderSchedule, () => runTrackedJob("screenshot_reminder", screenshotReminderJob));
   // Runs unconditionally like every other job — if GITHUB_TOKEN isn't
   // configured yet, financeExportJob throws a specific, readable error that
-  // runTrackedJob records to JobRun (visible on /job-runs) instead of this
+  // runTrackedJob records to JobRun (admin dashboard "Recent job runs", client-v2 Settings → Background jobs) instead of this
   // silently never running with no trace of why.
   cron.schedule(financeExportSchedule, () => runTrackedJob("finance_export", financeExportJob));
   // Same unconditional-registration + specific-error-into-JobRun pattern as
   // finance_export above — until the three GOOGLE_* vars are set, this runs
-  // on schedule and fails with a readable reason on /job-runs rather than
+  // on schedule and fails with a readable reason in JobRun rather than
   // silently never firing.
   cron.schedule(financeGoogleSheetExportSchedule, () => runTrackedJob("finance_google_sheet_export", financeGoogleSheetExportJob));
 

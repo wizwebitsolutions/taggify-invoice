@@ -119,28 +119,32 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  createdByAdmin            User?                @relation("AdminCreatedSubAdmins", fields: [createdByAdminId], references: [id])
-  createdSubAdmins          User[]               @relation("AdminCreatedSubAdmins")
-  memberships               TeamMembership[]     @relation("MemberUser")
+  createdByAdmin            User?                   @relation("AdminCreatedSubAdmins", fields: [createdByAdminId], references: [id])
+  createdSubAdmins          User[]                  @relation("AdminCreatedSubAdmins")
+  memberships               TeamMembership[]        @relation("MemberUser")
   refreshTokens             RefreshToken[]
   trustedDevices            TrustedDevice[]
   emailOtps                 EmailOtp[]
   assets                    Asset[]
   invoices                  Invoice[]
-  raisedInvoices            Invoice[]            @relation("RaisedInvoices")
+  raisedInvoices            Invoice[]               @relation("RaisedInvoices")
   notifications             Notification[]
-  submittedLinks            Link[]               @relation("SubmittedByUser")
+  submittedLinks            Link[]                  @relation("SubmittedByUser")
   statusEvents              LinkStatusEvent[]
   billingProfiles           BillingProfile[]
   costRevisions             LinkCostRevision[]
   plans                     Plan[]
-  approvedPlans             Plan[]               @relation("PlanApprovals")
-  issuedClientInvoices      ClientInvoice[]      @relation("IssuedClientInvoices")
-  permissionChangesMade     PermissionAuditLog[] @relation("PermissionChangeActor")
-  permissionChangesReceived PermissionAuditLog[] @relation("PermissionChangeTarget")
-  payouts                   Payout[]             @relation("PayoutCreator")
-  createdPayouts            Payout[]             @relation("PayoutCreatedBy")
-  markedPaidPayouts         Payout[]             @relation("PayoutMarkedPaidBy")
+  approvedPlans             Plan[]                  @relation("PlanApprovals")
+  issuedClientInvoices      ClientInvoice[]         @relation("IssuedClientInvoices")
+  permissionChangesMade     PermissionAuditLog[]    @relation("PermissionChangeActor")
+  permissionChangesReceived PermissionAuditLog[]    @relation("PermissionChangeTarget")
+  payouts                   Payout[]                @relation("PayoutCreator")
+  createdPayouts            Payout[]                @relation("PayoutCreatedBy")
+  bulkTrackedProfiles       BulkTrackedProfile[]
+  bulkTrackedPosts          BulkTrackedPost[]
+  bulkImportBatches         BulkImportBatch[]
+  bulkImportSheetSources    BulkImportSheetSource[]
+  markedPaidPayouts         Payout[]                @relation("PayoutMarkedPaidBy")
 }
 
 // Audit trail for sub-admin permission grants/edits (newTask.md, 8 Sep
@@ -704,7 +708,7 @@ model Plan {
   variantLabel String  @default("Plan A")
   // The plan sheet's layout (8 Oct): "breakdown" (a row per page category)
   // or "summary" (one campaign-overview block). Chosen per plan.
-  sheetFormat         String    @default("breakdown")
+  sheetFormat  String  @default("breakdown")
 
   // Step 3's editable client-facing overview numbers (user request, 10 Sep
   // — "client side facing overview, budget total cost, impressions that
@@ -723,8 +727,8 @@ model Plan {
   // list) doesn't spin up a fresh spreadsheet tab pair every time;
   // "Regenerate" overwrites in place (see plans/service.js's
   // generatePlanSheet).
-  clientSheetUrl       String?
-  internalSheetUrl     String?
+  clientSheetUrl          String?
+  internalSheetUrl        String?
   // The execution sheet (user request, 10 Sep — "execution sheet will be
   // page name, links of their reel uploaded, date, page followers etc").
   // Whoever's actually posting fills this sheet in themselves, using the
@@ -749,9 +753,9 @@ model Plan {
   // Inventory, a page with no cost, a budget the pages exceed — as
   // [{ kind: "page" | "budget", handle?, ..., reason }]. See plans/service.js's
   // applySheetToPlan.
-  sourceSheetUrl       String?
-  sourceSheetFetchedAt DateTime?
-  sourceSheetPending   Json?
+  sourceSheetUrl          String?
+  sourceSheetFetchedAt    DateTime?
+  sourceSheetPending      Json?
 
   // Client invoice (user request, 13 Sep — "on clicking generate invoice,
   // it'll ask for client details like gst, company address, phone number"):
@@ -789,10 +793,10 @@ model Plan {
   // APPROVED exactly one time (see plans/service.js's decidePlan).
   campaignId String? @unique
 
-  createdBy  User       @relation(fields: [createdById], references: [id])
-  approvedBy User?      @relation("PlanApprovals", fields: [approvedById], references: [id])
-  campaign   Campaign?  @relation(fields: [campaignId], references: [id])
-  items      PlanItem[]
+  createdBy     User           @relation(fields: [createdById], references: [id])
+  approvedBy    User?          @relation("PlanApprovals", fields: [approvedById], references: [id])
+  campaign      Campaign?      @relation(fields: [campaignId], references: [id])
+  items         PlanItem[]
   // The receivables ledger row for this plan's client invoice (23 Sep) —
   // see ClientInvoice below.
   clientInvoice ClientInvoice?
@@ -865,4 +869,138 @@ model PlanItem {
   asset Asset @relation(fields: [assetId], references: [id])
 
   @@index([planId])
+}
+
+// ─── Bulk Tracker (12 Oct) ───────────────────────────────────────────────────
+// Market-research Instagram scraping, ported from wizwebitsolutions/
+// affiliate-creator-tool: arbitrary profile/post links (pasted, or imported
+// from a Google Sheet) are scraped via Apify. Deliberately NOT tied to Asset,
+// Link, Campaign or any payout — it's research data outside managed pages.
+// Gated by the opt-in `bulkTrack.view` key (lib/permissions.js OPT_IN_KEYS).
+
+model BulkImportSheetSource {
+  id              String    @id @default(cuid())
+  addedByUserId   String
+  name            String? // optional user-given label, shown instead of the raw URL wherever possible
+  sheetUrl        String
+  gid             String    @default("0")
+  profileLinkCol  String? // detected/confirmed column header for profile links
+  postLinkCol     String? // detected/confirmed column header for post links
+  categoryCol     String? // detected/confirmed column header for category
+  followersCol    String? // detected/confirmed column header for follower count (sheet-sourced — Apify's own follower field is unreliable)
+  dateCol         String? // detected/confirmed column header for the post's date
+  pageNameCol     String? // detected/confirmed column header for page name — preferred over Apify's scraped name when present
+  fetchFollowers  Boolean   @default(true) // scrape each row's profile (followers) via Apify — off = sheet's Followers cell only
+  fetchEngagement Boolean   @default(true) // scrape each row's post (views/likes/...) via Apify — off = post rows kept as "not_fetched"
+  lastCheckedAt   DateTime?
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+
+  addedBy  User                 @relation(fields: [addedByUserId], references: [id])
+  batches  BulkImportBatch[]
+  profiles BulkTrackedProfile[]
+  posts    BulkTrackedPost[]
+}
+
+model BulkImportBatch {
+  id              String   @id @default(cuid())
+  createdByUserId String
+  sourceType      String // manual | sheet
+  sheetSourceId   String?
+  status          String   @default("running") // running | done
+  totalCount      Int      @default(0)
+  successCount    Int      @default(0)
+  failedCount     Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  createdBy   User                   @relation(fields: [createdByUserId], references: [id])
+  sheetSource BulkImportSheetSource? @relation(fields: [sheetSourceId], references: [id])
+  profiles    BulkTrackedProfile[]
+  posts       BulkTrackedPost[]
+}
+
+model BulkTrackedProfile {
+  id             String   @id @default(cuid())
+  username       String
+  profileUrl     String
+  pageName       String? // display name from Apify's profile scrape (fullName) — "current state", not time-series, so it lives here not on the snapshot
+  category       String?
+  status         String   @default("queued") // queued | done | failed
+  failureReason  String?
+  addedByUserId  String
+  sheetSourceId  String?
+  batchId        String?
+  createdAt      DateTime @default(now())
+  // Which batch this row's in-flight job reports to and how many of its rows
+  // it settles (see bulkTrack/worker.js) — persisted so a restart can
+  // re-queue the job with the same counter claim. Cleared once it's counted.
+  pendingBatchId String?
+  pendingWeight  Int      @default(0)
+
+  addedBy     User                         @relation(fields: [addedByUserId], references: [id])
+  sheetSource BulkImportSheetSource?       @relation(fields: [sheetSourceId], references: [id])
+  batch       BulkImportBatch?             @relation(fields: [batchId], references: [id])
+  snapshots   BulkTrackedProfileSnapshot[]
+  posts       BulkTrackedPost[]
+
+  @@index([addedByUserId])
+  @@index([sheetSourceId])
+  @@index([batchId])
+}
+
+model BulkTrackedProfileSnapshot {
+  id         String   @id @default(cuid())
+  profileId  String
+  followers  Int      @default(0)
+  capturedAt DateTime @default(now())
+
+  profile BulkTrackedProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+}
+
+model BulkTrackedPost {
+  id             String   @id @default(cuid())
+  permalink      String
+  profileId      String? // set when imported alongside its profile (e.g. a sheet row with both columns); null for a standalone pasted post link
+  pageLink       String? // raw "Page Link" cell from the sheet row this post came from — not derived/scraped, just copied
+  pageName       String? // raw "Page Name" cell from the sheet row, when the sheet has one — preferred over the Apify-scraped name on the post's snapshot
+  followers      Int? // raw "Followers" cell from the sheet row, comma-stripped — Apify's follower count came back null on every real post tested, so this is sheet-sourced, not scraped
+  postedDate     String? // raw "Posted date" cell from the sheet row, kept as-is (no parsing — formats vary across sheets)
+  status         String   @default("queued") // queued | done | failed | broken
+  postType       String? // reel | post — set on status=done, based on whether the scrape returned video plays
+  failureReason  String?
+  addedByUserId  String
+  sheetSourceId  String?
+  batchId        String?
+  createdAt      DateTime @default(now())
+  // Which batch this row's in-flight job reports to and how many of its rows
+  // it settles (see bulkTrack/worker.js) — persisted so a restart can
+  // re-queue the job with the same counter claim. Cleared once it's counted.
+  pendingBatchId String?
+  pendingWeight  Int      @default(0)
+
+  addedBy     User                      @relation(fields: [addedByUserId], references: [id])
+  profile     BulkTrackedProfile?       @relation(fields: [profileId], references: [id])
+  sheetSource BulkImportSheetSource?    @relation(fields: [sheetSourceId], references: [id])
+  batch       BulkImportBatch?          @relation(fields: [batchId], references: [id])
+  snapshots   BulkTrackedPostSnapshot[]
+
+  @@index([addedByUserId])
+  @@index([sheetSourceId])
+  @@index([batchId])
+}
+
+model BulkTrackedPostSnapshot {
+  id         String   @id @default(cuid())
+  postId     String
+  views      Int      @default(0)
+  likes      Int      @default(0)
+  comments   Int      @default(0)
+  shares     Int      @default(0)
+  reposts    Int      @default(0)
+  saves      Int      @default(0)
+  pageName   String? // author's display name, off the same post-scrape call — no separate profile-actor call
+  followers  Int? // author's follower count, same call — Apify has returned null for this on every real post tested so far
+  capturedAt DateTime @default(now())
+
+  post BulkTrackedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
 }

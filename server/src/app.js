@@ -21,6 +21,8 @@ import notificationsRoutes from "./modules/notifications/routes.js";
 import adminRoutes from "./modules/admin/routes.js";
 import plansRoutes from "./modules/plans/routes.js";
 import googleAuthRoutes from "./modules/integrations/googleAuthRoutes.js";
+import bulkTrackRoutes from "./modules/bulkTrack/routes.js";
+import { startBulkTrackWorker } from "./modules/bulkTrack/worker.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { startKeepAlive } from "./modules/jobs/keepAlive.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
@@ -68,6 +70,7 @@ apiRouter.use("/notifications", notificationsRoutes);
 apiRouter.use("/admin", adminRoutes);
 apiRouter.use("/plans", plansRoutes);
 apiRouter.use("/integrations/google", googleAuthRoutes);
+apiRouter.use("/bulk-track", bulkTrackRoutes);
 apiRouter.use(notFoundHandler);
 apiRouter.use(errorHandler);
 app.use("/api", apiRouter);
@@ -90,6 +93,7 @@ app.listen(PORT, () => {
   console.log(`invoice-taggify server listening on :${PORT}`);
   startCronJobs();
   startKeepAlive();
+  startBulkTrackWorker();
   clearStaleScrapeQueue().catch((err) => console.error("clearStaleScrapeQueue failed", err));
 });
 

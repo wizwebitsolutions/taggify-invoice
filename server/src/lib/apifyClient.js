@@ -183,6 +183,12 @@ export const ApifyInstagramProvider = {
       postedAt: post.taken_at_date ? new Date(post.taken_at_date) : null,
       thumbnailUrl: extractThumbnailUrl(post),
       caption: extractCaption(post),
+      // Bulk Tracker (12 Oct) fields, off the same call. A photo/carousel
+      // post legitimately has no plays — that's how reel vs post is told apart.
+      // `user_follower_count` has come back null on every real post tested.
+      postType: playCount > 0 ? "reel" : "post",
+      pageName: post.user?.full_name ?? null,
+      followers: post.metrics?.user_follower_count ?? null,
     };
   },
 };
