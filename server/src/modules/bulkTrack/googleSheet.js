@@ -3,9 +3,10 @@ import { getAccessToken } from "../../lib/googleSheetsClient.js";
 /**
  * Google Sheet reads for the Bulk Tracker's "Connect a Google Sheet" flow
  * (12 Oct, ported from affiliate-creator-tool lib/googleSheet.js). Uses the
- * Sheets API v4 with the service account the finance export already uses
- * (GOOGLE_SERVICE_ACCOUNT_EMAIL / _PRIVATE_KEY) — no google-auth-library,
- * the token comes from googleSheetsClient.js's plain-fetch JWT flow.
+ * Sheets API v4 with a service account — GOOGLE_SERVICE_ACCOUNT_KEY like the
+ * source repo, or the finance export's email + private key (serviceAccount
+ * below). No google-auth-library: the token comes from googleSheetsClient.js's
+ * plain-fetch JWT flow.
  *
  * Only works for sheets the service account can read: "Anyone with the link
  * can view", or shared directly with the service account's email.
@@ -27,11 +28,48 @@ function fetchId() {
   return Math.random().toString(36).slice(2, 8);
 }
 
-function serviceAccount() {
+/**
+ * Hosting dashboards mangle a pasted JSON env value in predictable ways
+ * (wrapping quotes kept literally, outer braces dropped, "\n" double-escaped),
+ * so the key is accepted as raw JSON *or* base64-encoded JSON, and the common
+ * manglings are repaired — same as affiliate-creator-tool's
+ * parseServiceAccountKey. Exported for the unit test.
+ */
+export function parseServiceAccountKey(raw) {
+  let text = String(raw).trim();
+  if (!text.startsWith("{") && !text.startsWith('"') && !text.startsWith("'")) {
+    text = Buffer.from(text, "base64").toString("utf8").trim();
+  }
+  if ((text.startsWith("'") && text.endsWith("'")) || (text.startsWith('"{') && text.endsWith('}"'))) {
+    text = text.slice(1, -1);
+  }
+  if (!text.startsWith("{")) text = `{${text}}`;
+
+  let key;
+  try {
+    key = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`GOOGLE_SERVICE_ACCOUNT_KEY isn't valid JSON or base64-encoded JSON (${err.message})`);
+  }
+  if (!key.client_email || !key.private_key) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is missing client_email/private_key — paste the whole service-account JSON file");
+  }
+  // A double-escaped paste leaves literal backslash-n in the PEM, which Google rejects.
+  return { clientEmail: key.client_email, privateKey: key.private_key.replace(/\\n/g, "\n") };
+}
+
+/**
+ * The service account to read with. GOOGLE_SERVICE_ACCOUNT_KEY (the whole
+ * downloaded JSON key, raw or base64 — the single variable the source repo
+ * uses) wins; otherwise the finance export's GOOGLE_SERVICE_ACCOUNT_EMAIL +
+ * GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY pair.
+ */
+export function serviceAccount() {
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) return parseServiceAccountKey(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const rawPrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   if (!clientEmail || !rawPrivateKey) {
-    throw new Error("Google Sheets import isn't configured on the server (GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY)");
+    throw new Error("Google Sheets import isn't configured on the server — set GOOGLE_SERVICE_ACCOUNT_KEY (the service-account JSON)");
   }
   return { clientEmail, privateKey: rawPrivateKey.replace(/\\n/g, "\n") };
 }
