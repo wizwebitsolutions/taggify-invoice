@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 
-import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, ImportParseError, MAX_IMPORT_ROWS } from "./importParser.js";
+import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, ImportParseError, MAX_IMPORT_ROWS } from "./importParser.js";
 
 /**
  * Inventory "Import pages" (user request, 14 Sep) — the .xlsx/.csv parser.
@@ -167,11 +167,17 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
   it("the downloadable template itself parses back to its two example pages", async () => {
     const { buildImportPagesTemplate, IMPORT_TEMPLATE_HEADERS } = await import("../../lib/importPagesTemplate.js");
     const parsed = await parseImportSheet(await buildImportPagesTemplate(), "import-pages-template.xlsx");
-    expect(IMPORT_TEMPLATE_HEADERS).toEqual(["Page Name", "Page Link", "Followers", "Reel Rate", "Story Rate"]);
+    expect(IMPORT_TEMPLATE_HEADERS).toEqual(["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Followers", "Reel Rate", "Story Rate"]);
     expect(parsed.rows.map((r) => [r.pageName, r.handle, r.problem])).toEqual([
       ["Example Page One", "example.page.one.replace.me", null],
       ["Example Page Two", "example.page.two.replace.me", null],
     ]);
+    expect(parsed.hasOwnerColumn).toBe(true);
+    expect(parsed.rows.map((r) => [r.vendorName, r.vendorPhone, r.vendorEmail])).toEqual([
+      ["Example Vendor", "+919000000000", null],
+      ["Example Vendor", null, "vendor@example.com"],
+    ]);
+    expect(parsed.rows[0].followers).toBe(450000);
     expect(parsed.rows[0].rateCards).toEqual([
       { format: "reel", amount: 18000 },
       { format: "story", amount: 6000 },
@@ -200,6 +206,90 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
   it("rejects unsupported and legacy file types by extension", async () => {
     await expect(parseImportSheet(Buffer.from("x"), "pages.xls")).rejects.toThrow(/\.xls files aren't supported/);
     await expect(parseImportSheet(Buffer.from("x"), "pages.pdf")).rejects.toThrow(/Unsupported file type/);
+  });
+});
+
+// Vendor columns (14 Oct): who owns the page, so the preview can match an
+// existing vendor or flag a new one to approve and create.
+describe("classifyContact", () => {
+  it("an email (lowercased, trimmed); a phone as +/digits only (10–15 digits); both from one cell; anything else is ignored", () => {
+    expect(classifyContact("  Vendor@Example.COM ")).toEqual({ phone: null, email: "vendor@example.com" });
+    expect(classifyContact("+91 98765 43210")).toEqual({ phone: "+919876543210", email: null });
+    // Labels and punctuation never reach a login's phone (14 Oct review).
+    expect(classifyContact("Ph: 98765-43210")).toEqual({ phone: "9876543210", email: null });
+    expect(classifyContact("98765 43210 / Sales@Acme.in")).toEqual({ phone: "9876543210", email: "sales@acme.in" });
+    expect(classifyContact(9876543210)).toEqual({ phone: "9876543210", email: null });
+    expect(classifyContact("call me")).toEqual({ phone: null, email: null });
+    expect(classifyContact("12345")).toEqual({ phone: null, email: null });
+    expect(classifyContact("not@anemail")).toEqual({ phone: null, email: null });
+    expect(classifyContact("")).toEqual({ phone: null, email: null });
+    // A long cell keeps its first phone-shaped run, ≤20 chars.
+    expect(classifyContact("98765 43210 / 91234 56789").phone).toBe("9876543210");
+  });
+});
+
+describe("parseImportSheet — vendor columns", () => {
+  const HEADER = "Page Name,Page Link,Vendor Name,Vendor Contact,Followers,Reel Rate,Story Rate";
+
+  it("reads vendor name + a contact cell holding a phone or an email, and matches the owner on phone ?? email ?? name", async () => {
+    const csv = [
+      HEADER,
+      "One,https://instagram.com/one.page,Meme Co,+91 98765 43210,10k,5000,2000",
+      "Two,https://instagram.com/two.page,Meme Co,Sales@MemeCo.in,,,",
+      "Three,https://instagram.com/three.page,Only Name Media,,,,",
+      "Four,https://instagram.com/four.page,,,,,",
+    ].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "v.csv");
+    expect(parsed.hasOwnerColumn).toBe(true);
+    expect(parsed.rows[0]).toMatchObject({ vendorName: "Meme Co", vendorPhone: "+919876543210", vendorEmail: null, ownerRef: "+919876543210", followers: 10_000 });
+    expect(parsed.rows[1]).toMatchObject({ vendorName: "Meme Co", vendorPhone: null, vendorEmail: "sales@memeco.in", ownerRef: "sales@memeco.in" });
+    expect(parsed.rows[2]).toMatchObject({ vendorName: "Only Name Media", vendorPhone: null, vendorEmail: null, ownerRef: "Only Name Media" });
+    expect(parsed.rows[3]).toMatchObject({ vendorName: null, vendorPhone: null, vendorEmail: null, ownerRef: null });
+  });
+
+  it("vendor/contact columns never become rate cards; reel/story rates still read", async () => {
+    const csv = ["Page Link,Vendor,Contact Number,Contact Details,Reel Rate,Story Rate", "https://instagram.com/x.page,V,9876543210,,7000,3000"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "v.csv");
+    expect(parsed.rows[0].rateCards).toEqual([
+      { format: "reel", amount: 7000 },
+      { format: "story", amount: 3000 },
+    ]);
+    expect(parsed.rows[0]).toMatchObject({ vendorName: "V", vendorPhone: "9876543210" });
+  });
+
+  it("explicit vendor phone / email columns are read, and fill in alongside a contact cell", async () => {
+    const csv = ["Page Link,Vendor's Name,Vendor Phone,Vendor Email,Contact", "https://instagram.com/x.page,Acme,+91 90000 11111,Owner@Acme.com,other@acme.com", "https://instagram.com/y.page,Acme,,,90000 22222 ext"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "v.csv");
+    expect(parsed.rows[0]).toMatchObject({ vendorName: "Acme", vendorPhone: "+919000011111", vendorEmail: "owner@acme.com", ownerRef: "+919000011111" });
+    expect(parsed.rows[1]).toMatchObject({ vendorPhone: "9000022222", vendorEmail: null });
+  });
+
+  it("a vendor name is trimmed and capped at 100 characters", async () => {
+    const parsed = await parseImportSheet(Buffer.from(`Page Link,Vendor Name\nhttps://instagram.com/x.page,  ${"a".repeat(150)}  \n`), "v.csv");
+    expect(parsed.rows[0].vendorName).toHaveLength(100);
+  });
+
+  it("legacy owner columns keep working: a plain 'phone' is still the owner's phone, and with vendor columns it's the vendor's phone too", async () => {
+    const legacy = await parseImportSheet(Buffer.from("handle,phone\nsome.page,+919000000001\n"), "t.csv");
+    expect(legacy.rows[0]).toMatchObject({ ownerRef: "+919000000001", vendorName: null, vendorPhone: null, vendorEmail: null });
+    expect(legacy.hasOwnerColumn).toBe(true);
+
+    const mixed = await parseImportSheet(Buffer.from("handle,owner phone,vendor name\na.page,+919000000001,\nb.page,+919000000001,New Vendor\n"), "t.csv");
+    expect(mixed.rows[0].ownerRef).toBe("+919000000001");
+    // A "Vendor | Phone" sheet: the phone column is the vendor's contact, so matching uses it (14 Oct review).
+    expect(mixed.rows[1]).toMatchObject({ ownerRef: "+919000000001", vendorName: "New Vendor", vendorPhone: "+919000000001" });
+
+    const withEmail = await parseImportSheet(Buffer.from(["Page Link,Vendor,Mobile,Email", "https://instagram.com/c.page,Chai Co,98000 00011,Chai@Co.in"].join("\n")), "t.csv");
+    expect(withEmail.rows[0]).toMatchObject({ vendorName: "Chai Co", vendorPhone: "9800000011", vendorEmail: "chai@co.in", ownerRef: "9800000011" });
+  });
+
+  it("vendor columns in an .xlsx (numeric phone cell) parse the same as CSV", async () => {
+    const buffer = await xlsxBuffer([
+      ["Page Link", "Vendor Name", "Vendor Contact", "Reel Rate"],
+      ["https://instagram.com/x.page", "Acme", 9876543210, 4000],
+    ]);
+    const parsed = await parseImportSheet(buffer, "v.xlsx");
+    expect(parsed.rows[0]).toMatchObject({ vendorName: "Acme", vendorPhone: "9876543210", rateCards: [{ format: "reel", amount: 4000 }] });
   });
 });
 

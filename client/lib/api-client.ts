@@ -857,7 +857,7 @@ export const assets = {
   // Step 2: create exactly the rows the admin confirmed.
   import: (token: string, rows: ImportAssetRow[]) =>
     request<ImportResult>("/assets/import", { method: "POST", token, body: { rows } }),
-  // The five-column sheet the importer reads (22 Sep): Page Name, Page Link, Followers, Reel Rate, Story Rate.
+  // The sheet the importer reads (14 Oct): Page Name, Page Link, Vendor Name, Vendor Contact, Followers, Reel Rate, Story Rate.
   downloadImportTemplate: (token: string) => downloadBinary(`${API_URL}/assets/import/template.xlsx`, token, "import-pages-template.xlsx"),
 };
 
@@ -886,6 +886,20 @@ export interface ImportPreviewRow {
   ownerId: string | null;
   status: ImportRowStatus;
   reason: string | null;
+  /** What the sheet's Vendor Name / Vendor Contact columns said (14 Oct). */
+  vendor?: ImportVendorContact | null;
+}
+
+export interface ImportVendorContact {
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+}
+
+/** A vendor the sheet named that isn't in Taggify yet, with the rows that belong to it (14 Oct). */
+export interface ImportNewVendor extends ImportVendorContact {
+  key: string;
+  rowNumbers: number[];
 }
 
 export interface ImportPreview {
@@ -894,6 +908,8 @@ export interface ImportPreview {
   totalRows: number;
   hasOwnerColumn: boolean;
   owners: PageOwner[];
+  /** Always empty for a CREATOR caller. Absent on older servers. */
+  newVendors?: ImportNewVendor[];
 }
 
 export interface ImportScrapedProfile {

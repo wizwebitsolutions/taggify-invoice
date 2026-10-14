@@ -416,3 +416,111 @@ describe("previewImport — CREATOR's own sheet never sees or leaks other creato
     expect(preview.rows[0]).toMatchObject({ status: "ready", ownerId: "creator-1" });
   });
 });
+
+// Vendor columns (14 Oct): Vendor Name + Vendor Contact match an existing
+// account (phone, then email, then name) or flag a NEW vendor the popup
+// can approve and create.
+describe("previewImport — vendor matching and newVendors", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+  const vrow = (over) => row({ vendorName: null, vendorPhone: null, vendorEmail: null, ...over });
+
+  it("matches a vendor by phone, then email, then exact name, and attaches the vendor to the row", async () => {
+    const preview = await previewImport(
+      {
+        hasOwnerColumn: true,
+        rows: [
+          vrow({ handle: "a.page", vendorName: "Someone Else", vendorPhone: "+91 90000 00001" }),
+          vrow({ rowNumber: 3, handle: "b.page", vendorPhone: "+91 99999 99999", vendorEmail: "PRIYA@example.com" }),
+          vrow({ rowNumber: 4, handle: "c.page", vendorName: "priya creator" }),
+        ],
+      },
+      admin
+    );
+    expect(preview.rows.map((r) => [r.status, r.ownerId])).toEqual([
+      ["ready", "creator-1"],
+      ["ready", "creator-1"],
+      ["ready", "creator-1"],
+    ]);
+    expect(preview.rows[0].vendor).toEqual({ name: "Someone Else", phone: "+91 90000 00001", email: null });
+    expect(preview.newVendors).toEqual([]);
+  });
+
+  it("an ambiguous vendor name stays unresolved with a reason and isn't offered as a new vendor", async () => {
+    const preview = await previewImport({ hasOwnerColumn: true, rows: [vrow({ handle: "a.page", vendorName: "Rahul Creator" })] }, admin);
+    expect(preview.rows[0]).toMatchObject({ status: "owner-unknown", ownerId: null });
+    expect(preview.rows[0].reason).toMatch(/matches 2 vendor accounts/);
+    expect(preview.newVendors).toEqual([]);
+  });
+
+  it("groups unmatched vendors into newVendors by phone / email / name key, merging details across rows", async () => {
+    const preview = await previewImport(
+      {
+        hasOwnerColumn: true,
+        rows: [
+          vrow({ handle: "a.page", vendorPhone: "+91 98765 43210" }),
+          vrow({ rowNumber: 3, handle: "b.page", vendorName: "Meme Co", vendorPhone: "98765-43210", vendorEmail: "sales@memeco.in" }),
+          vrow({ rowNumber: 4, handle: "c.page", vendorEmail: "new@vendor.in" }),
+          vrow({ rowNumber: 5, handle: "d.page", vendorName: "  Name Only  " }),
+          vrow({ rowNumber: 6, handle: "e.page", vendorName: "name only" }),
+          // No vendor data: unchanged legacy behaviour, not a new vendor.
+          vrow({ rowNumber: 7, handle: "f.page" }),
+        ],
+      },
+      admin
+    );
+    expect(preview.rows[0]).toMatchObject({ status: "owner-unknown", reason: "New vendor: +91 98765 43210" });
+    expect(preview.rows[1].reason).toBe("New vendor: Meme Co");
+    expect(preview.rows[5]).toMatchObject({ status: "owner-missing", vendor: null });
+    expect(preview.newVendors).toEqual([
+      { key: "9876543210", name: "Meme Co", phone: "+91 98765 43210", email: "sales@memeco.in", rowNumbers: [2, 3] },
+      { key: "new@vendor.in", name: null, phone: null, email: "new@vendor.in", rowNumbers: [4] },
+      { key: "name only", name: "Name Only", phone: null, email: null, rowNumbers: [5, 6] },
+    ]);
+  });
+
+  it("one vendor named with a phone on one row and an email on another is one entry; same name with a different phone stays separate", async () => {
+    const preview = await previewImport(
+      {
+        hasOwnerColumn: true,
+        rows: [
+          // The template's own example rows (14 Oct review): same name, phone on one, email on the other.
+          vrow({ handle: "a.page", vendorName: "Example Vendor", vendorPhone: "+919000000000" }),
+          vrow({ rowNumber: 3, handle: "b.page", vendorName: "Example Vendor", vendorEmail: "vendor@example.com" }),
+          // A third row links by email to the group above.
+          vrow({ rowNumber: 4, handle: "c.page", vendorEmail: "VENDOR@example.com" }),
+          // Same name but a different phone: a different vendor.
+          vrow({ rowNumber: 5, handle: "d.page", vendorName: "Example Vendor", vendorPhone: "+919111111111" }),
+        ],
+      },
+      admin
+    );
+    expect(preview.newVendors).toEqual([
+      { key: "9000000000", name: "Example Vendor", phone: "+919000000000", email: "vendor@example.com", rowNumbers: [2, 3, 4] },
+      { key: "9111111111", name: "Example Vendor", phone: "+919111111111", email: null, rowNumbers: [5] },
+    ]);
+  });
+
+  it("a new vendor's page that already exists keeps the existing exists/conflict logic and isn't listed", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "known.page", ownerId: "creator-2", owner: rahul }]);
+    const preview = await previewImport({ hasOwnerColumn: true, rows: [vrow({ handle: "known.page", vendorName: "Brand New Vendor" })] }, admin);
+    expect(preview.rows[0]).toMatchObject({ status: "exists", ownerId: "creator-2" });
+    expect(preview.newVendors).toEqual([]);
+  });
+
+  it("a CREATOR caller never gets vendor data back: vendor null on every row, newVendors []", async () => {
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const preview = await previewImport({ hasOwnerColumn: true, rows: [vrow({ handle: "a.page", vendorName: "Rahul Creator", vendorPhone: "+919000000002", ownerRef: "+919000000002" })] }, creator);
+    expect(preview.rows[0]).toMatchObject({ status: "ready", ownerId: "creator-1", vendor: null });
+    expect(preview.newVendors).toEqual([]);
+    expect(preview.owners).toEqual([]);
+    expect(mockPrisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it("a Google Sheet link goes through the same vendor path", async () => {
+    fetchSheetCsv.mockResolvedValue(["Page Link,Vendor Name,Vendor Contact", "https://instagram.com/sheet.page,Fresh Vendor,fresh@vendor.in", "https://instagram.com/mine.page,Priya,+91 90000 00001"].join("\n"));
+    const preview = await previewImportFromSheetUrl("https://docs.google.com/spreadsheets/d/abc/edit", admin);
+    expect(preview.rows[0]).toMatchObject({ status: "owner-unknown", reason: "New vendor: Fresh Vendor", vendor: { name: "Fresh Vendor", phone: null, email: "fresh@vendor.in" } });
+    expect(preview.rows[1]).toMatchObject({ status: "ready", ownerId: "creator-1" });
+    expect(preview.newVendors).toEqual([{ key: "fresh@vendor.in", name: "Fresh Vendor", phone: null, email: "fresh@vendor.in", rowNumbers: [2] }]);
+  });
+});

@@ -31,6 +31,19 @@ const PAGE_NAME_HEADERS = ["page name", "display name"];
 const OWNER_PHONE_HEADERS = ["owner phone", "account phone", "phone", "phone number", "creator phone", "mobile", "mobile number"];
 const OWNER_OTHER_HEADERS = ["owner", "account", "creator", "user", "owner name", "owner email", "email"];
 const CATEGORY_HEADERS = ["category", "page type", "type", "niche"];
+// Vendor columns (14 Oct): who owns the page, so the preview can match an
+// existing vendor (creator account) or flag a NEW one for the admin to
+// approve and create. Kept apart from the owner lists above — a plain
+// "phone" column still means the owner's phone, exactly as before.
+const VENDOR_NAME_HEADERS = ["vendor", "vendor name", "vendor's name"];
+// One cell holding a phone number OR an email — classified per row.
+const VENDOR_CONTACT_HEADERS = ["contact", "vendor contact", "contact number", "contact no", "contact details"];
+const VENDOR_PHONE_HEADERS = ["vendor phone", "vendor mobile", "contact phone"];
+const VENDOR_EMAIL_HEADERS = ["vendor email", "contact email"];
+const MAX_VENDOR_NAME_LENGTH = 100;
+const MAX_EMAIL_LENGTH = 254;
+const MAX_PHONE_LENGTH = 20;
+const EMAIL_PATTERN = /[^\s@,;<>()]+@[^\s@,;<>()]+\.[^\s@,;<>()]+/;
 const FOLLOWERS_HEADERS = ["followers", "follower count", "audience"];
 // Formats a rate column can name outright ("reel") or with a suffix ("reel
 // rate", "story cost"). reel/story only (14 Sep) — any other column, e.g.
@@ -97,6 +110,40 @@ export function parseAmount(raw) {
   if (!digits) return null;
   const amount = Number(digits);
   return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+/** A plausible email inside the cell (lowercased, trimmed, ≤254), else null. */
+export function parseContactEmail(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value.includes("@")) return null;
+  const match = value.match(EMAIL_PATTERN);
+  if (!match) return null;
+  const email = match[0].replace(/^mailto:/i, "").replace(/[.]+$/, "").toLowerCase();
+  return email.length <= MAX_EMAIL_LENGTH ? email : null;
+}
+
+/**
+ * The cell's first phone-shaped run ("Mob: +91 98765-43210", "98765 43210 / 91234 56789")
+ * as "+"/digits only ("+919876543210"), 10–15 digits, else null. Digits only, so what's
+ * offered for a new login is a number the signup schema and phone matching both accept,
+ * never the label or punctuation around it (14 Oct review).
+ */
+export function parseContactPhone(raw) {
+  const run = String(raw ?? "").match(/\+?\d[\d\s().-]*\d/);
+  if (!run) return null;
+  const digits = run[0].replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) return null;
+  const phone = `${run[0].startsWith("+") ? "+" : ""}${digits}`;
+  return phone.length <= MAX_PHONE_LENGTH ? phone : null;
+}
+
+/** A "Vendor Contact" cell: its email (if it has a plausible one) and its phone (≥10 digits outside the email), either or both. */
+export function classifyContact(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) return { phone: null, email: null };
+  const email = parseContactEmail(value);
+  const rest = email ? value.replace(EMAIL_PATTERN, " ") : value;
+  return { phone: parseContactPhone(rest), email };
 }
 
 /** Cell text with ExcelJS's richer cell values (rich text, formulas, hyperlinks) flattened to a string. */
@@ -190,7 +237,7 @@ function findColumn(headers, candidates) {
 /**
  * @param {Buffer} buffer  the uploaded bytes
  * @param {string} fileName  used only to pick xlsx vs csv by extension
- * @returns {Promise<{ rows: Array<{ rowNumber, handle, rawHandle, ownerRef, category, followers, rateCards, problem }>, hasOwnerColumn: boolean, totalRows: number }>}
+ * @returns {Promise<{ rows: Array<{ rowNumber, handle, rawHandle, pageName, ownerRef, vendorName, vendorPhone, vendorEmail, category, followers, rateCards, problem }>, hasOwnerColumn: boolean, totalRows: number }>}
  */
 export async function parseImportSheet(buffer, fileName = "") {
   if (!buffer || buffer.length === 0) throw new ImportParseError("That file is empty.");
@@ -208,7 +255,7 @@ export async function parseImportSheet(buffer, fileName = "") {
   // for the header, and its cells don't get imported as pages.
   const nonEmpty = (cells) => (cells ?? []).some((c) => String(c ?? "").trim() !== "");
   if (!grid.some(nonEmpty)) throw new ImportParseError("That file is empty — it needs a header row (e.g. handle, owner phone) and one row per page.");
-  const lowerRow = (cells) => (cells ?? []).map((h) => String(h ?? "").trim().toLowerCase());
+  const lowerRow = (cells) => (cells ?? []).map((h) => cellText(h).trim().toLowerCase().replace(/[‘’]/g, "'"));
   const namesAPage = (cells) => [PAGE_LINK_HEADERS, HANDLE_HEADERS, PAGE_NAME_HEADERS].some((h) => findColumn(lowerRow(cells), h) !== null);
   const headerIdx = grid.slice(0, HEADER_SEARCH_ROWS).findIndex(namesAPage);
   if (headerIdx === -1) {
@@ -227,12 +274,21 @@ export async function parseImportSheet(buffer, fileName = "") {
   const ownerCol = findColumn(headers, OWNER_PHONE_HEADERS) ?? findColumn(headers, OWNER_OTHER_HEADERS);
   const categoryCol = findColumn(headers, CATEGORY_HEADERS);
   const followersCol = findColumn(headers, FOLLOWERS_HEADERS);
+  const vendorNameCol = findColumn(headers, VENDOR_NAME_HEADERS);
+  const vendorContactCol = findColumn(headers, VENDOR_CONTACT_HEADERS);
+  const vendorPhoneCol = findColumn(headers, VENDOR_PHONE_HEADERS);
+  const vendorEmailCol = findColumn(headers, VENDOR_EMAIL_HEADERS);
+  const vendorCols = [vendorNameCol, vendorContactCol, vendorPhoneCol, vendorEmailCol].filter((c) => c !== null);
+  const hasVendorColumn = vendorCols.length > 0;
+  // "Vendor | Phone | Email" sheets: plain owner phone/email columns are the vendor's contact too (14 Oct review).
+  const ownerPhoneCol = findColumn(headers, OWNER_PHONE_HEADERS);
+  const ownerEmailCol = findColumn(headers, ["owner email", "email"]);
   // One column per format (first wins — "reel" and "reel rate" both name
   // the same rate card, which is unique per (asset, format)).
   const rateCols = [];
   const seenFormats = new Set();
   headers.forEach((h, i) => {
-    if (i === linkCol || i === handleOnlyCol || i === namedCol || i === ownerCol || i === categoryCol || i === followersCol) return;
+    if (i === linkCol || i === handleOnlyCol || i === namedCol || i === ownerCol || i === categoryCol || i === followersCol || vendorCols.includes(i)) return;
     if (rateCols.length >= MAX_RATE_COLUMNS) return;
     let format = null;
     if (STANDARD_FORMATS.includes(h)) format = h;
@@ -273,12 +329,26 @@ export async function parseImportSheet(buffer, fileName = "") {
       if (amount !== null) rateCards.push({ format, amount });
     }
     const category = categoryCol === null ? null : cellText(cells[categoryCol]).trim().slice(0, 40) || null;
+
+    // Explicit phone/email columns win; a combined contact cell fills whichever is still missing.
+    const contact = vendorContactCol === null ? { phone: null, email: null } : classifyContact(cellText(cells[vendorContactCol]));
+    const vendorName = vendorNameCol === null ? null : cellText(cells[vendorNameCol]).trim().slice(0, MAX_VENDOR_NAME_LENGTH) || null;
+    const vendorPhone =
+      (vendorPhoneCol === null ? null : parseContactPhone(cellText(cells[vendorPhoneCol]))) ?? contact.phone ?? (hasVendorColumn && ownerPhoneCol !== null ? parseContactPhone(cellText(cells[ownerPhoneCol])) : null);
+    const vendorEmail =
+      (vendorEmailCol === null ? null : parseContactEmail(cellText(cells[vendorEmailCol]))) ?? contact.email ?? (hasVendorColumn && ownerEmailCol !== null ? parseContactEmail(cellText(cells[ownerEmailCol])) : null);
+    const legacyOwnerRef = ownerCol === null ? null : cellText(cells[ownerCol]).trim() || null;
+    // Vendor data, when the row has any, is what the owner is matched on.
+    const ownerRef = hasVendorColumn && (vendorPhone || vendorEmail || vendorName) ? vendorPhone ?? vendorEmail ?? vendorName : legacyOwnerRef;
     return {
       rowNumber,
       rawHandle,
       handle,
       pageName: pageNameCol === null ? null : cellText(cells[pageNameCol]).trim().slice(0, 100) || null,
-      ownerRef: ownerCol === null ? null : cellText(cells[ownerCol]).trim() || null,
+      ownerRef,
+      vendorName,
+      vendorPhone,
+      vendorEmail,
       category,
       followers: followersCol === null ? null : parseFollowerCount(cells[followersCol]),
       rateCards,
@@ -286,5 +356,5 @@ export async function parseImportSheet(buffer, fileName = "") {
     };
   });
 
-  return { rows, hasOwnerColumn: ownerCol !== null, totalRows: rows.length };
+  return { rows, hasOwnerColumn: ownerCol !== null || hasVendorColumn, totalRows: rows.length };
 }

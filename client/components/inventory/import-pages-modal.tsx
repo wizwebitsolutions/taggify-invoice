@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
@@ -11,7 +11,7 @@ import { Note } from "@/components/ui/note";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { UploadIcon, CheckCircleIcon, DownloadIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { assets as assetsApi, auth as authApi, ApiError, hasAccess, canUse, PAGE_CATEGORIES, type ImportPreview, type ImportPreviewRow, type ImportRowStatus, type ImportResult, type ImportScrapedProfile, type PageOwner } from "@/lib/api-client";
+import { assets as assetsApi, auth as authApi, ApiError, hasAccess, canUse, PAGE_CATEGORIES, type ImportPreview, type ImportPreviewRow, type ImportRowStatus, type ImportResult, type ImportScrapedProfile, type ImportNewVendor, type PageOwner } from "@/lib/api-client";
 import { RefreshIcon } from "@/components/icons";
 import { compactNumber, money, followersLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -71,6 +71,55 @@ export function ownerLabel(owner: { name: string | null; phoneNumber: string | n
   return owner?.name?.trim() || owner?.email || owner?.phoneNumber || "—";
 }
 
+/**
+ * Who may mint a creator login from this popup: staff with users.edit, or
+ * (25 Sep) a plan maker granted inventory.edit — the same narrow "mint a
+ * plain creator login" path the single Add-page flow uses, never a general
+ * people-management grant. POST /auth/signup re-checks this server-side.
+ */
+function useCanCreateCreator() {
+  const { user } = useAuth();
+  return hasAccess(user, "users.edit") || (user?.role === "PLAN_MAKER" && canUse(user, "inventory.edit"));
+}
+
+type CreatedLogin = { owner: PageOwner; password: string };
+
+const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
+
+/** Spaces, dashes, dots and brackets dropped — what a sheet's "Vendor Contact" usually carries around the digits. */
+function normalizePhone(phone: string) {
+  return phone.replace(/[\s\-().]/g, "");
+}
+
+/**
+ * Creates a CREATOR login (generated password) for the import popup — used
+ * by both "+ Create new user" and the "New vendors found" approvals. An
+ * email that's already a creator in `owners` (or, for a phone clash, a
+ * phone that is) resolves to that account instead of failing; `password`
+ * is then null because no new login was made.
+ */
+async function createCreatorAccount(token: string, input: { name: string; email: string; phone?: string }, owners: PageOwner[]): Promise<{ owner: PageOwner; password: string | null }> {
+  const email = input.email.trim().toLowerCase();
+  const phone = input.phone ? normalizePhone(input.phone) : "";
+  try {
+    const { user, generatedPassword } = await authApi.signup(token, { email, name: input.name.trim() || undefined, phoneNumber: phone || undefined, role: "CREATOR" });
+    return { owner: { id: user.id, name: user.name, phoneNumber: user.phoneNumber, email: user.email }, password: (generatedPassword as string | null) ?? null };
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "EMAIL_ALREADY_REGISTERED") {
+      // That email is already a creator here — use them rather than failing.
+      const existing = owners.find((o) => o.email?.toLowerCase() === email);
+      if (existing) return { owner: existing, password: null };
+      throw new ApiError(409, err.code, "That email already belongs to an account that isn't a creator — use a different email.");
+    }
+    if (err instanceof ApiError && err.code === "PHONE_ALREADY_REGISTERED") {
+      const existing = owners.find((o) => o.phoneNumber && normalizePhone(o.phoneNumber) === phone);
+      if (existing) return { owner: existing, password: null };
+      throw new ApiError(409, err.code, "That phone number already belongs to another account — clear it or use a different one.");
+    }
+    throw err;
+  }
+}
+
 export function ImportPagesModal({ token, onClose, onImported }: { token: string; onClose: () => void; onImported: (result: ImportResult) => void }) {
   const { user } = useAuth();
   // 25 Sep: Creator/Plan Maker can bulk-import too — the server scopes what
@@ -92,6 +141,8 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
   // server resolved; the admin can override any placeable row.
   const [ownerByRow, setOwnerByRow] = useState<Record<number, string>>({});
   const [defaultOwnerId, setDefaultOwnerId] = useState("");
+  // Rows given to an approved vendor's account (14 Oct): "Import all pages under" leaves them alone.
+  const [vendorRows, setVendorRows] = useState<Record<number, string>>({});
   // Per-row category override (user request, 14 Sep — "marking option
   // under category for all or single"); "" = keep what the sheet said.
   const [categoryByRow, setCategoryByRow] = useState<Record<number, string>>({});
@@ -103,8 +154,10 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
   // Accounts created from this popup (22 Sep — "creation of new user option
   // under which all the pages will be associated"), and the new account's
   // one-time password, which has to stay visible until the popup closes.
+  // A list since 14 Oct: approving several new vendors makes several logins.
+  const queryClient = useQueryClient();
   const [extraOwners, setExtraOwners] = useState<PageOwner[]>([]);
-  const [newUser, setNewUser] = useState<{ owner: PageOwner; password: string } | null>(null);
+  const [createdLogins, setCreatedLogins] = useState<CreatedLogin[]>([]);
   const templateMutation = useMutation({ mutationFn: () => assetsApi.downloadImportTemplate(token) });
 
   // Guards against a slow first preview landing after a second source was chosen.
@@ -140,6 +193,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
       if (handles.length > 0) followersMutation.mutate({ handles, source });
       setOwnerByRow(Object.fromEntries(data.rows.filter((r) => r.ownerId && PLACEABLE.includes(r.status)).map((r) => [r.rowNumber, r.ownerId as string])));
       setDefaultOwnerId("");
+      setVendorRows({});
     },
   });
 
@@ -236,18 +290,38 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
   }
 
   // "Import all pages under" means all of them — a row the sheet had placed
-  // under someone else follows too (it can still be switched on its own row).
+  // under someone else follows too (it can still be switched on its own row) —
+  // except rows already given to an approved new vendor.
   function chooseAccountForAll(ownerId: string) {
     setDefaultOwnerId(ownerId);
-    setOwnerByRow({});
+    setOwnerByRow(vendorRows);
+  }
+
+  // Shared by "+ Create new user" and the new-vendor approvals.
+  function rememberAccount(owner: PageOwner, password: string | null) {
+    setExtraOwners((prev) => (prev.some((o) => o.id === owner.id) ? prev : [...prev, owner]));
+    if (password) {
+      setCreatedLogins((prev) => (prev.some((l) => l.owner.id === owner.id) ? prev : [...prev, { owner, password }]));
+      // A new login shows up wherever owners/people are listed.
+      queryClient.invalidateQueries({ queryKey: ["assets", "owners"] });
+      queryClient.invalidateQueries({ queryKey: ["asset-owners"] });
+      queryClient.invalidateQueries({ queryKey: ["adminUsers"] });
+    }
   }
 
   function onUserCreated(owner: PageOwner, password: string | null) {
-    setExtraOwners((prev) => (prev.some((o) => o.id === owner.id) ? prev : [...prev, owner]));
+    rememberAccount(owner, password);
     setDefaultOwnerId(owner.id);
     // Rows the sheet had placed elsewhere follow the new account too — "all the pages will be associated" with it.
-    setOwnerByRow({});
-    if (password) setNewUser({ owner, password });
+    setOwnerByRow(vendorRows);
+  }
+
+  // A new vendor approved (14 Oct): its account gets exactly that vendor's rows.
+  function onVendorAccount(owner: PageOwner, password: string | null, rowNumbers: number[]) {
+    rememberAccount(owner, password);
+    const assigned = Object.fromEntries(rowNumbers.map((n) => [n, owner.id]));
+    setVendorRows((prev) => ({ ...prev, ...assigned }));
+    setOwnerByRow((prev) => ({ ...prev, ...assigned }));
   }
 
   // "Keep sheet values" (empty) drops every override so the sheet's own
@@ -287,7 +361,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
           </p>
         </div>
 
-        {newUser && <NewUserPassword newUser={newUser} />}
+        {createdLogins.length > 0 && <NewUserPasswords logins={createdLogins} />}
 
         {result ? (
           <ResultView result={result} onClose={onClose} isAdmin={isAdmin} />
@@ -338,7 +412,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[0.75rem] text-text-muted">
-                  Columns: <b>Page Name</b>, <b>Page Link</b> (required — the page&apos;s Instagram profile link), <b>Followers</b>, <b>Reel Rate</b>, <b>Story Rate</b>. The first sheet of a workbook is used.
+                  Columns: <b>Page Name</b>, <b>Page Link</b> (required — the page&apos;s Instagram profile link), <b>Vendor Name</b>, <b>Vendor Contact</b> (phone or email), <b>Followers</b>, <b>Reel Rate</b>, <b>Story Rate</b>. The first sheet of a workbook is used.
                 </p>
                 <Button type="button" variant="secondary" size="sm" onClick={() => templateMutation.mutate()} disabled={templateMutation.isPending} data-testid="import-download-template">
                   <DownloadIcon className="h-3.5 w-3.5" />
@@ -381,6 +455,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
                 owners={[...preview.owners, ...extraOwners.filter((o) => !preview.owners.some((p) => p.id === o.id))]}
                 token={token}
                 onUserCreated={onUserCreated}
+                onVendorAccount={onVendorAccount}
               />
             )}
 
@@ -442,7 +517,9 @@ function PreviewView({
   owners,
   token,
   onUserCreated,
+  onVendorAccount,
 }: {
+  onVendorAccount: (owner: PageOwner, password: string | null, rowNumbers: number[]) => void;
   checkState: (row: ImportPreviewRow) => CheckState;
   unverifiedCount: number;
   onRetryCheck: () => void;
@@ -598,6 +675,8 @@ function PreviewView({
           onUserCreated={onUserCreated}
         />
       )}
+
+      {!isCreator && (preview.newVendors?.length ?? 0) > 0 && <NewVendorsSection vendors={preview.newVendors ?? []} owners={ownerOptions} token={token} onVendorAccount={onVendorAccount} />}
 
       {alreadyExisting.length > 0 && (
         <div data-testid="import-already-exists">
@@ -780,35 +859,18 @@ function ImportAccountPicker({
   token: string;
   onUserCreated: (owner: PageOwner, password: string | null) => void;
 }) {
-  // Creating an account is POST /auth/signup, which needs users.manage — a
-  // sub-admin with only inventory.manage picks an existing account instead.
-  const { user } = useAuth();
-  // Staff with users.edit, or (25 Sep) a plan maker granted inventory.edit —
-  // the same narrow "mint a plain creator login" path the single Add-page
-  // flow uses, never a general people-management grant.
-  const canCreateUser = hasAccess(user, "users.edit") || (user?.role === "PLAN_MAKER" && canUse(user, "inventory.edit"));
+  // Creating an account is POST /auth/signup — anyone else picks an existing account instead.
+  const canCreateUser = useCanCreateCreator();
   const [creating, setCreating] = useState(owners.length === 0 && canCreateUser);
   // Inventory asks only name + email for a new account (24 Sep) — the
   // email is their login; the password is generated.
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
-  const emailValid = /^\S+@\S+\.\S+$/.test(email.trim());
+  const emailValid = EMAIL_PATTERN.test(email.trim());
 
   const createMutation = useMutation({
-    mutationFn: async () => {
-      const normalized = email.trim().toLowerCase();
-      try {
-        const { user, generatedPassword } = await authApi.signup(token, { email: normalized, name: name.trim() || undefined, role: "CREATOR" });
-        return { owner: { id: user.id, name: user.name, phoneNumber: user.phoneNumber, email: user.email }, password: generatedPassword as string | null };
-      } catch (err) {
-        // That email is already a creator here — use them rather than failing.
-        const existing = owners.find((o) => o.email?.toLowerCase() === normalized);
-        if (err instanceof ApiError && err.code === "EMAIL_ALREADY_REGISTERED" && existing) return { owner: existing, password: null };
-        if (err instanceof ApiError && err.code === "EMAIL_ALREADY_REGISTERED") throw new ApiError(409, err.code, "That email already belongs to an account that isn't a creator — use a different email.");
-        throw err;
-      }
-    },
+    mutationFn: () => createCreatorAccount(token, { name, email }, owners),
     onSuccess: ({ owner, password }) => {
       onUserCreated(owner, password);
       setCreating(false);
@@ -886,25 +948,203 @@ function ImportAccountPicker({
   );
 }
 
-/** The new account's password is shown once, and stays up until the popup closes. */
-function NewUserPassword({ newUser }: { newUser: { owner: PageOwner; password: string } }) {
-  const [copied, setCopied] = useState(false);
+/**
+ * "New vendors found" (14 Oct): the sheet's Vendor Name / Vendor Contact
+ * named people who aren't in Taggify. Each can be approved into a creator
+ * login (contact details editable first), which then owns exactly that
+ * vendor's rows. Skipping leaves the rows for the account pickers.
+ */
+type VendorDraft = { name: string; phone: string; email: string };
+type VendorOutcome = { owner: PageOwner; matched: boolean };
+
+function NewVendorsSection({ vendors, owners, token, onVendorAccount }: { vendors: ImportNewVendor[]; owners: PageOwner[]; token: string; onVendorAccount: (owner: PageOwner, password: string | null, rowNumbers: number[]) => void }) {
+  const canCreate = useCanCreateCreator();
+  const [drafts, setDrafts] = useState<Record<string, VendorDraft>>(() => Object.fromEntries(vendors.map((v) => [v.key, { name: v.name ?? "", phone: v.phone ?? "", email: v.email ?? "" }])));
+  const [outcomes, setOutcomes] = useState<Record<string, VendorOutcome>>({});
+  const [skipped, setSkipped] = useState<Record<string, boolean>>({});
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  // Accounts made during an "Approve all" run, before `owners` re-renders with them.
+  const madeHere = useRef<PageOwner[]>([]);
+  // Vendors being created or already done, read synchronously so a click during "Approve all" can't sign one up twice (14 Oct review).
+  const claimed = useRef<Set<string>>(new Set());
+  const [running, setRunning] = useState(false);
+
+  const draftFor = (key: string) => drafts[key] ?? { name: "", phone: "", email: "" };
+  const emailValid = (key: string) => EMAIL_PATTERN.test(draftFor(key).email.trim());
+  const phoneValid = (key: string) => {
+    const phone = normalizePhone(draftFor(key).phone);
+    // Digits only (an optional leading +): labels like "Ph:" never become a login's phone (14 Oct review).
+    return !phone || /^\+?\d{10,15}$/.test(phone);
+  };
+  const open = vendors.filter((v) => !outcomes[v.key] && !skipped[v.key]);
+  const anyPending = running || Object.values(pending).some(Boolean);
+
+  function setDraft(key: string, field: keyof VendorDraft, value: string) {
+    setDrafts((prev) => ({ ...prev, [key]: { ...draftFor(key), [field]: value } }));
+  }
+
+  async function approve(vendor: ImportNewVendor) {
+    setTouched((prev) => ({ ...prev, [vendor.key]: true }));
+    if (!emailValid(vendor.key) || !phoneValid(vendor.key)) return;
+    if (claimed.current.has(vendor.key)) return;
+    claimed.current.add(vendor.key);
+    let done = false;
+    setPending((prev) => ({ ...prev, [vendor.key]: true }));
+    setErrors((prev) => ({ ...prev, [vendor.key]: "" }));
+    try {
+      const d = draftFor(vendor.key);
+      const { owner, password } = await createCreatorAccount(token, d, [...owners, ...madeHere.current]);
+      madeHere.current = [...madeHere.current, owner];
+      onVendorAccount(owner, password, vendor.rowNumbers);
+      setOutcomes((prev) => ({ ...prev, [vendor.key]: { owner, matched: password === null } }));
+      done = true;
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, [vendor.key]: err instanceof ApiError ? err.message : "Couldn't create that account." }));
+    } finally {
+      // A failed vendor can be tried again; a created one can't be created twice.
+      if (!done) claimed.current.delete(vendor.key);
+      setPending((prev) => ({ ...prev, [vendor.key]: false }));
+    }
+  }
+
+  // One at a time, so the server sees each signup separately and an error stays on its own vendor.
+  async function approveAll() {
+    setRunning(true);
+    try {
+      for (const v of open) await approve(v);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-surface-2 px-3.5 py-3" data-testid="import-new-vendors">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="text-[0.8125rem] font-semibold">New vendors found ({vendors.length})</span>
+        {canCreate && open.length > 1 && (
+          <Button type="button" variant="secondary" size="sm" onClick={approveAll} disabled={anyPending} data-testid="import-vendors-approve-all">
+            Approve all
+          </Button>
+        )}
+      </div>
+      <p className="text-[0.75rem] text-text-muted">
+        {canCreate
+          ? "These vendors aren't in Taggify yet. Check their details, then approve to create a creator login for each — their pages go under it. Skip one to pick an account for its rows below instead."
+          : "These vendors aren't in Taggify yet. Ask an admin to create their accounts, or pick an existing creator for their rows below."}
+      </p>
+      <div className="flex flex-col gap-2">
+        {vendors.map((v) => {
+          const d = draftFor(v.key);
+          const outcome = outcomes[v.key];
+          const pages = `${v.rowNumbers.length} page${v.rowNumbers.length === 1 ? "" : "s"}`;
+          const showErrors = touched[v.key];
+          if (!canCreate || outcome || skipped[v.key]) {
+            return (
+              <div key={v.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[8px] border border-border bg-surface px-3 py-2 text-[0.8125rem]" data-testid="import-new-vendor" data-vendor-key={v.key}>
+                <span className="font-semibold">{outcome ? ownerLabel(outcome.owner) : v.name || v.email || v.phone || "Unnamed vendor"}</span>
+                {!outcome && [v.phone, v.email].filter(Boolean).map((c) => (
+                  <span key={c} className="text-text-2">
+                    {c}
+                  </span>
+                ))}
+                <span className="text-text-muted">· {pages}</span>
+                <span className="ml-auto flex items-center gap-2">
+                  {outcome ? (
+                    <Tag tone="ok" dot={false}>
+                      {outcome.matched ? "Matched to existing account" : "Created ✓"}
+                    </Tag>
+                  ) : skipped[v.key] ? (
+                    <>
+                      <Tag tone="neutral" dot={false}>
+                        Skipped
+                      </Tag>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setSkipped((prev) => ({ ...prev, [v.key]: false }))}>
+                        Undo
+                      </Button>
+                    </>
+                  ) : null}
+                </span>
+              </div>
+            );
+          }
+          return (
+            <form
+              key={v.key}
+              className="flex flex-wrap items-end gap-2.5 rounded-[8px] border border-border bg-surface px-3 py-2.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                approve(v);
+              }}
+              data-testid="import-new-vendor"
+              data-vendor-key={v.key}
+            >
+              <label className="flex min-w-[160px] flex-1 flex-col gap-1">
+                <span className="text-[0.72rem] font-medium text-text-2">Name</span>
+                <TextField value={d.name} onChange={(value) => setDraft(v.key, "name", value)} placeholder="Vendor's name" aria-label="Vendor name" />
+              </label>
+              <label className="flex min-w-[150px] flex-1 flex-col gap-1">
+                <span className="text-[0.72rem] font-medium text-text-2">Phone (optional)</span>
+                <TextField type="tel" value={d.phone} onChange={(value) => setDraft(v.key, "phone", value)} placeholder="+91…" aria-label="Vendor phone" />
+                {showErrors && !phoneValid(v.key) && <span className="text-[0.72rem] text-rose">Enter 10–15 digits (a + in front is fine), or leave it blank.</span>}
+              </label>
+              <label className="flex min-w-[190px] flex-1 flex-col gap-1">
+                <span className="text-[0.72rem] font-medium text-text-2">Email</span>
+                <TextField type="email" value={d.email} onChange={(value) => setDraft(v.key, "email", value)} placeholder="name@gmail.com" aria-label="Vendor email" />
+                {showErrors && !emailValid(v.key) && <span className="text-[0.72rem] text-rose">An email is required — it&apos;s their login.</span>}
+              </label>
+              <span className="pb-2 text-[0.78rem] text-text-muted" data-testid="import-new-vendor-pages">
+                {pages}
+              </span>
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" disabled={running || pending[v.key]} data-testid="import-vendor-approve">
+                  {pending[v.key] ? "Creating…" : "Approve & create"}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSkipped((prev) => ({ ...prev, [v.key]: true }))} disabled={running || pending[v.key]}>
+                  Skip
+                </Button>
+              </div>
+              {errors[v.key] && (
+                <div className="w-full">
+                  <ErrorNotice message={errors[v.key]} />
+                </div>
+              )}
+            </form>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Every new account's password is shown once, and stays up until the popup closes. */
+function NewUserPasswords({ logins }: { logins: CreatedLogin[] }) {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   return (
     <div className="mb-4" data-testid="import-new-user-password">
       <Note tone="ok">
-        <span className="font-semibold">Created {ownerOptionLabel(newUser.owner)}.</span> Share this password with them now — it&apos;s shown only this once:
-        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          <code className="rounded-[6px] border border-border-strong bg-surface px-2.5 py-1 font-mono text-[0.9375rem] font-semibold tracking-wide text-text">{newUser.password}</code>
-          <button
-            type="button"
-            className="text-[0.78rem] font-semibold underline underline-offset-2"
-            onClick={() => {
-              navigator.clipboard?.writeText(newUser.password).then(() => setCopied(true), () => {});
-            }}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
+        <span className="font-semibold">
+          Created {logins.length === 1 ? ownerOptionLabel(logins[0].owner) : `${logins.length} accounts`}.
+        </span>{" "}
+        Share {logins.length === 1 ? "this password" : "these passwords"} now — {logins.length === 1 ? "it's" : "they're"} shown only this once:
+        <ul className="mt-1.5 flex flex-col gap-1.5">
+          {logins.map(({ owner, password }) => (
+            <li key={owner.id} className="flex flex-wrap items-center gap-2" data-testid="import-created-login">
+              {logins.length > 1 && <span className="text-[0.8125rem]">{owner.email ?? ownerOptionLabel(owner)}</span>}
+              <code className="rounded-[6px] border border-border-strong bg-surface px-2.5 py-1 font-mono text-[0.9375rem] font-semibold tracking-wide text-text">{password}</code>
+              <button
+                type="button"
+                className="text-[0.78rem] font-semibold underline underline-offset-2"
+                onClick={() => {
+                  navigator.clipboard?.writeText(password).then(() => setCopiedId(owner.id), () => {});
+                }}
+              >
+                {copiedId === owner.id ? "Copied" : "Copy"}
+              </button>
+            </li>
+          ))}
+        </ul>
       </Note>
     </div>
   );

@@ -476,6 +476,56 @@ export function resolveOwnerRef(ownerRef, owners) {
   return { owner: null, reason: `No creator account matches "${ref}".` };
 }
 
+/** A parsed row's vendor columns as one object, or null when the sheet had no vendor data for that row. */
+function vendorOf(row) {
+  const name = row.vendorName?.trim() || null;
+  const phone = row.vendorPhone?.trim() || null;
+  const email = row.vendorEmail?.trim().toLowerCase() || null;
+  return name || phone || email ? { name, phone, email } : null;
+}
+
+/** What a vendor is called in a message: its name, else its contact. */
+function vendorLabel(vendor) {
+  return vendor.name || vendor.phone || vendor.email;
+}
+
+/**
+ * Matches a sheet's vendor (14 Oct — Vendor Name + Vendor Contact columns)
+ * to an existing creator account: by phone first (last 10 digits), then
+ * email, then exact name (all case-insensitive). A name shared by two
+ * accounts is ambiguous — `ambiguous: true`, never silently picked, and not
+ * offered as a new vendor either. No match at all → `isNew: true`.
+ */
+export function resolveVendor(vendor, owners) {
+  if (!vendor) return { owner: null, reason: null, isNew: false, ambiguous: false };
+  if (vendor.phone) {
+    const key = phoneKey(vendor.phone);
+    const byPhone = key.length >= 10 ? owners.find((o) => phoneKey(o.phoneNumber) === key) : null;
+    if (byPhone) return { owner: byPhone, reason: null, isNew: false, ambiguous: false };
+  }
+  if (vendor.email) {
+    const lower = vendor.email.trim().toLowerCase();
+    const byEmail = owners.find((o) => o.email && o.email.trim().toLowerCase() === lower);
+    if (byEmail) return { owner: byEmail, reason: null, isNew: false, ambiguous: false };
+  }
+  if (vendor.name) {
+    const lower = vendor.name.trim().toLowerCase();
+    const byName = owners.filter((o) => o.name && o.name.trim().toLowerCase() === lower);
+    if (byName.length === 1) return { owner: byName[0], reason: null, isNew: false, ambiguous: false };
+    if (byName.length > 1) {
+      return { owner: null, reason: `"${vendor.name}" matches ${byName.length} vendor accounts — add their phone or email, or pick one.`, isNew: false, ambiguous: true };
+    }
+  }
+  return { owner: null, reason: `New vendor: ${vendorLabel(vendor)}`, isNew: true, ambiguous: false };
+}
+
+/** Grouping key for one new vendor across rows: last 10 phone digits, else lowercased email, else lowercased name. */
+function vendorKey(vendor) {
+  if (vendor.phone) return phoneKey(vendor.phone);
+  if (vendor.email) return vendor.email.trim().toLowerCase();
+  return vendor.name.trim().toLowerCase();
+}
+
 /**
  * Row statuses:
  *   ready          — will be created under `owner`
@@ -485,7 +535,13 @@ export function resolveOwnerRef(ownerRef, owners) {
  *   conflict       — already registered under a *different* account; skipped
  *                    (a page can't sensibly live under two creators)
  *   owner-missing  — no owner cell; the admin picks a default account
- *   owner-unknown  — owner cell didn't match any creator; admin picks one
+ *   owner-unknown  — owner cell didn't match any creator; admin picks one.
+ *                    A row with vendor columns that match no account is
+ *                    "New vendor: …" and is grouped into `newVendors` so the
+ *                    popup can approve + create that vendor (14 Oct)
+ *
+ * Every row carries `vendor` ({name, phone, email} or null). A CREATOR
+ * caller never gets vendor data back: `vendor` is null and `newVendors` is [].
  *
  * A CREATOR's own import (25 Sep) never reaches owner-missing/owner-unknown —
  * every row is forced onto their own account regardless of the sheet's owner
@@ -511,8 +567,11 @@ export async function previewImport(parsed, user) {
   }
 
   const seen = new Set();
+  const newVendorRows = [];
   const rows = parsed.rows.map((row) => {
-    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, followers: row.followers, rateCards: row.rateCards, ownerRef: row.ownerRef, owner: null, ownerId: null, status: "ready", reason: null };
+    // A creator's own sheet: vendor columns are ignored entirely.
+    const vendor = isCreator ? null : vendorOf(row);
+    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, followers: row.followers, rateCards: row.rateCards, ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null };
     if (row.problem) return { ...base, status: "invalid", reason: row.problem };
     const key = row.handle.toLowerCase();
     if (seen.has(key)) return { ...base, status: "duplicate", reason: "Same handle appears earlier in this sheet." };
@@ -533,7 +592,8 @@ export async function previewImport(parsed, user) {
       return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id };
     }
 
-    const { owner, reason } = resolveOwnerRef(row.ownerRef, owners);
+    // Vendor columns, when the row has them, decide the owner; otherwise the legacy owner cell does.
+    const { owner, reason, isNew } = vendor ? resolveVendor(vendor, owners) : resolveOwnerRef(row.ownerRef, owners);
     if (owner) {
       const same = matches.find((a) => a.ownerId === owner.id);
       if (same) return { ...base, owner, ownerId: owner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(owner)}.` };
@@ -543,13 +603,58 @@ export async function previewImport(parsed, user) {
     if (matches.length > 0) {
       return { ...base, owner: matches[0].owner, ownerId: matches[0].ownerId, status: "exists", reason: `Already in Inventory under ${ownerLabel(matches[0].owner)}.` };
     }
+    if (vendor) {
+      if (isNew) newVendorRows.push({ vendor, rowNumber: row.rowNumber });
+      return { ...base, status: "owner-unknown", reason };
+    }
     if (row.ownerRef) return { ...base, status: "owner-unknown", reason };
     return { ...base, status: "owner-missing", reason: parsed.hasOwnerColumn ? "Owner cell is blank." : "Sheet has no owner column." };
   });
 
+  // One entry per new vendor, merged across its rows (first non-null value wins).
+  // One entry per vendor even when rows name them differently (phone on one row, email on
+  // another — the template's own examples do this): rows join a group sharing their phone or
+  // email, or their name when the phones and emails don't contradict it (14 Oct review).
+  const groups = [];
+  const lower = (s) => (s ? s.trim().toLowerCase() : null);
+  const clash = (a, b) => (a && b && a !== b);
+  for (const { vendor, rowNumber } of newVendorRows) {
+    const phone = vendor.phone ? phoneKey(vendor.phone) : null;
+    const email = lower(vendor.email);
+    const name = lower(vendor.name);
+    const joins = groups.filter(
+      (g) => (phone && g.phones.has(phone)) || (email && g.emails.has(email)) || (name && g.names.has(name) && ![...g.phones].some((p) => clash(p, phone)) && ![...g.emails].some((e) => clash(e, email)))
+    );
+    let group = joins[0];
+    if (!group) {
+      group = { entry: { key: vendorKey(vendor), name: vendor.name, phone: vendor.phone, email: vendor.email, rowNumbers: [] }, phones: new Set(), emails: new Set(), names: new Set() };
+      groups.push(group);
+    }
+    for (const other of joins.slice(1)) {
+      // This row links two groups: fold the later one in.
+      group.entry.name ??= other.entry.name;
+      group.entry.phone ??= other.entry.phone;
+      group.entry.email ??= other.entry.email;
+      group.entry.rowNumbers.push(...other.entry.rowNumbers);
+      other.phones.forEach((p) => group.phones.add(p));
+      other.emails.forEach((e) => group.emails.add(e));
+      other.names.forEach((n) => group.names.add(n));
+      groups.splice(groups.indexOf(other), 1);
+    }
+    group.entry.name ??= vendor.name;
+    group.entry.phone ??= vendor.phone;
+    group.entry.email ??= vendor.email;
+    group.entry.rowNumbers.push(rowNumber);
+    if (phone) group.phones.add(phone);
+    if (email) group.emails.add(email);
+    if (name) group.names.add(name);
+  }
+  for (const g of groups) g.entry.rowNumbers.sort((a, b) => a - b);
+  const newVendors = isCreator ? [] : groups.map((g) => g.entry);
+
   const summary = {};
   for (const r of rows) summary[r.status] = (summary[r.status] ?? 0) + 1;
-  return { rows, summary, totalRows: rows.length, hasOwnerColumn: parsed.hasOwnerColumn, owners };
+  return { rows, summary, totalRows: rows.length, hasOwnerColumn: parsed.hasOwnerColumn, owners, newVendors };
 }
 
 /** One entry per format, positive amounts only — RateCard is unique per (asset, format). */
