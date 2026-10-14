@@ -61,7 +61,7 @@ const SUB_ADMIN_RESETTABLE_ROLES: Role[] = ["CREATOR", "TEAM_MEMBER"];
 // admin/service.js's updateUserRole). Mirrored here so the dropdown doesn't
 // offer what would 403.
 const isFullAdmin = (u: { role?: Role; permissions?: Permissions } | null | undefined) =>
-  u?.role === "ADMIN" && !PERMISSION_KEYS.some((k) => u.permissions?.[k] === false);
+  u?.role === "ADMIN" && !PERMISSION_KEYS.some((k) => !isOptInKey(k) && u.permissions?.[k] === false);
 
 /** True once a role's overlay deviates at all from that role's own baseline — used to badge both directions (a sub-admin missing something, or any role granted something extra) with one check. */
 const deviatesFromBaseline = (role: Role, permissions: Permissions | undefined) =>

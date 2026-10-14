@@ -1,6 +1,8 @@
 import { Router } from "express";
 
 import { verifyAccessToken } from "../../lib/auth/jwt.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
+import { requireAccess } from "../../middleware/requireAccess.js";
 import {
   buildAuthorizeUrl,
   verifyState,
@@ -27,7 +29,9 @@ const router = Router();
 
 // `healthy` (22 Sep): connected AND the stored refresh token still works —
 // "connected but expired" is what the plan card's Reconnect Google fixes.
-router.get("/status", async (req, res, next) => {
+// 12 Oct: signed-in only — admins (who connect it) and anyone who can edit
+// plans (whose sheet actions depend on it). It was open to anyone before.
+router.get("/status", requireAuth, requireAccess("plans.edit", "ADMIN", "PLAN_MAKER"), async (req, res, next) => {
   try {
     const configured = isGoogleOAuthConfigured();
     const connected = configured && (await isGoogleDriveConnected());

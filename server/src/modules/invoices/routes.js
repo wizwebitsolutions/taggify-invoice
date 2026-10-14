@@ -126,7 +126,10 @@ router.post("/:id/reject", requireAccess("finance.pay"), validateBody(rejectInvo
 // Attached invoice document (12 Sep) — no requireRole: access is per
 // invoice (its creator, Admin, Finance, or the Plan Maker whose campaign
 // it's on), decided in the service via the same rule as GET detail.
-router.post("/:id/attachment/upload-url", requireOwnAccess("finance.edit"), async (req, res, next) => {
+// 12 Oct: changing the file needs finance.edit — staff with only
+// finance.view used to pass; own-scope roles still need their own switch.
+const canAttach = requireAccess("finance.edit", "CREATOR", "TEAM_MEMBER", "PLAN_MAKER");
+router.post("/:id/attachment/upload-url", canAttach, async (req, res, next) => {
   try {
     res.json(await invoicesService.requestAttachmentUpload(req.params.id, req.user));
   } catch (err) {
@@ -134,7 +137,7 @@ router.post("/:id/attachment/upload-url", requireOwnAccess("finance.edit"), asyn
   }
 });
 
-router.post("/:id/attachment", requireOwnAccess("finance.edit"), validateBody(confirmAttachmentSchema), async (req, res, next) => {
+router.post("/:id/attachment", canAttach, validateBody(confirmAttachmentSchema), async (req, res, next) => {
   try {
     res.status(201).json(await invoicesService.confirmAttachment(req.params.id, req.user, req.body));
   } catch (err) {
@@ -142,7 +145,7 @@ router.post("/:id/attachment", requireOwnAccess("finance.edit"), validateBody(co
   }
 });
 
-router.delete("/:id/attachment", requireOwnAccess("finance.edit"), async (req, res, next) => {
+router.delete("/:id/attachment", canAttach, async (req, res, next) => {
   try {
     await invoicesService.removeAttachment(req.params.id, req.user);
     res.status(204).end();

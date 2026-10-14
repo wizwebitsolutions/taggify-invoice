@@ -45,6 +45,9 @@ export async function updateProfile(userId, data) {
   return prisma.user.update({ where: { id: userId }, data, select: PROFILE_SELECT });
 }
 
+/** Who each team row is, so the creator sees a name instead of an id (12 Oct). Only what they need to recognise them. */
+const TEAM_MEMBER_INCLUDE = { user: { select: { id: true, name: true, email: true } } };
+
 /** A Creator grants a Team Member access to their own pages/links. */
 export async function addTeamMember(creatorId, { userId, canSeeMoney }) {
   const member = await prisma.user.findUnique({ where: { id: userId } });
@@ -55,9 +58,10 @@ export async function addTeamMember(creatorId, { userId, canSeeMoney }) {
     where: { userId_creatorId: { userId, creatorId } },
     create: { userId, creatorId, canSeeMoney },
     update: { canSeeMoney },
+    include: TEAM_MEMBER_INCLUDE,
   });
 }
 
 export async function listTeamMembers(creatorId) {
-  return prisma.teamMembership.findMany({ where: { creatorId } });
+  return prisma.teamMembership.findMany({ where: { creatorId }, include: TEAM_MEMBER_INCLUDE, orderBy: { createdAt: "asc" } });
 }

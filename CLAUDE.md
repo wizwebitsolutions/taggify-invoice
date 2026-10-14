@@ -14,6 +14,13 @@ before adding or changing tests).
   - Auth session is stored in `localStorage` under `taggify_auth`
     (`client/lib/auth-context.tsx`). Pages are protected client-side with
     `<RequireAuth>`, not middleware.
+- `client-v2/` — the redesigned frontend (Next.js 14 + shadcn/ui + Tailwind, :3001).
+  IMPORTANT: never invent visual values locally. Typography, spacing, radii,
+  shadows, control heights and colours come from the Taggify tokens in
+  `ux/design-system.md` (implemented in `client-v2/styles/tokens.css` +
+  `tailwind.config.ts`). Use shadcn components as behavioural primitives, styled
+  to those tokens and the approved references in `ux/design-ref/`; default shadcn
+  appearance is not the finished design. Charts: shadcn Chart only.
 - `server/` — Express + Prisma/Postgres. Each `src/modules/<name>/` has
   `schemas.js` (zod), `service.js` and `routes.js`.
 

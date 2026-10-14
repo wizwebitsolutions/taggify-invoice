@@ -90,6 +90,16 @@ router.put("/:id/cost", requireAccess("links.edit"), validateBody(reviseCostSche
   }
 });
 
+// Delete a post (12 Oct): staff with links.edit only — never a creator, who
+// has no way to undo it. Refused once it's on an invoice or payout (service).
+router.delete("/:id", requireAccess("links.edit"), async (req, res, next) => {
+  try {
+    res.json(await linksService.deleteLink(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/:id/mark-invalid", requireAccess("links.edit"), validateBody(markInvalidSchema), async (req, res, next) => {
   try {
     res.json(await linksService.markLinkInvalid(req.params.id, req.user, req.body));

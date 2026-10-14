@@ -436,6 +436,32 @@ export async function markLinkInvalid(linkId, admin, { note }) {
   });
 }
 
+/**
+ * Staff delete a post outright (12 Oct — "admin should be able to remove a
+ * post"; also what lets a phase whose only posts were wrong be deleted).
+ * Unlike markLinkInvalid this removes the row and its history (screenshot,
+ * snapshots, status events and cost revisions cascade). Refused once money is
+ * attached: on an invoice (reject it first) or on a vendor payout. A sheet row
+ * that auto-attached this post is kept and simply unlinked, so it can attach
+ * again. The page's over-quota flags are recomputed, since a slot just freed.
+ */
+export async function deleteLink(linkId) {
+  const link = await prisma.link.findUnique({
+    where: { id: linkId },
+    select: { id: true, status: true, campaignId: true, assetId: true, invoiceItem: { select: { id: true } }, payoutItem: { select: { id: true } } },
+  });
+  if (!link) throw new ApiError(404, "LINK_NOT_FOUND", "Link not found");
+  if (link.status === "INVOICED" || link.invoiceItem) throw ALREADY_INVOICED("delete it");
+  if (link.payoutItem) throw new ApiError(409, "ON_PAYOUT", "This post is on a vendor payout, so it can't be deleted");
+
+  await prisma.$transaction([
+    prisma.campaignAssignment.updateMany({ where: { linkId }, data: { linkId: null } }),
+    prisma.link.delete({ where: { id: linkId } }),
+  ]);
+  await recomputePostQuota(link.campaignId, link.assetId);
+  return { id: linkId };
+}
+
 export async function getLinkCostRevisions(linkId) {
   return prisma.linkCostRevision.findMany({
     where: { linkId },

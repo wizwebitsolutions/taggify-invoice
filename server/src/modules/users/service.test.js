@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const mockPrisma = { user: { findUnique: vi.fn(), update: vi.fn() } };
+const mockPrisma = { user: { findUnique: vi.fn(), update: vi.fn() }, teamMembership: { findMany: vi.fn(), upsert: vi.fn() } };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
-const { updateProfile } = await import("./service.js");
+const { updateProfile, listTeamMembers, addTeamMember } = await import("./service.js");
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -42,5 +42,29 @@ describe("updateProfile — verified login email", () => {
     mockPrisma.user.update.mockResolvedValue({ id: "u1" });
     await updateProfile("u1", { name: "Only Name" });
     expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+// My team (12 Oct): rows carry the member's name and email — and nothing else about them.
+describe("team members", () => {
+  const INCLUDE = { user: { select: { id: true, name: true, email: true } } };
+
+  it("lists the creator's own team with each member's name and email", async () => {
+    mockPrisma.teamMembership.findMany.mockResolvedValue([]);
+    await listTeamMembers("cr-1");
+    expect(mockPrisma.teamMembership.findMany).toHaveBeenCalledWith({ where: { creatorId: "cr-1" }, include: INCLUDE, orderBy: { createdAt: "asc" } });
+  });
+
+  it("adding a member returns the row with who they are", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "tm-1", role: "TEAM_MEMBER" });
+    mockPrisma.teamMembership.upsert.mockResolvedValue({ id: "m1" });
+    await addTeamMember("cr-1", { userId: "tm-1", canSeeMoney: true });
+    expect(mockPrisma.teamMembership.upsert).toHaveBeenCalledWith(expect.objectContaining({ include: INCLUDE }));
+  });
+
+  it("refuses an id that isn't a team member account", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: "x", role: "CREATOR" });
+    await expect(addTeamMember("cr-1", { userId: "x", canSeeMoney: false })).rejects.toMatchObject({ code: "INVALID_TEAM_MEMBER" });
+    expect(mockPrisma.teamMembership.upsert).not.toHaveBeenCalled();
   });
 });

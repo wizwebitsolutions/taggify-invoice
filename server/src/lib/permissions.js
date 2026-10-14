@@ -256,11 +256,15 @@ export function hasPermission(user, key) {
   return getEffectivePermissions(user)[key] === true;
 }
 
-/** True only for an ADMIN-role account whose overlay turns at least one default-true key off. */
+/**
+ * True only for an ADMIN-role account whose overlay turns at least one
+ * default-true key off. Opt-in keys don't count (12 Oct): switching Bulk
+ * Tracker off for an admin must not quietly strip their full-admin powers.
+ */
 export function isRestrictedSubAdmin(user) {
   if (user?.role !== "ADMIN" || !user?.permissions) return false;
   const effective = getEffectivePermissions(user);
-  return PERMISSION_KEYS.some((key) => effective[key] !== true);
+  return PERMISSION_KEYS.some((key) => !OPT_IN_KEYS.includes(key) && effective[key] !== true);
 }
 
 /**

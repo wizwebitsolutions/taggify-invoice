@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ApiError } from "../../middleware/errorHandler.js";
 
 const mockPrisma = {
-  link: { findUnique: vi.fn(), update: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
+  link: { findUnique: vi.fn(), update: vi.fn(), findFirst: vi.fn(), create: vi.fn(), delete: vi.fn() },
   linkCostRevision: { create: vi.fn(), findMany: vi.fn() },
   linkStatusEvent: { create: vi.fn() },
   campaign: { findMany: vi.fn() },
@@ -20,7 +20,7 @@ vi.mock("../notifications/service.js", () => ({ notify: vi.fn() }));
 vi.mock("../../lib/postQuota.js", () => ({ recomputePostQuota: vi.fn(async () => []) }));
 const { recomputePostQuota } = await import("../../lib/postQuota.js");
 
-const { reviseLinkCost, getLinkCostRevisions, bulkImportLinks, markLinkInvalid, autoAttachLink, reviewScreenshot, listLinks, createLink, bulkCreateLink, getLinkTimeline } = await import("./service.js");
+const { deleteLink, reviseLinkCost, getLinkCostRevisions, bulkImportLinks, markLinkInvalid, autoAttachLink, reviewScreenshot, listLinks, createLink, bulkCreateLink, getLinkTimeline } = await import("./service.js");
 const { transitionLinkStatus } = await import("./statusTimeline.js");
 const { notify } = await import("../notifications/service.js");
 
@@ -472,5 +472,45 @@ describe("getLinkTimeline — only for a link the caller can see (24 Sep)", () =
     mockPrisma.link.findFirst.mockClear();
     await expect(getLinkTimeline("any-link", { id: "admin-1", role: "ADMIN" })).resolves.toHaveLength(1);
     expect(mockPrisma.link.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+// Delete a post (12 Oct): gone with its history, but never once money is attached.
+describe("deleteLink", () => {
+  const LINK = { id: "l1", status: "SUBMITTED", campaignId: "c1", assetId: "a1", invoiceItem: null, payoutItem: null };
+  // Earlier tests can leave queued *Once values behind (clearAllMocks keeps them).
+  // Other tests swap mockPrisma.campaignAssignment out wholesale, so set ours here.
+  beforeEach(() => {
+    mockPrisma.link.findUnique.mockReset();
+    mockPrisma.campaignAssignment = { updateMany: vi.fn() };
+  });
+
+  it("refuses a post on an invoice, by status or by invoice item, and writes nothing", async () => {
+    mockPrisma.link.findUnique.mockResolvedValueOnce({ ...LINK, status: "INVOICED" });
+    await expect(deleteLink("l1")).rejects.toMatchObject({ statusCode: 409, code: "ALREADY_INVOICED" });
+    mockPrisma.link.findUnique.mockResolvedValueOnce({ ...LINK, status: "INSIGHTS_APPROVED", invoiceItem: { id: "ii1" } });
+    await expect(deleteLink("l1")).rejects.toMatchObject({ statusCode: 409, code: "ALREADY_INVOICED" });
+    expect(mockPrisma.link.delete).not.toHaveBeenCalled();
+  });
+
+  it("refuses a post on a vendor payout", async () => {
+    mockPrisma.link.findUnique.mockResolvedValueOnce({ ...LINK, payoutItem: { id: "pi1" } });
+    await expect(deleteLink("l1")).rejects.toMatchObject({ statusCode: 409, code: "ON_PAYOUT" });
+    expect(mockPrisma.link.delete).not.toHaveBeenCalled();
+  });
+
+  it("404s an unknown post", async () => {
+    mockPrisma.link.findUnique.mockResolvedValueOnce(null);
+    await expect(deleteLink("nope")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("unlinks the sheet row, deletes the post (history cascades) and recomputes the page's quota", async () => {
+    mockPrisma.link.findUnique.mockResolvedValueOnce({ ...LINK, status: "INVALID" });
+    mockPrisma.campaignAssignment.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.link.delete.mockResolvedValue({ id: "l1" });
+    await expect(deleteLink("l1")).resolves.toEqual({ id: "l1" });
+    expect(mockPrisma.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { linkId: "l1" }, data: { linkId: null } });
+    expect(mockPrisma.link.delete).toHaveBeenCalledWith({ where: { id: "l1" } });
+    expect(recomputePostQuota).toHaveBeenCalledWith("c1", "a1");
   });
 });

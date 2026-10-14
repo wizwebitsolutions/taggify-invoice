@@ -16,7 +16,18 @@ vi.mock("../../middleware/requireAuth.js", () => ({
 }));
 
 const approveInvoice = vi.fn(async (id) => ({ id, status: "APPROVED" }));
-vi.mock("./service.js", () => ({ approveInvoice, listInvoices: vi.fn(), requestInvoiceReceiptUpload: vi.fn(), confirmInvoiceReceipt: vi.fn() }));
+const requestAttachmentUpload = vi.fn(async () => ({ uploadUrl: "u" }));
+const confirmAttachment = vi.fn(async () => ({ name: "inv.pdf" }));
+const removeAttachment = vi.fn(async () => null);
+vi.mock("./service.js", () => ({
+  approveInvoice,
+  listInvoices: vi.fn(),
+  requestInvoiceReceiptUpload: vi.fn(),
+  confirmInvoiceReceipt: vi.fn(),
+  requestAttachmentUpload: (...a) => requestAttachmentUpload(...a),
+  confirmAttachment: (...a) => confirmAttachment(...a),
+  removeAttachment: (...a) => removeAttachment(...a),
+}));
 const listClientInvoices = vi.fn(async () => ({ items: [], total: 0 }));
 const markClientInvoicePaid = vi.fn(async (id) => ({ id, status: "PAID" }));
 vi.mock("./clientInvoices.js", () => ({
@@ -96,5 +107,36 @@ describe("POST /invoices/:id/approve — who may sign off", () => {
   it("403s a PLAN_MAKER with or without a stored finance grant (regression (24 Sep — own-scope roles never get global access))", async () => {
     expect(await approveAs({ id: "pm-1", role: "PLAN_MAKER" })).toBe(403);
     expect(await approveAs({ id: "pm-2", role: "PLAN_MAKER", permissions: { "finance.manage": true } })).toBe(403);
+  });
+});
+
+describe("Invoice attachment routes — need finance.edit (12 Oct)", () => {
+  const CONFIRM = { publicId: "invoice-attachments/inv-1/x.pdf", fileName: "inv.pdf" };
+  async function attach(user) {
+    currentUser = user;
+    const up = await fetch(`${base}/invoices/inv-1/attachment/upload-url`, { method: "POST" });
+    const confirm = await fetch(`${base}/invoices/inv-1/attachment`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(CONFIRM) });
+    const del = await fetch(`${base}/invoices/inv-1/attachment`, { method: "DELETE" });
+    return [up.status, confirm.status, del.status];
+  }
+
+  it("staff with only finance.view are refused on upload, confirm and remove", async () => {
+    expect(await attach({ id: "fi-1", role: "FINANCE", permissions: { "finance.edit": false } })).toEqual([403, 403, 403]);
+    expect(await attach({ id: "ad-2", role: "ADMIN", permissions: { "finance.edit": false } })).toEqual([403, 403, 403]);
+    expect(requestAttachmentUpload).not.toHaveBeenCalled();
+    expect(confirmAttachment).not.toHaveBeenCalled();
+    expect(removeAttachment).not.toHaveBeenCalled();
+  });
+
+  it("a creator whose finance edit switch is off is refused; a team member never has it", async () => {
+    expect(await attach({ id: "cr-1", role: "CREATOR", permissions: { "finance.edit": false } })).toEqual([403, 403, 403]);
+    expect(await attach({ id: "tm-1", role: "TEAM_MEMBER" })).toEqual([403, 403, 403]);
+  });
+
+  it("finance, admin and a creator (own invoice, checked in the service) get through", async () => {
+    expect(await attach({ id: "fi-2", role: "FINANCE" })).toEqual([200, 201, 204]);
+    expect(await attach({ id: "ad-1", role: "ADMIN" })).toEqual([200, 201, 204]);
+    expect(await attach({ id: "cr-2", role: "CREATOR" })).toEqual([200, 201, 204]);
+    expect(confirmAttachment).toHaveBeenCalledWith("inv-1", expect.objectContaining({ id: "cr-2" }), CONFIRM);
   });
 });

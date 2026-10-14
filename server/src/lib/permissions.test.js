@@ -119,6 +119,12 @@ describe("isRestrictedSubAdmin", () => {
     expect(isRestrictedSubAdmin({ role: "ADMIN", permissions: {} })).toBe(false);
     expect(isRestrictedSubAdmin({ role: "ADMIN", permissions: { "users.edit": false } })).toBe(true);
   });
+
+  it("ignores opt-in keys: an admin with only Bulk Tracker switched off is still a full admin", () => {
+    expect(isRestrictedSubAdmin({ role: "ADMIN", permissions: { "bulkTrack.view": false } })).toBe(false);
+    expect(isFullAdmin({ role: "ADMIN", permissions: { "bulkTrack.view": false } })).toBe(true);
+    expect(isRestrictedSubAdmin({ role: "ADMIN", permissions: { "bulkTrack.view": false, "users.edit": false } })).toBe(true);
+  });
 });
 
 describe("computeNewAccountOverlay — new-account grant can never exceed the actor's own (privilege-escalation guard)", () => {
