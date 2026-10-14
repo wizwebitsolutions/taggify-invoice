@@ -1,0 +1,12 @@
+{
+  "name": "invoice-taggify",
+  "private": true,
+  "description": "Root entry point for DigitalOcean App Platform: builds server + client/ static export, runs the Express server (same setup as render.yaml).",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "build": "cd server && npm install --include=dev && npx prisma migrate deploy && cd ../client && npm install --include=dev && npm run build",
+    "start": "cd server && npm start"
+  }
+}
