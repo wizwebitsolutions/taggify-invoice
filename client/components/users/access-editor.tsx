@@ -105,7 +105,7 @@ const OWN_SECTION_META: Partial<Record<Role, Partial<typeof SECTION_META>>> = {
     inventory: {
       label: "Inventory",
       view: "Browse the full page catalogue to build plans",
-      actions: { edit: { label: "Add pages", hint: "Register a page under an existing or brand-new creator account (admin approves)" } },
+      actions: { edit: { label: "Add & edit pages", hint: "Register a page under an existing or brand-new creator account, and suggest edits to any page's rates, category, grade or group link (admin approves both)" } },
     },
   },
 };

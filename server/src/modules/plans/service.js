@@ -19,6 +19,8 @@ import { buildPlanInvoiceAttachmentKey, getUploadParams, objectExists, publicUrl
 import { fetchSheetCsv } from "../campaigns/service.js";
 import { autoAttachLink } from "../links/service.js";
 import { parseExecutionSheet } from "../../lib/executionSheetParser.js";
+import { COMBOS, COMBO_PART_FORMATS, comboParts, isCombo, formatLabel, postsPerUnit } from "../../lib/formats.js";
+import { splitComboCost } from "../../lib/comboSplit.js";
 
 const PLAN_INCLUDE = { items: { include: { asset: true } }, createdBy: { select: { id: true, name: true } }, approvedBy: { select: { id: true, name: true } } };
 
@@ -51,7 +53,7 @@ async function resolveItemCosts(items, alreadyOn = new Set()) {
     let cost = item.cost;
     if (cost == null) {
       const rateCard = asset.rateCards.find((rc) => rc.format === item.format);
-      if (!rateCard) throw new ApiError(400, "NO_RATE_CARD", `No rate card set for format "${item.format}" on @${asset.handle}`);
+      if (!rateCard) throw new ApiError(400, "NO_RATE_CARD", `No ${formatLabel(item.format)} rate set for @${asset.handle}`);
       cost = Number(rateCard.amount);
     }
     return {
@@ -64,31 +66,21 @@ async function resolveItemCosts(items, alreadyOn = new Set()) {
   });
 }
 
-// Hard budget cap (user request, 14 Sep — "cost accordingly will be
-// visible according to budget and can upto budget only", decided as a hard
-// cap this session): the client-facing subtotal (clientCost ?? cost, × posts)
-// may never exceed the plan's budget. Checked whenever items or the budget
-// change, so neither a page added on the pages step nor a price raised on
-// the pricing step nor a budget lowered later can leave the plan over.
+// The client-facing subtotal (clientCost ?? cost, × posts).
+//
+// Budget: from 14 Sep to 16 Oct this was a hard cap (PLAN_OVER_BUDGET) —
+// pages could never take the plan past its budget. On 16 Oct the user
+// asked for the opposite ("agar 3 lac ka plan bna rhe h ... chaahe budget
+// 3.5 lac ho jae pr add hone chahie pages"): the budget is a target, going
+// over is allowed and only *warned about* (the wizard shows "Over budget
+// by …"; `budgetVariance` below goes negative). Nothing server-side refuses
+// a save for being over budget any more.
 export function clientSubtotalOf(items) {
   return items.reduce((sum, i) => sum + Number(i.clientCost ?? i.cost) * (i.postsPerProfile ?? 1), 0);
 }
 
-// The cap is on the *pages* only. The overall quoted total typed on the
-// pricing step (overrideCost) is deliberately NOT capped — it's the markup
-// the client is quoted and may be larger than the budget (user request,
-// 14 Sep — "quoted to client will be larger ... that is okay").
-function assertWithinBudget(budget, items) {
-  if (budget == null) return;
-  const subtotal = clientSubtotalOf(items);
-  if (subtotal > Number(budget)) {
-    throw new ApiError(400, "PLAN_OVER_BUDGET", `These pages come to ₹${subtotal.toLocaleString("en-IN")}, over the ₹${Number(budget).toLocaleString("en-IN")} budget`);
-  }
-}
-
 export async function createPlan(requester, { items, ...fields }) {
   const resolvedItems = await resolveItemCosts(items);
-  assertWithinBudget(fields.budget, resolvedItems);
   const plan = await prisma.plan.create({
     data: {
       ...fields,
@@ -191,15 +183,11 @@ export async function updatePlan(planId, requester, { items, ...fields }) {
   await assertCanAccessPlan(requester, existing);
 
   const data = { ...fields };
-  const budget = fields.budget !== undefined ? fields.budget : existing.budget;
   if (items) {
     const onPlan = await prisma.planItem.findMany({ where: { planId }, select: { assetId: true } });
     const resolvedItems = await resolveItemCosts(items, new Set(onPlan.map((i) => i.assetId)));
-    assertWithinBudget(budget, resolvedItems);
     await prisma.planItem.deleteMany({ where: { planId } });
     data.items = { create: resolvedItems };
-  } else if (fields.budget !== undefined) {
-    assertWithinBudget(budget, await prisma.planItem.findMany({ where: { planId } }));
   }
   // A budget saved here answers the uploaded sheet's pending "budget" entry (22 Sep).
   if (fields.budget !== undefined && Array.isArray(existing.sourceSheetPending) && existing.sourceSheetPending.some((p) => p.kind === "budget")) {
@@ -250,6 +238,61 @@ export async function updatePlan(planId, requester, { items, ...fields }) {
 
 const MAX_EXECUTION_ROWS = 500;
 
+/** The first path segment of an Instagram URL, lowercased, or null. */
+function instagramPathKind(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url ?? "").trim());
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)instagram\.com$/i.test(parsed.hostname)) return null;
+  return parsed.pathname.split("/").filter(Boolean)[0]?.toLowerCase() ?? null;
+}
+
+/**
+ * Which part of a combo an Instagram post URL is.
+ *
+ * With the default `combos` (["reel_story"]): /reel/ or /reels/ → "reel",
+ * /stories/ → "story"; anything else (a /p/ link can be either, another
+ * site, not a URL) → null.
+ *
+ * `combos` = the combo formats booked for the page (16 Oct): /stories/ →
+ * "story"; on a repost_story page a non-story Instagram post (/reel/,
+ * /reels/, /p/) → "repost"; on a reel_story page /reel/ or /reels/ →
+ * "reel". When the page has both combos and the URL could be either the
+ * reel or the repost, it's ambiguous → null.
+ */
+export function postKindFromUrl(url, combos = ["reel_story"]) {
+  return slotFormatFromUrl(url, combos.flatMap((c) => comboParts(c) ?? []));
+}
+
+/**
+ * The slot formats an Instagram URL's path could be (review fix, 16 Oct):
+ * /stories/ → a story; /reel/ or /reels/ → any reel-type post, or a repost
+ * (a reposted reel); /p/ → Static & Carousel, or a repost. A /p/ link isn't
+ * read as a reel (the combo rule above).
+ */
+const URL_PATH_FORMATS = {
+  stories: ["story", "political_story"],
+  reel: ["reel", "entertainment", "pr", "political_reel", "repost"],
+  reels: ["reel", "entertainment", "pr", "political_reel", "repost"],
+  p: ["post", "repost"],
+};
+
+/**
+ * Which of a page's booked slot `formats` an Instagram post URL is — only
+ * when exactly one of them could match; ambiguous (a /reel/ URL on a page
+ * with a reel and a repost slot), unmatched or not Instagram → null, and the
+ * caller leaves the row pending. postKindFromUrl is this over combo parts.
+ */
+export function slotFormatFromUrl(url, formats) {
+  const first = instagramPathKind(url);
+  const possible = URL_PATH_FORMATS[first] ?? [];
+  const kinds = [...new Set(formats)].filter((f) => possible.includes(f));
+  return kinds.length === 1 ? kinds[0] : null;
+}
+
 export async function syncExecutionSheet(planId, requester) {
   const plan = await prisma.plan.findUnique({ where: { id: planId }, include: PLAN_INCLUDE });
   if (!plan) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
@@ -284,6 +327,14 @@ export async function syncExecutionSheet(planId, requester) {
     slotsByHandle.get(key).push(s);
   }
 
+  // assetId → the combo formats booked for that page (reel_story, repost_story).
+  const combosByAsset = new Map();
+  for (const i of plan.items) {
+    if (!isCombo(i.format)) continue;
+    if (!combosByAsset.has(i.assetId)) combosByAsset.set(i.assetId, new Set());
+    combosByAsset.get(i.assetId).add(i.format);
+  }
+
   const pending = [];
   let attached = 0;
   let alreadyLinked = 0;
@@ -311,16 +362,44 @@ export async function syncExecutionSheet(planId, requester) {
       alreadyLinked += 1;
       continue;
     }
-    const slot = pageSlots.find((s) => !s.linkId);
-    if (!slot) {
-      pending.push({ ...record, reason: `More posts than the plan booked for @${row.pageHandle} (${pageSlots.length})` });
-      continue;
+    let slot;
+    // The kinds of slot booked for the page: a combo's parts first, then its
+    // regular lines' formats (review fix, 16 Oct — a page can be booked for
+    // several formats).
+    const combos = [...(combosByAsset.get(asset.id) ?? [])];
+    const slotKinds = [...new Set([...combos.flatMap((c) => comboParts(c)), ...pageSlots.map((s) => s.format).filter(Boolean)])];
+    if (combos.length > 0 || slotKinds.length > 1) {
+      // A combo page (Reel + Story, Repost + Story), or a page booked in more
+      // than one format, has slots of different kinds at different prices, so
+      // the post must go on the slot of its own kind — never "the first free
+      // one", which could file a reel at the story's share. When more than one
+      // kind could match the URL it stays pending.
+      const kind = slotFormatFromUrl(row.postUrl, slotKinds);
+      if (!kind) {
+        // "the reel or the story", "the reel, the story or the repost".
+        const parts = slotKinds.map((f) => `the ${formatLabel(f).toLowerCase()}`);
+        const which = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} or ${parts[parts.length - 1]}` : parts.join("");
+        pending.push({ ...record, reason: `Can't tell if this is ${which} — add it from the campaign` });
+        continue;
+      }
+      slot = pageSlots.find((s) => !s.linkId && s.format === kind);
+      if (!slot) {
+        const plural = { story: "stories", reel: "reels", repost: "reposts", political_story: "political stories" }[kind] ?? `${formatLabel(kind).toLowerCase()} posts`;
+        pending.push({ ...record, reason: `More ${plural} than the plan booked for @${row.pageHandle}` });
+        continue;
+      }
+    } else {
+      slot = pageSlots.find((s) => !s.linkId);
+      if (!slot) {
+        pending.push({ ...record, reason: `More posts than the plan booked for @${row.pageHandle} (${pageSlots.length})` });
+        continue;
+      }
     }
     try {
       const link = await autoAttachLink(asset, {
         campaignId: slot.campaignId,
         url: row.postUrl,
-        format: slot.format ?? plan.items.find((i) => i.assetId === asset.id)?.format ?? "reel",
+        format: slot.format ?? plan.items.find((i) => i.assetId === asset.id && !isCombo(i.format))?.format ?? "reel",
         cost: slot.cost != null ? Number(slot.cost) : undefined,
       });
       if (!link) {
@@ -471,22 +550,47 @@ async function decidePlan(planId, requester, decision) {
   return annotatePlan(updated);
 }
 
-// One CampaignAssignment per distinct page — "matched" immediately since
+// One CampaignAssignment per plan line per post (16 Oct; combo lines: one
+// per part) — "matched" immediately since
 // these are already real Asset records (not raw sheet rows waiting on an
 // admin to resolve them, the way campaigns/service.js's own sheet-import
 // assignments start out). format/cost carry the plan item's own values
 // through as a reference starting point; the creator's actual submission
 // still goes through the normal link pipeline from here.
 async function createCampaignFromPlan(plan, tx = prisma) {
-  const distinctAssetIds = [...new Set(plan.items.map((i) => i.assetId))];
-  // One assignment per distinct page per phase, carrying the line that
-  // actually still has an Nth post (a page listed as reel x1 + story x3 is a
-  // story job in phases 2-3, not a reel one).
-  const assignmentsForPhase = (phase) =>
-    distinctAssetIds
-      .map((assetId) => plan.items.find((i) => i.assetId === assetId && (i.postsPerProfile ?? 1) >= phase))
-      .filter(Boolean)
+  // Combo lines (Reel + Story, Repost + Story) are booked separately below.
+  const regularItems = plan.items.filter((i) => !isCombo(i.format));
+  // Fixed combo order (reel_story before repost_story, then plan order), so a
+  // story slot's position says which combo it belongs to (lib/comboSlots.js).
+  const comboOrder = Object.keys(COMBOS);
+  const comboItems = plan.items.filter((i) => isCombo(i.format)).sort((a, b) => comboOrder.indexOf(a.format) - comboOrder.indexOf(b.format));
+  // One assignment per regular LINE per post (review fix, 16 Oct — a page
+  // can now be booked for several formats): a line contributes a slot in
+  // posts 1..postsPerProfile, with its own format and cost. A page booked
+  // Reel x1 + Static & Carousel x1 gets two slots in post 1, so its second
+  // post is booked (and paid), not over quota; a page listed as reel x1 +
+  // story x3 has a reel and a story slot in post 1, a story in posts 2-3.
+  const regularForPhase = (phase) =>
+    regularItems
+      .filter((i) => (i.postsPerProfile ?? 1) >= phase)
       .map((item) => ({ assetId: item.assetId, pageHandle: item.asset?.handle ?? "", format: item.format, cost: item.cost, status: "matched" }));
+  // Each combo line adds one slot per part per post (reel + story, or
+  // repost + story), carrying the combo price split by the page's own rates
+  // for those parts (lib/comboSplit.js), so each part is invoiced and paid on
+  // its own and the two add up exactly.
+  const comboRates = new Map();
+  if (comboItems.length > 0) {
+    const rates = await tx.rateCard.findMany({ where: { assetId: { in: [...new Set(comboItems.map((i) => i.assetId))] }, format: { in: comboPartsOf(comboItems) } } });
+    for (const rc of rates) comboRates.set(`${rc.assetId}|${rc.format}`, rc.amount);
+  }
+  const comboForPhase = (phase) =>
+    comboItems
+      .filter((item) => (item.postsPerProfile ?? 1) >= phase)
+      .flatMap((item) => {
+        const split = splitComboLine(item, comboRates);
+        return comboParts(item.format).map((format) => ({ assetId: item.assetId, pageHandle: item.asset?.handle ?? "", format, cost: split[format], status: "matched" }));
+      });
+  const assignmentsForPhase = (phase) => [...regularForPhase(phase), ...comboForPhase(phase)];
   const root = await tx.campaign.create({
     data: {
       brandName: plan.clientCompany || plan.clientName,
@@ -542,6 +646,43 @@ export const rejectPlan = (planId, requester) => decidePlan(planId, requester, "
  * per post × posts per profile — an estimate, same spirit as the source
  * sheet's own rounded "5M+" rather than an exact figure.
  */
+/** The distinct part formats of these combo lines, in first-seen order (e.g. ["reel", "story", "repost"]). */
+function comboPartsOf(items) {
+  return [...new Set(items.flatMap((i) => comboParts(i.format) ?? []))];
+}
+
+/**
+ * A combo plan line's per-unit cost split between its two parts, keyed by
+ * part format — { reel, story } for reel_story, { repost, story } for
+ * repost_story — using the page's rates from `rates` ("assetId|format").
+ */
+function splitComboLine(item, rates) {
+  const [first, second] = comboParts(item.format);
+  return splitComboCost(item.cost, rates.get(`${item.assetId}|${first}`), rates.get(`${item.assetId}|${second}`), [first, second]);
+}
+
+/**
+ * The combo-part rates (reel, story, repost) of the pages on a plan's combo
+ * lines, keyed "assetId|format". Uses the item's included rate cards when
+ * present, else loads them — only when the plan has a combo line at all.
+ */
+async function comboRatesFor(items) {
+  const rates = new Map();
+  const combo = items.filter((i) => isCombo(i.format));
+  if (combo.length === 0) return rates;
+  const missing = [];
+  for (const item of combo) {
+    if (Array.isArray(item.asset?.rateCards)) {
+      for (const rc of item.asset.rateCards) if (COMBO_PART_FORMATS.includes(rc.format)) rates.set(`${item.assetId}|${rc.format}`, rc.amount);
+    } else missing.push(item.assetId);
+  }
+  if (missing.length > 0) {
+    const rows = await prisma.rateCard.findMany({ where: { assetId: { in: [...new Set(missing)] }, format: { in: comboPartsOf(combo) } } });
+    for (const rc of rows) rates.set(`${rc.assetId}|${rc.format}`, rc.amount);
+  }
+  return rates;
+}
+
 async function annotatePlan(plan) {
   const budget = plan.budget != null ? Number(plan.budget) : null;
 
@@ -554,13 +695,19 @@ async function annotatePlan(plan) {
   const totalCost = plan.items.reduce((sum, item) => sum + Number(item.cost) * item.postsPerProfile, 0);
   const clientSubtotal = plan.items.reduce((sum, item) => sum + Number(item.clientCost ?? item.cost) * item.postsPerProfile, 0);
   const gstPercent = plan.gstPercent != null ? Number(plan.gstPercent) : null;
-  const gstAmount = gstOn(clientSubtotal, gstPercent);
+  // Flat discount (16 Oct) comes off the client subtotal BEFORE GST (user
+  // decision), and never below zero. GST is on what's left.
+  const discount = plan.discount != null ? Number(plan.discount) : 0;
+  const taxableOf = (subtotal) => Math.max(0, subtotal - discount);
+  const gstAmount = gstOn(taxableOf(clientSubtotal), gstPercent);
 
-  const totalPosts = plan.items.reduce((sum, item) => sum + item.postsPerProfile, 0);
+  // A combo line (Reel + Story, Repost + Story) is two posts per unit.
+  const totalPosts = plan.items.reduce((sum, item) => sum + item.postsPerProfile * postsPerUnit(item.format), 0);
   const expectedImpressions = plan.items.reduce(
-    (sum, item) => sum + (engagementByAsset.get(item.assetId)?.avgViews ?? 0) * item.postsPerProfile,
+    (sum, item) => sum + (engagementByAsset.get(item.assetId)?.avgViews ?? 0) * item.postsPerProfile * postsPerUnit(item.format),
     0
   );
+  const comboRates = await comboRatesFor(plan.items);
   const totalFollowers = distinctAssetIds.reduce((sum, id) => {
     const item = plan.items.find((i) => i.assetId === id);
     return sum + (item?.asset?.followers ?? 0);
@@ -577,14 +724,36 @@ async function annotatePlan(plan) {
   const displayPosts = plan.overridePosts ?? totalPosts;
   const displayImpressions = plan.overrideImpressions ?? expectedImpressions;
   const displaySubtotal = plan.overrideCost != null ? Number(plan.overrideCost) : clientSubtotal;
-  const displayGstAmount = gstOn(displaySubtotal, gstPercent);
+  const displayTaxable = taxableOf(displaySubtotal);
+  const displayGstAmount = gstOn(displayTaxable, gstPercent);
+
+  // Pages on the plan that have since been switched off in Inventory (16 Oct
+  // — "check after plan creation if any page in the plan is disabled"). The
+  // plan keeps them (history), the UI flags them. Rejected pages count too.
+  // "broken" (17 Oct): Instagram no longer knows the page (plan wizard's check / a failed scrape).
+  const inactivePages = [];
+  for (const id of distinctAssetIds) {
+    const a = plan.items.find((i) => i.assetId === id)?.asset;
+    if (!a) continue;
+    const reason = a.isActive === false ? "inactive" : a.approvalStatus === "rejected" ? "rejected" : a.profileBroken ? "broken" : null;
+    if (reason) inactivePages.push({ assetId: id, handle: a.handle, reason });
+  }
 
   return {
     ...plan,
     // Each line's expected views (page avg views × posts) — the sheet's
     // per-category reach in the "breakdown" format (8 Oct).
-    items: plan.items.map((item) => ({ ...item, expectedViews: (engagementByAsset.get(item.assetId)?.avgViews ?? 0) * item.postsPerProfile })),
+    // A combo line also carries how its per-unit cost splits between its two
+    // parts, keyed by part format, in rupees, adding up to cost:
+    // reel_story → { reel, story }, repost_story → { repost, story }.
+    items: plan.items.map((item) => ({
+      ...item,
+      expectedViews: (engagementByAsset.get(item.assetId)?.avgViews ?? 0) * item.postsPerProfile * postsPerUnit(item.format),
+      ...(isCombo(item.format) ? { comboSplit: splitComboLine(item, comboRates) } : {}),
+    })),
     gstPercent,
+    discount,
+    inactivePages,
     isGstPlan: Boolean(gstPercent),
     invoiceAttachment: invoiceAttachmentFor(plan),
     // Always an array for the client, whether the column is null or unset.
@@ -599,8 +768,11 @@ async function annotatePlan(plan) {
       totalPosts: displayPosts,
       expectedImpressions: displayImpressions,
       subtotal: displaySubtotal,
+      // discount → taxable (subtotal − discount, floored at 0) → GST on that → total.
+      discount,
+      taxable: displayTaxable,
       gstAmount: displayGstAmount,
-      total: displaySubtotal + displayGstAmount,
+      total: displayTaxable + displayGstAmount,
     },
     // The real, always-computed numbers, regardless of any override above —
     // Step 3's "Internal" panel reads this so an overridden client-facing
@@ -610,8 +782,10 @@ async function annotatePlan(plan) {
       computedPosts: totalPosts,
       computedImpressions: expectedImpressions,
       computedSubtotal: clientSubtotal,
+      computedDiscount: discount,
+      computedTaxable: taxableOf(clientSubtotal),
       computedGstAmount: gstAmount,
-      computedTotal: clientSubtotal + gstAmount,
+      computedTotal: taxableOf(clientSubtotal) + gstAmount,
     },
   };
 }
@@ -641,6 +815,8 @@ export function forClientPdf(plan) {
     createdAt: plan.createdAt,
     isGstPlan: plan.isGstPlan,
     gstPercent: plan.gstPercent,
+    // The flat discount (16 Oct) is the client's own number — safe to pass.
+    discount: plan.discount,
     overview: plan.overview,
     // Which sheet layout the plan uses (8 Oct). Not a cost, safe to pass.
     sheetFormat: plan.sheetFormat,
@@ -747,6 +923,7 @@ export async function generateClientInvoice(planId, requester, details) {
 async function upsertClientInvoiceLedger(plan, requester) {
   const money = {
     subtotal: plan.overview.subtotal,
+    discount: plan.overview.discount ?? 0,
     gstPercent: plan.gstPercent,
     gstAmount: plan.overview.gstAmount,
     total: plan.overview.total,
@@ -881,10 +1058,9 @@ export async function createPlanVariant(planId, requester, { variantLabel, budge
   if (!source) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
   await assertCanAccessPlan(requester, source);
   // Budget and pages may come with the request (7 Oct: the variant is filled in
-  // the plan form, then saved in one go) — same cost resolution and budget
-  // check as createPlan, done before the transaction so a refusal writes nothing.
+  // the plan form, then saved in one go) — same cost resolution as createPlan,
+  // done before the transaction so a refusal writes nothing.
   const resolvedItems = items?.length ? await resolveItemCosts(items) : [];
-  assertWithinBudget(budget, resolvedItems);
 
   const pitchGroupId = source.pitchGroupId ?? source.id;
 
@@ -971,6 +1147,10 @@ export async function importPlanSheetPages(planId, requester, rows) {
   let createdCount = 0;
   const failures = [];
   const newItems = [];
+  // Rows with no cost and no rate for their format (16 Oct — "if not filled can add up later"):
+  // not refused any more — returned so the wizard adds them as lines whose cost is typed there.
+  // A plan item needs a cost, so they aren't stored until the plan is saved with one.
+  const needsCost = [];
 
   for (const row of rows) {
     const cleanHandle = row.handle.trim().replace(/^@+/, "");
@@ -983,10 +1163,6 @@ export async function importPlanSheetPages(planId, requester, rows) {
     if (asset) {
       matchedCount += 1;
     } else {
-      if (row.cost == null) {
-        failures.push({ handle: cleanHandle, reason: "New page — a cost is required since it has no rate card yet." });
-        continue;
-      }
       asset = await prisma.asset.create({
         data: { ownerId: requester.id, platform: "instagram", handle: cleanHandle, followers: row.followers ?? 0, category: row.category, approvalStatus: "pending" },
         include: { rateCards: true },
@@ -995,11 +1171,11 @@ export async function importPlanSheetPages(planId, requester, rows) {
       createdCount += 1;
     }
 
-    const format = row.format ?? asset.rateCards[0]?.format ?? "reel";
+    const format = row.format ?? defaultFormatFor(asset);
     const rateCard = asset.rateCards.find((rc) => rc.format === format);
     const cost = row.cost ?? (rateCard ? Number(rateCard.amount) : null);
     if (cost == null) {
-      failures.push({ handle: cleanHandle, reason: `No rate card set for format "${format}" and no cost given in the sheet.` });
+      needsCost.push({ assetId: asset.id, handle: asset.handle, format, postsPerProfile: row.postsPerProfile ?? 1 });
       continue;
     }
     newItems.push({ assetId: asset.id, format, cost, postsPerProfile: row.postsPerProfile ?? 1 });
@@ -1009,7 +1185,7 @@ export async function importPlanSheetPages(planId, requester, rows) {
     await prisma.planItem.createMany({ data: newItems.map((i) => ({ ...i, planId })) });
   }
 
-  return { matchedCount, createdCount, addedCount: newItems.length, failures, plan: await getPlan(planId, requester) };
+  return { matchedCount, createdCount, addedCount: newItems.length, failures, needsCost, plan: await getPlan(planId, requester) };
 }
 
 // ── "Upload plan" from a Google Sheet (user request, 22 Sep) ──────────────
@@ -1031,6 +1207,17 @@ export async function importPlanSheetPages(planId, requester, rows) {
 //    Add to inventory (addPendingPage) that resolves it.
 
 const cleanHandle = (h) => String(h ?? "").trim().replace(/^@+/, "");
+
+/**
+ * The format a sheet row with no Format cell is booked as (14 Oct): the
+ * page's reel rate if it has one, else story, else Static & Carousel, else
+ * whatever rate it does have, else reel.
+ */
+export function defaultFormatFor(asset) {
+  const formats = (asset?.rateCards ?? []).map((rc) => rc.format);
+  for (const f of ["reel", "story", "post"]) if (formats.includes(f)) return f;
+  return formats[0] ?? "reel";
+}
 
 /**
  * Matches sheet rows to Inventory. Matched rows with a resolvable cost
@@ -1057,11 +1244,11 @@ async function resolveSheetRows(rows, alreadyOn = new Set()) {
       pending.push({ ...base, reason: "This page is inactive and can't be added to a plan." });
       continue;
     }
-    const format = row.format ?? asset.rateCards[0]?.format ?? "reel";
+    const format = row.format ?? defaultFormatFor(asset);
     const rateCard = asset.rateCards.find((rc) => rc.format === format);
     const cost = row.cost ?? (rateCard ? Number(rateCard.amount) : null);
     if (cost == null) {
-      pending.push({ ...base, format, reason: `No cost in the sheet and no ${format} rate card on this page.` });
+      pending.push({ ...base, format, reason: `No cost in the sheet and no ${formatLabel(format)} rate on this page.` });
       continue;
     }
     items.push({ assetId: asset.id, format, cost, clientCost: row.clientCost ?? null, postsPerProfile: row.postsPerProfile ?? 1 });
@@ -1087,18 +1274,8 @@ async function applySheetToPlan(existing, { fields, rows }) {
   const hasPageTable = rows.length > 0;
   const onPlan = hasPageTable ? new Set((await prisma.planItem.findMany({ where: { planId }, select: { assetId: true } })).map((i) => i.assetId)) : new Set();
   const { items, pending } = hasPageTable ? await resolveSheetRows(rows, onPlan) : { items: null, pending: [] };
-  const effectiveItems = items ?? (await prisma.planItem.findMany({ where: { planId } }));
-  const subtotal = clientSubtotalOf(effectiveItems);
-
-  // The budget the plan would end up with — the sheet's, else the one typed
-  // in the app. If the pages exceed it, it's cleared and asked for again
-  // (pending "budget", with the floor) rather than stored: assertWithinBudget
-  // would otherwise fail every later save with items.
-  const budget = data.budget ?? (existing.budget != null ? Number(existing.budget) : null);
-  if (budget != null && subtotal > budget) {
-    pending.push({ kind: "budget", sheetBudget: budget, reason: `${data.budget != null ? "The sheet's budget" : "The budget"} ₹${budget.toLocaleString("en-IN")} is below what the pages come to (₹${subtotal.toLocaleString("en-IN")}).` });
-    data.budget = null;
-  }
+  // A budget the pages exceed is stored as-is (16 Oct — over budget is a
+  // warning, not a block); the card shows "Over budget by …" from budgetVariance.
 
   if (items) await prisma.planItem.deleteMany({ where: { planId } });
   const plan = await prisma.plan.update({
@@ -1142,11 +1319,8 @@ export async function addPendingPage(planId, requester, { handle, ownerId }) {
   const row = pending.find((p) => p.kind === "page" && cleanHandle(p.handle).toLowerCase() === key);
   if (!row) throw new ApiError(404, "PENDING_PAGE_NOT_FOUND", `@${cleanHandle(handle)} isn't waiting to be added on this plan`);
   if (row.cost == null) throw new ApiError(400, "PENDING_PAGE_NO_COST", `@${row.handle} has no cost in the sheet — add one there and refresh first`);
-  // Same cap every other way of adding a page respects (PLAN_OVER_BUDGET).
-  const currentItems = await prisma.planItem.findMany({ where: { planId } });
-  assertWithinBudget(plan.budget, [...currentItems, { cost: row.cost, clientCost: row.clientCost ?? null, postsPerProfile: row.postsPerProfile ?? 1 }]);
 
-  const format = row.format ?? "reel";
+  const format = row.format ?? defaultFormatFor(null);
   let asset;
   try {
     asset = await createAsset(requester, {
@@ -1156,7 +1330,7 @@ export async function addPendingPage(planId, requester, { handle, ownerId }) {
       ownerId,
       followers: row.followers ?? undefined,
       rateCards: requester.role === "ADMIN" ? [{ format, amount: row.cost }] : undefined,
-    });
+    }, { incompleteRates: "pending" });
   } catch (err) {
     // Registered under someone else since the sheet was read — still a real
     // page, so the item can be added against it.
@@ -1258,8 +1432,17 @@ async function sheetGroup(plan, requester) {
   return visible;
 }
 
-export async function generatePlanSheet(planId, requester, { internal = false } = {}) {
+export async function generatePlanSheet(planId, requester, { internal = false, sheetFormat } = {}) {
   const accessToken = await requireGoogleAccessToken();
+
+  // The format picked in the generate popup (16 Oct) is saved first, so this
+  // write and every later one (edits refresh the sheet) use it.
+  if (sheetFormat) {
+    const current = await prisma.plan.findUnique({ where: { id: planId }, select: { sheetFormat: true, createdById: true, status: true } });
+    if (!current) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
+    await assertCanAccessPlan(requester, current);
+    if (current.sheetFormat !== sheetFormat) await prisma.plan.update({ where: { id: planId }, data: { sheetFormat } });
+  }
 
   const plan = await getPlan(planId, requester);
   const group = await sheetGroup(plan, requester);
@@ -1306,14 +1489,16 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
     accessToken,
     spreadsheetId,
     requests: sheets.flatMap((t) => [
-      ...(gids[t.overviewTitle] != null ? [...buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols), ...tabStatusRequests(gids[t.overviewTitle], t.plan)] : []),
-      ...t.pageTabs.flatMap((tab) => (gids[tab.title] != null ? [...buildFormatRequests(gids[tab.title], tab.rowSpecs, tab.numCols), ...tabStatusRequests(gids[tab.title], t.plan)] : [])),
+      ...(gids[t.overviewTitle] != null ? [...buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols), ...tabStatusRequests(gids[t.overviewTitle], t.plan, { internal })] : []),
+      ...t.pageTabs.flatMap((tab) => (gids[tab.title] != null ? [...buildFormatRequests(gids[tab.title], tab.rowSpecs, tab.numCols), ...tabStatusRequests(gids[tab.title], t.plan, { internal })] : [])),
     ]),
   });
 
-  // Edit access for whoever generated it (8 Oct). Never fails the generation:
-  // the sheet is already written, so a sharing problem is reported back instead.
-  const shared = await shareWithGenerator(accessToken, spreadsheetId, requester);
+  // Edit access for whoever generated it (8 Oct) and for the plan's maker (16
+  // Oct — "sheet ka edit access planner ke paas jana chahiye, both client and
+  // internal sheet"). Never fails the generation: the sheet is already
+  // written, so a sharing problem is reported back instead.
+  const shared = await shareWithEditors(accessToken, spreadsheetId, requester, plan);
 
   const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
   let spreadsheetUrl = base;
@@ -1327,16 +1512,25 @@ export async function generatePlanSheet(planId, requester, { internal = false } 
 }
 
 /** Shares a generated sheet with the requester's email as an editor: `{ sharedWith }` or `{ shareError }`. */
-async function shareWithGenerator(accessToken, spreadsheetId, requester) {
-  const user = await prisma.user.findUnique({ where: { id: requester.id }, select: { email: true } });
-  if (!user?.email) return { shareError: "Your account has no email, so the sheet couldn't be shared with you for editing." };
-  try {
-    await shareFileWithEditor({ accessToken, fileId: spreadsheetId, email: user.email });
-    return { sharedWith: user.email };
-  } catch (err) {
-    console.error(`generatePlanSheet: couldn't give ${user.email} edit access to ${spreadsheetId}`, err);
-    return { shareError: `The sheet was made, but ${user.email} couldn't be given edit access (it may not be a Google account).` };
+async function shareWithEditors(accessToken, spreadsheetId, requester, plan) {
+  const ids = [...new Set([requester.id, plan.createdById].filter(Boolean))];
+  const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, email: true } });
+  const byId = new Map(users.map((u) => [u.id, u]));
+  const requesterEmail = byId.get(requester.id)?.email ?? null;
+  const emails = [...new Set(ids.map((id) => byId.get(id)?.email).filter(Boolean))];
+  const errors = [];
+  if (!requesterEmail) errors.push("Your account has no email, so the sheet couldn't be shared with you for editing.");
+  const shared = [];
+  for (const email of emails) {
+    try {
+      await shareFileWithEditor({ accessToken, fileId: spreadsheetId, email });
+      shared.push(email);
+    } catch (err) {
+      console.error(`generatePlanSheet: couldn't give ${email} edit access to ${spreadsheetId}`, err);
+      errors.push(`The sheet was made, but ${email} couldn't be given edit access (it may not be a Google account).`);
+    }
   }
+  return { ...(shared.length ? { sharedWith: shared.join(", ") } : {}), ...(errors.length ? { shareError: errors.join(" ") } : {}) };
 }
 
 const EXECUTION_TEMPLATE_SETTING_KEY = "executionTemplateSpreadsheetId";

@@ -15,6 +15,7 @@ import { assets as assetsApi, auth as authApi, ApiError, hasAccess, canUse, PAGE
 import { RefreshIcon } from "@/components/icons";
 import { compactNumber, money, followersLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { FORMATS, formatLabel, joinLabels } from "@/lib/formats";
 
 /**
  * Inventory → "Import pages" (user request, 14 Sep): attach an .xlsx/.csv
@@ -36,6 +37,7 @@ const STATUS_LABEL: Record<ImportRowStatus, { label: string; tone: TagTone }> = 
   conflict: { label: "Under another account", tone: "bad" },
   duplicate: { label: "Duplicate row", tone: "neutral" },
   invalid: { label: "Invalid handle", tone: "bad" },
+  incomplete: { label: "Missing required cells", tone: "bad" },
 };
 
 /** Rows the admin can still turn into a page by choosing an account. */
@@ -276,7 +278,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
     if (!preview) return [];
     return preview.rows
       .filter((r) => isPlaceable(r) && checkState(r) === "found" && effectiveOwnerId(r))
-      .map((r) => ({ handle: r.handle as string, ownerId: effectiveOwnerId(r), category: effectiveCategory(r) || null, pageName: r.pageName ?? null, followers: liveFor(r)?.followers ?? r.followers, rateCards: r.rateCards }));
+      .map((r) => ({ handle: r.handle as string, ownerId: effectiveOwnerId(r), category: effectiveCategory(r) || null, grade: r.grade ?? null, groupLink: r.groupLink ?? null, pageName: r.pageName ?? null, followers: liveFor(r)?.followers ?? r.followers, rateCards: r.rateCards }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preview, ownerByRow, defaultOwnerId, categoryByRow, liveByHandle, followersMutation.isPending]);
 
@@ -412,7 +414,7 @@ export function ImportPagesModal({ token, onClose, onImported }: { token: string
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[0.75rem] text-text-muted">
-                  Columns: <b>Page Name</b>, <b>Page Link</b> (required — the page&apos;s Instagram profile link), <b>Vendor Name</b>, <b>Vendor Contact</b> (phone or email), <b>Followers</b>, <b>Reel Rate</b>, <b>Story Rate</b>. The first sheet of a workbook is used.
+                  <span className="font-semibold text-text">Required in every row:</span> <b>Page Name</b>, <b>Page Link</b> (the page&apos;s Instagram profile link), <b>Entertainment / Brand Rate</b>, <b>Reel Rate</b> and <b>Story Rate</b>, plus <b>Vendor Name</b> and <b>Vendor Contact</b> (phone number) so the page lands under the right vendor; a new vendor is created from them. A row missing a name or one of the three rates is shown as incomplete and is not imported; a row with no vendor needs an account picked here before it imports. Optional: <b>Followers</b>, <b>Grade</b>, <b>Group Link</b>, and the other rates (<b>PR</b>, <b>Political</b>, <b>Static &amp; Carousel</b>, <b>Repost</b>, <b>Political Story</b>, <b>Reel + Story</b>, <b>Repost + Story</b>). The first sheet of a workbook is used.
                 </p>
                 <Button type="button" variant="secondary" size="sm" onClick={() => templateMutation.mutate()} disabled={templateMutation.isPending} data-testid="import-download-template">
                   <DownloadIcon className="h-3.5 w-3.5" />
@@ -585,11 +587,23 @@ function PreviewView({
           >
             @{row.handle}
           </a>
-        ) : (
+        ) : null}
+        {/* Grade / Group Link columns (16 Oct), when the sheet has them. */}
+        {(row.grade || row.groupLink) && (
+          <div className="mt-0.5 flex items-center gap-1.5 text-[0.7rem] text-text-muted" data-testid="import-row-extras">
+            {row.grade && <span className="rounded-[4px] border border-border px-1 font-semibold">Grade {row.grade}</span>}
+            {row.groupLink && (
+              <a href={row.groupLink} target="_blank" rel="noreferrer" className="truncate hover:underline" title={row.groupLink}>
+                Group link ↗
+              </a>
+            )}
+          </div>
+        )}
+        {!row.handle ? (
           <div className="truncate text-[0.78rem]" title={row.rawHandle}>
             {row.rawHandle || "—"}
           </div>
-        )}
+        ) : null}
       </>
     );
   }
@@ -771,9 +785,9 @@ function PreviewView({
                   {/* A rate card never survives a non-admin's import (server strips it) — showing it here would promise something that won't happen. */}
                   {isAdmin && (
                     <div className="rounded-md bg-surface-2 px-2.5 py-1.5">
-                      <div className="text-[0.66rem] font-medium uppercase tracking-wide text-text-faint">Reel rate</div>
+                      <div className="text-[0.66rem] font-medium uppercase tracking-wide text-text-faint">Rates</div>
                       <div className="tabular-nums">
-                        <ReelRateCell rateCards={row.rateCards} />
+                        <RatesCell row={row} />
                       </div>
                     </div>
                   )}
@@ -798,7 +812,7 @@ function PreviewView({
                 <th className="px-3 py-2.5 text-left">Page</th>
                 <th className="w-40 px-3 py-2.5 text-left">Category</th>
                 <th className="w-28 px-3 py-2.5 text-right">Followers</th>
-                {isAdmin && <th className="w-28 px-3 py-2.5 text-right">Reel rate</th>}
+                {isAdmin && <th className="w-40 px-3 py-2.5 text-right">Rates</th>}
                 {!isCreator && <th className="w-52 px-3 py-2.5 text-left">Account</th>}
                 <th className="w-40 px-3 py-2.5 text-left">Status</th>
               </tr>
@@ -821,7 +835,7 @@ function PreviewView({
                     </td>
                     {isAdmin && (
                       <td className="px-3 py-2.5 text-right tabular-nums">
-                        <ReelRateCell rateCards={row.rateCards} />
+                        <RatesCell row={row} />
                       </td>
                     )}
                     {!isCreator && <td className="px-3 py-2.5">{v.placeable && ownerOptions.length > 0 ? accountControl(row, v) : <span>{ownerLabel(row.owner)}</span>}</td>}
@@ -1163,15 +1177,34 @@ function CategorySelect({ value, onChange, options, placeholder, wide, "aria-lab
   );
 }
 
-/** The sheet's reel rate (22 Sep — "add reel cost of that page"), with the story rate as a quieter second line. */
-function ReelRateCell({ rateCards }: { rateCards: ImportPreviewRow["rateCards"] }) {
-  const reel = rateCards.find((rc) => rc.format === "reel");
-  const story = rateCards.find((rc) => rc.format === "story");
+/**
+ * The sheet's rates: the reel rate as the headline (22 Sep), every other
+ * format as a quieter line (14 Oct — ten prices). A row missing a required
+ * rate still imports, but lands pending — say which rate it needs.
+ */
+function RatesCell({ row }: { row: ImportPreviewRow }) {
+  const reel = row.rateCards.find((rc) => rc.format === "reel");
+  const others = FORMATS.filter((f) => f !== "reel").flatMap((f) => {
+    const rc = row.rateCards.find((r) => r.format === f);
+    return rc ? [{ format: f, amount: rc.amount }] : [];
+  });
+  const missing = row.missingRates ?? [];
   return (
-    <span data-testid="import-reel-rate">
-      {reel ? <span className="font-semibold text-text">{money(reel.amount)}</span> : <span className="text-text-faint" title="No reel rate in the sheet">—</span>}
-      {story && <span className="block text-[0.7rem] text-text-faint">Story {money(story.amount)}</span>}
-    </span>
+    <>
+      <span data-testid="import-reel-rate">
+        {reel ? <span className="font-semibold text-text">{money(reel.amount)}</span> : <span className="text-text-faint" title="No reel rate in the sheet">—</span>}
+        {others.map((o) => (
+          <span key={o.format} className="block text-[0.7rem] text-text-faint">
+            {formatLabel(o.format)} {money(o.amount)}
+          </span>
+        ))}
+      </span>
+      {missing.length > 0 && (
+        <span className="mt-0.5 block text-[0.7rem] font-medium text-accent-2" data-testid="import-missing-rates">
+          Needs {joinLabels(missing)} rate{missing.length > 1 ? "s" : ""} before approval
+        </span>
+      )}
+    </>
   );
 }
 
@@ -1245,7 +1278,7 @@ function ResultView({ result, onClose, isAdmin }: { result: ImportResult; onClos
         {result.created.length > 0 && (
           <span className="block text-[0.75rem] opacity-80">
             {isAdmin
-              ? "Approved on creation, with the followers, average views and profile details confirmed on Instagram. Profile pictures are saved in the background."
+              ? `${result.created.some((a) => a.approvalStatus === "pending") ? "Approved on creation, except pages still missing a Reel or Story rate — those wait in Inventory for their rates. " : "Approved on creation, "}with the followers, average views and profile details confirmed on Instagram. Profile pictures are saved in the background.`
               : "Pending admin approval, with the followers, average views and profile details confirmed on Instagram. Profile pictures are saved in the background."}
           </span>
         )}

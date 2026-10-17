@@ -1,5 +1,6 @@
 import { gstSplitFor } from "./gstin.js";
 import { buildTaxDocumentPdf, cap, dateStr } from "./taxDocumentPdf.js";
+import { formatLabel } from "./formats.js";
 
 /**
  * Renders an Invoice (with creator, campaign, billingProfile and
@@ -33,7 +34,7 @@ export function invoiceToDocument(invoice) {
     // The campaign is named in the details block already — only repeat it
     // per line when an invoice mixes campaigns (a creator-raised bulk one).
     const showCampaign = link.campaign?.title && link.campaign.id !== campaign?.id;
-    const description = `${cap(link.format ?? "post")} ${handle}`.trim() + (showCampaign ? ` — ${link.campaign.title}` : "");
+    const description = `${formatLabel(link.format) || "Post"} ${handle}`.trim() + (showCampaign ? ` — ${link.campaign.title}` : "");
     return { description, quantity: 1, rate: item.amount, amount: item.amount };
   });
   // BillingProfile has no bank-name column today — the row appears only if one is ever added.

@@ -49,7 +49,7 @@ test.describe("Inventory — editing category and engagement (28 Sep)", () => {
     await page.getByRole("combobox", { name: "Category" }).fill("Meme page");
     await page.getByLabel("Avg. views").fill("125000");
     await page.getByLabel("Avg. likes").fill("4200");
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
 
     await expect.poll(() => details).toMatchObject({ category: "Meme page", avgViews: 125000, avgLikes: 4200 });
     // The box left blank stays automatic rather than being saved as 0.
@@ -101,7 +101,7 @@ test.describe("Inventory — editing category and engagement (28 Sep)", () => {
     await page.goto("/inventory");
     await page.getByRole("button", { name: "Edit" }).first().click();
     await page.getByRole("combobox", { name: "Category" }).fill("News page");
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
 
     await expect.poll(() => details).toMatchObject({ category: "News page" });
     expect(rateCardCalled).toBe(false);
@@ -123,7 +123,7 @@ test.describe("Inventory — editing category and engagement (28 Sep)", () => {
     await page.goto("/inventory");
     await page.getByRole("button", { name: "Edit" }).first().click();
     await page.getByLabel("Avg. views").fill("");
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
 
     await expect.poll(() => details).toMatchObject({ avgViews: null });
   });

@@ -136,3 +136,23 @@ describe("buildClientInvoicePdf — renders a valid PDF", () => {
     expect(pdf.length).toBeGreaterThan(3000);
   });
 });
+
+describe("flat discount before GST (16 Oct)", () => {
+  it("carries discount + taxable into the document; GST stays whatever the plan computed on the taxable amount", async () => {
+    const plan = { ...base, invoiceDescription: "Campaign services", overview: { ...base.overview, subtotal: 15000, discount: 1000, taxable: 14000, gstAmount: 2520, total: 16520 } };
+    const d = clientInvoiceToDocument(plan);
+    expect(d.discount).toBe(1000);
+    expect(d.taxable).toBe(14000);
+    expect(d.subtotal).toBe(15000);
+    expect(d.total).toBe(16520);
+    expect(taxHeads(d).reduce((s, h) => s + h.amount, 0)).toBe(2520);
+    const pdf = await buildClientInvoicePdf(plan);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("no discount → zero, taxable equals the subtotal", () => {
+    const d = clientInvoiceToDocument(base);
+    expect(d.discount).toBe(0);
+    expect(d.taxable).toBe(15000);
+  });
+});

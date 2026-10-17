@@ -21,6 +21,7 @@ import { useAuth } from "@/lib/auth-context";
 import { links as linksApi, campaigns as campaignsApi, assets as assetsApi, invoices as invoicesApi, ApiError, INVOICEABLE_LINK_STATUSES, type Link as LinkRow, canUse } from "@/lib/api-client";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { formatLabel } from "@/lib/formats";
 
 const APPROVED_GROUP_FILTER = "SCREENSHOT_APPROVED,INSIGHTS_PENDING,INSIGHTS_APPROVED,INVOICED";
 const INVOICEABLE_STATUSES = new Set<string>(INVOICEABLE_LINK_STATUSES);
@@ -243,7 +244,7 @@ export function CreatorDashboard() {
             {detailLink ? (
               <Card className="flex flex-col">
                 <CardHeader
-                  title={`@${detailLink.asset?.handle ?? "—"} · ${detailLink.format}`}
+                  title={`@${detailLink.asset?.handle ?? "—"} · ${formatLabel(detailLink.format)}`}
                   action={
                     <button type="button" onClick={() => setDetailId(null)} aria-label="Close post details" className="text-text-faint hover:text-text">
                       <CloseIcon className="h-4 w-4" />
@@ -324,7 +325,7 @@ function PostRow({ link, index, selected, active, canSelect, onToggle, onOpen, o
       <Thumb src={null} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-[0.8375rem] font-semibold">@{link.asset?.handle ?? "—"} · {link.format}</span>
+          <span className="truncate text-[0.8375rem] font-semibold">@{link.asset?.handle ?? "—"} · {formatLabel(link.format)}</span>
           <span className="hidden truncate text-[0.78rem] text-text-muted sm:inline">{link.campaign?.title ?? "—"}</span>
           {link.overQuota && (
             <span

@@ -90,7 +90,7 @@ test.describe("Import pages — template, verification, new user (22 Sep)", () =
     await expect(rows.nth(0)).toContainText("Laughter Colours");
     await expect(rows.nth(0)).toContainText("@laughtercolours");
     // Reel rate has its own column (22 Sep), story as the quieter second line.
-    await expect(page.getByTestId("import-preview-table").getByRole("columnheader", { name: "Reel rate" })).toBeVisible();
+    await expect(page.getByTestId("import-preview-table").getByRole("columnheader", { name: "Rates" })).toBeVisible();
     await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("₹18,000");
     await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("Story ₹6,000");
     // The handle links to the real profile, so a wrong link is easy to spot.
@@ -167,6 +167,39 @@ test.describe("Import pages — template, verification, new user (22 Sep)", () =
     const cell = page.getByTestId("import-preview-row").first().getByTestId("import-reel-rate");
     await expect(cell).toHaveText("—");
     await expect(cell.getByTitle("No reel rate in the sheet")).toBeVisible();
+  });
+
+  test("every rate in the sheet is listed, and a row missing a required rate says it needs that rate before approval (14 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    const full = templateRow(2, "Laughter Colours", "laughtercolours", [
+      { format: "reel", amount: 18000 },
+      { format: "story", amount: 6000 },
+      { format: "post", amount: 9000 },
+      { format: "political_reel", amount: 25000 },
+      { format: "reel_story", amount: 21000 },
+      { format: "repost", amount: 4000 },
+      { format: "repost_story", amount: 8000 },
+    ]);
+    const partial = { ...templateRow(3, "Ghantaa", "ghantaa"), missingRates: ["story"] };
+    await page.route(`${API_URL}/assets/import/preview`, (route) => route.fulfill({ json: { ...preview(), rows: [full, partial] } }));
+    await page.route(`${API_URL}/assets/import/followers`, (route) => route.fulfill({ json: { profiles: { laughtercolours: profile(10), ghantaa: profile(10) } } }));
+
+    await openImport(page);
+    // The ten rate columns of the template, in order; every rate is optional (16 Oct).
+    await expect(page.getByTestId("import-pages-modal")).toContainText(
+      "Reel Rate, Entertainment / Brand Rate, PR Rate, Political Rate, Static & Carousel Rate, Repost Rate, Story Rate, Political Story Rate, Reel + Story Rate, Repost + Story Rate"
+    );
+    await expect(page.getByTestId("import-pages-modal")).toContainText("Every rate is optional");
+    await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(xlsx);
+    const rows = page.getByTestId("import-preview-row");
+    await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("Static & Carousel ₹9,000");
+    await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("Political ₹25,000");
+    await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("Reel + Story ₹21,000");
+    await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("Repost ₹4,000");
+    await expect(rows.nth(0).getByTestId("import-reel-rate")).toContainText("Repost + Story ₹8,000");
+    await expect(rows.nth(0).getByTestId("import-missing-rates")).toHaveCount(0);
+    await expect(rows.nth(1).getByTestId("import-missing-rates")).toHaveCount(0);
   });
 
   test("on a phone the preview is one card per page — followers, reel rate and status stay on screen (no sideways table)", async ({ page }) => {

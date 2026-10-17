@@ -1,6 +1,7 @@
 import { COMPANY } from "./companyDetails.js";
 import { gstSplitFor } from "./gstin.js";
-import { buildTaxDocumentPdf, cap, dateStr } from "./taxDocumentPdf.js";
+import { buildTaxDocumentPdf, dateStr } from "./taxDocumentPdf.js";
+import { formatLabel } from "./formats.js";
 
 /**
  * The Taggify → client invoice for a plan (user request, 13 Sep — "on
@@ -38,7 +39,7 @@ export function clientInvoiceToDocument(plan) {
         const handle = item.asset?.handle ? `@${item.asset.handle}` : "";
         const posts = item.postsPerProfile ?? 1;
         return {
-          description: `${cap(item.format ?? "post")} ${handle}`.trim() + (posts > 1 ? ` × ${posts} posts` : ""),
+          description: `${formatLabel(item.format) || "Post"} ${handle}`.trim() + (posts > 1 ? ` × ${posts} posts` : ""),
           quantity: posts,
           rate: item.displayCost,
           amount: item.displayCost * posts,
@@ -70,6 +71,9 @@ export function clientInvoiceToDocument(plan) {
     ],
     rows,
     subtotal: plan.overview.subtotal,
+    // Flat discount (16 Oct), off the subtotal before GST — GST is on `taxable`.
+    discount: plan.overview.discount ?? 0,
+    taxable: plan.overview.taxable ?? plan.overview.subtotal,
     gstAmount: plan.overview.gstAmount,
     total: plan.overview.total,
     bankLabel: `Bank Account Details (pay to ${COMPANY.name})`,

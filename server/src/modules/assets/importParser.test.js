@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 
-import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, ImportParseError, MAX_IMPORT_ROWS } from "./importParser.js";
+import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, parseGroupLink, ImportParseError, MAX_IMPORT_ROWS, rateFormatFromHeader } from "./importParser.js";
+import { FORMATS } from "../../lib/formats.js";
 
 /**
  * Inventory "Import pages" (user request, 14 Sep) — the .xlsx/.csv parser.
@@ -167,7 +168,32 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
   it("the downloadable template itself parses back to its two example pages", async () => {
     const { buildImportPagesTemplate, IMPORT_TEMPLATE_HEADERS } = await import("../../lib/importPagesTemplate.js");
     const parsed = await parseImportSheet(await buildImportPagesTemplate(), "import-pages-template.xlsx");
-    expect(IMPORT_TEMPLATE_HEADERS).toEqual(["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Followers", "Reel Rate", "Story Rate"]);
+    expect(IMPORT_TEMPLATE_HEADERS).toEqual([
+      "Page Name",
+      "Page Link",
+      "Vendor Name",
+      "Vendor Contact",
+      "Followers",
+      "Grade",
+      "Group Link",
+      "Reel Rate",
+      "Entertainment / Brand Rate",
+      "PR Rate",
+      "Political Rate",
+      "Static & Carousel Rate",
+      "Repost Rate",
+      "Story Rate",
+      "Political Story Rate",
+      "Reel + Story Rate",
+      "Repost + Story Rate",
+    ]);
+    // One rate column per format, in FORMATS order.
+    expect(IMPORT_TEMPLATE_HEADERS.slice(7).map(rateFormatFromHeader)).toEqual(FORMATS);
+    // Grade + Group Link (16 Oct) come through, and neither is mistaken for a rate column.
+    expect(parsed.rows.map((r) => [r.grade, r.groupLink])).toEqual([
+      ["A", "https://chat.whatsapp.com/replace-me"],
+      ["B", null],
+    ]);
     expect(parsed.rows.map((r) => [r.pageName, r.handle, r.problem])).toEqual([
       ["Example Page One", "example.page.one.replace.me", null],
       ["Example Page Two", "example.page.two.replace.me", null],
@@ -178,10 +204,94 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       ["Example Vendor", null, "vendor@example.com"],
     ]);
     expect(parsed.rows[0].followers).toBe(450000);
+    // All ten rates (16 Oct); the second example fills only some, including the required Reel and Story.
     expect(parsed.rows[0].rateCards).toEqual([
       { format: "reel", amount: 18000 },
+      { format: "entertainment", amount: 20000 },
+      { format: "pr", amount: 25000 },
+      { format: "political_reel", amount: 22000 },
+      { format: "post", amount: 9000 },
+      { format: "repost", amount: 5000 },
       { format: "story", amount: 6000 },
+      { format: "political_story", amount: 8000 },
+      { format: "reel_story", amount: 21000 },
+      { format: "repost_story", amount: 9500 },
     ]);
+    expect(parsed.rows[1].rateCards).toEqual([
+      { format: "reel", amount: 9000 },
+      { format: "post", amount: 4500 },
+      { format: "story", amount: 3000 },
+    ]);
+  });
+
+  it("rate headers are read through formatFromText: Static / Carousel, Political, Reel + Story and their aliases (14 Oct)", async () => {
+    const csv = ["Page Link,Reel,Stories Rate,Static,Political Reel Price,Reel & Story Cost,Carousel Rate,Video price", "https://instagram.com/x.page,1000,500,800,1500,1300,999,77"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+    // A bare "Static" isn't a rate column (16 Oct), so "Carousel Rate" is the Static / Carousel price; "Video price" is ignored.
+    expect(parsed.rows[0].rateCards).toEqual([
+      { format: "reel", amount: 1000 },
+      { format: "story", amount: 500 },
+      { format: "political_reel", amount: 1500 },
+      { format: "reel_story", amount: 1300 },
+      { format: "post", amount: 999 },
+    ]);
+  });
+
+  it("the 16 Oct rate headers: PR, Entertainment / Brand, Political Story, Repost, Repost + Story — and a longer name never reads as its prefix", async () => {
+    const csv = [
+      "Page Link,Political Story Rate,Political Rate,Repost + Story Rate,Repost Rate,PR Rate,Entertainment / Brand Rate,Static & Carousel Rate",
+      "https://instagram.com/x.page,700,1500,1300,600,2500,2000,800",
+    ].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+    expect(parsed.rows[0].rateCards).toEqual([
+      { format: "political_story", amount: 700 },
+      { format: "political_reel", amount: 1500 },
+      { format: "repost_story", amount: 1300 },
+      { format: "repost", amount: 600 },
+      { format: "pr", amount: 2500 },
+      { format: "entertainment", amount: 2000 },
+      { format: "post", amount: 800 },
+    ]);
+  });
+
+  // Review fix (14 Oct): bare plurals are usually post-count columns, not prices.
+  it('a bare header is a rate column only when it\'s an exact singular alias; plurals, "Image" and (16 Oct) bare "Post", "Static", "Carousel", "PR", "Combo" need a rate/cost/price/amount suffix', () => {
+    for (const [header, format] of [
+      ["Reel", "reel"],
+      ["Story", "story"],
+      ["Static / Carousel", "post"],
+      ["Political reel", "political_reel"],
+      ["Political", "political_reel"],
+      ["Political Story", "political_story"],
+      ["Static & Carousel", "post"],
+      ["Repost", "repost"],
+      ["Repost + Story", "repost_story"],
+      ["Entertainment / Brand", "entertainment"],
+      ["Reel + Story", "reel_story"],
+      ["Brand rate", "entertainment"],
+      ["Political Story Rate", "political_story"],
+      ["Repost + Story Rate", "repost_story"],
+      ["Reels rate", "reel"],
+      ["Stories cost", "story"],
+      ["Posts price", "post"],
+      ["Images amount", "post"],
+      ["Image rate", "post"],
+      ["Post rate", "post"],
+      ["Static cost", "post"],
+      ["PR price", "pr"],
+      ["Combo rate", "reel_story"],
+    ]) {
+      expect(rateFormatFromHeader(header), header).toBe(format);
+    }
+    for (const header of ["Reels", "Posts", "Stories", "Images", "Image", "Brand", "Reposts", "Political reels", "Political stories", "Post URL", "Post link", "Posted link", "Video price", "Post", "Static", "Carousel", "PR", "Combo", ""]) {
+      expect(rateFormatFromHeader(header), header).toBeNull();
+    }
+  });
+
+  it("count columns (Reels / Stories / Posts) don't become rate cards or satisfy the required rates", async () => {
+    const csv = ["Page Link,Reels,Stories,Posts,Images,Post URL", "https://instagram.com/x.page,3,2,1,4,https://instagram.com/p/abc"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+    expect(parsed.rows[0].rateCards).toEqual([]);
   });
 
   it("caps the number of rows per import", async () => {
@@ -308,5 +418,32 @@ describe("parseImportSheet — XLSX (real round-trip through exceljs)", () => {
 
   it("gives a readable error for bytes that aren't a workbook", async () => {
     await expect(parseImportSheet(Buffer.from("definitely not a zip"), "pages.xlsx")).rejects.toThrow(/valid \.xlsx workbook/);
+  });
+});
+
+describe("parseImportSheet — Grade and Group Link columns (16 Oct)", () => {
+  it("reads A/B/C (any case, with or without the word 'Grade') and ignores anything else", async () => {
+    const csv = "Page Link,Grade,Group Link\nhttps://instagram.com/one,a,https://chat.whatsapp.com/abc\nhttps://instagram.com/two,Grade B,chat.whatsapp.com/def\nhttps://instagram.com/three,premium,not a link\nhttps://instagram.com/four,,\n";
+    const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+    expect(parsed.rows.map((r) => [r.handle, r.grade, r.groupLink])).toEqual([
+      ["one", "A", "https://chat.whatsapp.com/abc"],
+      ["two", "B", "https://chat.whatsapp.com/def"],
+      ["three", null, null],
+      ["four", null, null],
+    ]);
+  });
+
+  it("a 'Grade' or 'Group Link' header is never read as a rate column", async () => {
+    const parsed = await parseImportSheet(Buffer.from("Page Link,Grade,Group Link,Reel Rate\nhttps://instagram.com/one,A,https://t.me/x,5000\n"), "pages.csv");
+    expect(parsed.rows[0].rateCards).toEqual([{ format: "reel", amount: 5000 }]);
+  });
+
+  it("parseGroupLink accepts http(s) URLs, adds https:// to a bare host, and rejects everything else", () => {
+    expect(parseGroupLink("https://chat.whatsapp.com/abc")).toBe("https://chat.whatsapp.com/abc");
+    expect(parseGroupLink("t.me/joinchat/xyz")).toBe("https://t.me/joinchat/xyz");
+    expect(parseGroupLink("ftp://files.example.com/x")).toBeNull();
+    expect(parseGroupLink("just words")).toBeNull();
+    expect(parseGroupLink("")).toBeNull();
+    expect(parseGroupLink(null)).toBeNull();
   });
 });

@@ -8,6 +8,8 @@ const { recomputePostQuota } = await import("./postQuota.js");
 let db;
 let links;
 let bookedSlots;
+// The campaign's plan (lib/comboSlots.js) — null = no Reel + Story combo pages.
+let comboPlan = null;
 const day = (d) => new Date(`2026-09-${String(d).padStart(2, "0")}T00:00:00Z`);
 
 function fakeDb() {
@@ -20,6 +22,7 @@ function fakeDb() {
       count: vi.fn(async () => bookedSlots),
       findMany: vi.fn(async () => (bookedSlots > 0 ? [{ assetId: "page-a" }] : [])),
     },
+    plan: { findUnique: vi.fn(async () => comboPlan) },
     link: {
       findMany: vi.fn(async ({ distinct } = {}) => (distinct ? [...new Set(links.map((l) => l.assetId))].map((assetId) => ({ assetId })) : links.map((l) => ({ ...l })))),
       updateMany: vi.fn(async ({ where, data }) => {
@@ -34,6 +37,7 @@ const link = (id, over = {}) => ({ id, assetId: "page-a", postedAt: null, create
 const flagged = () => links.filter((l) => l.overQuota).map((l) => l.id).sort();
 
 beforeEach(() => {
+  comboPlan = null;
   db = fakeDb();
 });
 
@@ -156,5 +160,117 @@ describe("recomputePostQuota — a paid post keeps its slot", () => {
     await recomputePostQuota("root", "page-a", db);
 
     expect(flagged()).toEqual(["drafted", "raised"]);
+  });
+});
+
+describe("recomputePostQuota — a Reel + Story combo page is counted per format (14 Oct)", () => {
+  const slots = (...formats) => formats.map((format) => ({ format }));
+
+  it("one reel slot + one story slot: a second reel is over quota while the story still counts", async () => {
+    comboPlan = { items: [{ assetId: "page-a" }] };
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", "story"));
+    links = [link("reel1", { format: "reel", postedAt: day(1) }), link("reel2", { format: "reel", postedAt: day(2) }), link("story1", { format: "story", postedAt: day(3) })];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual(["reel2"]);
+    expect(db.campaignAssignment.count).not.toHaveBeenCalled();
+  });
+
+  it("a format with no slot on a combo page is over quota (a paid one keeps its place)", async () => {
+    comboPlan = { items: [{ assetId: "page-a" }] };
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", "story"));
+    links = [link("post1", { format: "post" }), link("post-paid", { format: "post", invoiceItem: { invoice: { status: "PAID" } } }), link("reel1", { format: "reel" })];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual(["post1"]);
+  });
+
+  it("a Repost + Story page (16 Oct) is counted per format too: a second repost is over, a reel on it has no slot", async () => {
+    comboPlan = { items: [{ assetId: "page-a", format: "repost_story" }] };
+    db.campaignAssignment.findMany = vi.fn(async () => slots("repost", "story"));
+    links = [
+      link("repost1", { format: "repost", postedAt: day(1) }),
+      link("repost2", { format: "repost", postedAt: day(2) }),
+      link("story1", { format: "story", postedAt: day(3) }),
+      link("reel1", { format: "reel", postedAt: day(4) }),
+    ];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual(["reel1", "repost2"]);
+    expect(db.campaignAssignment.count).not.toHaveBeenCalled();
+  });
+
+  it("a page without a combo line keeps the count rule (any format fills any slot)", async () => {
+    comboPlan = { items: [] };
+    bookedSlots = 2;
+    links = [link("reel1", { format: "reel", postedAt: day(1) }), link("reel2", { format: "reel", postedAt: day(2) })];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual([]);
+  });
+
+  it("overQuotaIdsByFormat, pure: two phases' reel slots allow two reels", async () => {
+    const { overQuotaIdsByFormat } = await import("./postQuota.js");
+    const over = overQuotaIdsByFormat(
+      [link("r1", { format: "reel", postedAt: day(1) }), link("r2", { format: "reel", postedAt: day(2) }), link("r3", { format: "reel", postedAt: day(3) }), link("s1", { format: "story" })],
+      { reel: 2, story: 2 }
+    );
+    expect([...over]).toEqual(["r3"]);
+  });
+});
+
+// Review fix (16 Oct): a plan can book a page for several regular formats,
+// one slot per line. Quota is then per format, like a combo page.
+describe("recomputePostQuota — a page booked in more than one regular format is counted per format (16 Oct)", () => {
+  const slots = (...formats) => formats.map((format) => ({ format }));
+
+  it("Reel x1 + Static & Carousel x1: a second reel is over quota, it doesn't take the static's place", async () => {
+    comboPlan = { items: [] };
+    bookedSlots = 2;
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", "post"));
+    links = [link("reel1", { format: "reel", postedAt: day(1) }), link("reel2", { format: "reel", postedAt: day(2) })];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual(["reel2"]);
+  });
+
+  it("the reel and the static both count", async () => {
+    comboPlan = { items: [] };
+    bookedSlots = 2;
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", "post"));
+    links = [link("reel1", { format: "reel", postedAt: day(1) }), link("post1", { format: "post", postedAt: day(2) })];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual([]);
+  });
+
+  it("a single-format page keeps the count rule exactly: two reel slots, a reel and a static both count", async () => {
+    comboPlan = { items: [] };
+    bookedSlots = 2;
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", "reel"));
+    links = [link("reel1", { format: "reel", postedAt: day(1) }), link("post1", { format: "post", postedAt: day(2) }), link("reel2", { format: "reel", postedAt: day(3) })];
+
+    await recomputePostQuota("root", "page-a", db);
+
+    expect(flagged()).toEqual(["reel2"]);
+  });
+
+  it("a slot with no or a legacy format keeps the count rule (sheet/legacy rows are never re-read per format)", async () => {
+    comboPlan = { items: [] };
+    bookedSlots = 2;
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", null));
+    links = [link("reel1", { format: "reel", postedAt: day(1) }), link("reel2", { format: "reel", postedAt: day(2) })];
+    await recomputePostQuota("root", "page-a", db);
+    expect(flagged()).toEqual([]);
+
+    db.campaignAssignment.findMany = vi.fn(async () => slots("reel", "carousel"));
+    await recomputePostQuota("root", "page-a", db);
+    expect(flagged()).toEqual([]);
   });
 });

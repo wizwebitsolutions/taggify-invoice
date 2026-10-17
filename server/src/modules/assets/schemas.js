@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { formatSchema } from "../../lib/formats.js";
 
-// reel/story only (14 Sep) — see lib/formats.js.
+// All ten formats (16 Oct) — see lib/formats.js.
 export const rateCardEntrySchema = z.object({
   format: formatSchema,
   // RateCard.amount is Decimal(12,2) — keep it representable.
@@ -9,6 +9,18 @@ export const rateCardEntrySchema = z.object({
 });
 
 export const setActiveSchema = z.object({ isActive: z.boolean() });
+
+// Page grade (16 Oct) — A, B or C, set by hand, optional. Null clears it.
+export const GRADES = ["A", "B", "C"];
+const gradeSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .pipe(z.enum(GRADES))
+  .nullable()
+  .optional();
+// The page's group link (16 Oct) — any http(s) URL (WhatsApp / Telegram invite, etc.). Null clears it.
+const groupLinkSchema = z.string().trim().url().max(300).nullable().optional();
 
 export const setApprovalSchema = z.object({
   approvalStatus: z.enum(["pending", "approved", "rejected"]),
@@ -29,9 +41,12 @@ export const createAssetSchema = z.object({
   // creating a user with its first page(s) in one flow). Enforced in
   // createAsset(), not here — schema just accepts the shape.
   ownerId: z.string().min(1).optional(),
-  // Optional starting rate card (Inventory "Create page", 14 Sep) — reel /
-  // story from the form; any format is accepted, same as updateRateCard.
+  // Starting rate card (Inventory "Create page"). For an ADMIN creating a
+  // page, Reel and Story are required (16 Oct) — enforced
+  // in createAsset(), not here.
   rateCards: z.array(rateCardEntrySchema).max(20).optional(),
+  grade: gradeSchema,
+  groupLink: groupLinkSchema,
 });
 
 export const updateRateCardSchema = z.object({
@@ -46,6 +61,8 @@ const manualEngagementFigure = z.number().int().min(0).max(2_000_000_000).nullab
 
 export const updateAssetDetailsSchema = z.object({
   category: z.string().trim().min(1).max(40).nullable().optional(),
+  grade: gradeSchema,
+  groupLink: groupLinkSchema,
   avgViews: manualEngagementFigure,
   avgLikes: manualEngagementFigure,
   avgComments: manualEngagementFigure,
@@ -63,7 +80,24 @@ export const importAssetRowSchema = z.object({
   pageName: z.string().trim().max(100).nullable().optional(),
   followers: z.number().int().min(0).nullable().optional(),
   rateCards: z.array(rateCardEntrySchema).max(20).optional(),
+  grade: gradeSchema,
+  groupLink: groupLinkSchema,
 });
+
+// A planner's proposed edit (16 Oct — "planner can add and edit inventory,
+// but admin approves first"): the same fields the Inventory editor has.
+// Nothing is applied until an admin approves (assets/service.js
+// proposeAssetEdit / decideAssetEdit). At least one field must be present.
+export const proposeEditSchema = z
+  .object({
+    category: z.string().trim().min(1).max(40).nullable().optional(),
+    grade: gradeSchema,
+    groupLink: groupLinkSchema,
+    rateCards: z.array(rateCardEntrySchema).max(20).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to change." });
+
+export const decideEditSchema = z.object({ decision: z.enum(["approve", "reject"]) });
 
 // Same shape as campaigns/plans' importSheetUrlSchema — a pasted Google Sheet link.
 export const importSheetUrlSchema = z.object({

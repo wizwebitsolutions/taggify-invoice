@@ -27,7 +27,7 @@ import { parsePlanSheet } from "@/lib/parseAssignmentSheet";
 import { planMissing } from "@/lib/plan-missing";
 import { useAuth } from "@/lib/auth-context";
 import { plans as plansApi, ApiError, hasAccess, type Plan, type SheetFormat, canUse } from "@/lib/api-client";
-import { SHEET_FORMAT_INFO, sheetFormatOf } from "@/components/plans/sheet-format";
+import { SheetFormatModal, sheetFormatOf } from "@/components/plans/sheet-format";
 import { money, count, initialsOf, roleLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -395,23 +395,43 @@ function PlansSection({
   // after an awaited network call would be — its location is filled in
   // once the sheet finishes generating.
   const sheetMutation = useMutation({
-    mutationFn: async ({ plan, variant, tab }: { plan: Plan; variant: "client" | "internal"; tab: Window | null }) => {
-      const result = await plansApi.generateSheet(token, plan.id, variant);
+    mutationFn: async ({ plan, variant, tab, sheetFormat }: { plan: Plan; variant: "client" | "internal"; tab: Window | null; sheetFormat?: SheetFormat }) => {
+      const result = await plansApi.generateSheet(token, plan.id, variant, sheetFormat);
       tab?.location.assign(result.spreadsheetUrl);
       return result;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
+    onSuccess: () => {
+      setSheetPicker(null);
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
+    },
   });
-  // An existing link opens straight away — the server keeps it current by
-  // rewriting the sheet after every plan edit (plans/routes.js, 29 Sep).
+  // "Client sheet" (16 Oct) first asks which of the two formats to use — the
+  // popup below; confirming generates (or regenerates) in that format and opens
+  // it. An already-generated sheet in the same format is offered to open as is.
+  const [sheetPicker, setSheetPicker] = useState<Plan | null>(null);
+  // The internal sheet has no popup: an existing link opens straight away — the
+  // server keeps it current by rewriting the sheet after every plan edit (29 Sep).
   function openSheet(plan: Plan, variant: "client" | "internal") {
-    const existingUrl = variant === "client" ? plan.clientSheetUrl : plan.internalSheetUrl;
-    if (existingUrl) {
-      window.open(existingUrl, "_blank", "noopener,noreferrer");
+    if (variant === "client") {
+      setSheetPicker(plan);
+      return;
+    }
+    if (plan.internalSheetUrl) {
+      window.open(plan.internalSheetUrl, "_blank", "noopener,noreferrer");
       return;
     }
     const tab = window.open("", "_blank");
     sheetMutation.mutate({ plan, variant, tab });
+  }
+  function confirmClientSheet(plan: Plan, sheetFormat: SheetFormat) {
+    if (plan.clientSheetUrl && sheetFormat === sheetFormatOf(plan)) {
+      window.open(plan.clientSheetUrl, "_blank", "noopener,noreferrer");
+      setSheetPicker(null);
+      return;
+    }
+    // The blank tab opens synchronously (inside the click) so the popup blocker lets it through.
+    const tab = window.open("", "_blank");
+    sheetMutation.mutate({ plan, variant: "client", tab, sheetFormat });
   }
   const deleteMutation = useMutation({
     mutationFn: (id: string) => plansApi.remove(token, id),
@@ -569,7 +589,7 @@ function PlansSection({
               onOpenSheet={(variant) => openSheet(plan, variant)}
               sheetPending={sheetMutation.isPending}
               // Only on the card that was clicked — the mutation is shared across cards.
-              sheetError={sheetMutation.isError && sheetMutation.variables?.plan.id === plan.id ? sheetMutation.error : null}
+              sheetError={sheetMutation.isError && sheetMutation.variables?.plan.id === plan.id && sheetPicker?.id !== plan.id ? sheetMutation.error : null}
               sheetShare={sheetMutation.isSuccess && sheetMutation.variables?.plan.id === plan.id ? sheetMutation.data : null}
               onExecutionSheetSaved={(updated) => {
                 setExecSheetNotice((n) => ({ ...n, [plan.id]: updated.executionSheetSyncError ? { error: updated.executionSheetSyncError } : {} }));
@@ -598,6 +618,18 @@ function PlansSection({
         </p>
       )}
       {completingPlan && <CompletePlanSteps key={completingPlan.id} token={token} plan={completingPlan} onClose={() => setCompletingPlanId(null)} />}
+      {sheetPicker && (
+        <SheetFormatModal
+          key={sheetPicker.id}
+          planName={sheetPicker.pitchGroupId ? `${sheetPicker.name} · ${sheetPicker.variantLabel}` : sheetPicker.name}
+          value={sheetFormatOf(sheetPicker)}
+          existingUrl={sheetPicker.clientSheetUrl}
+          pending={sheetMutation.isPending && sheetMutation.variables?.plan.id === sheetPicker.id}
+          error={sheetMutation.isError && sheetMutation.variables?.plan.id === sheetPicker.id ? <GoogleAwareError error={sheetMutation.error} fallback="Couldn't generate the sheet." /> : null}
+          onClose={() => !sheetMutation.isPending && setSheetPicker(null)}
+          onConfirm={(f) => confirmClientSheet(sheetPicker, f)}
+        />
+      )}
 
 
 
@@ -690,13 +722,8 @@ function PlanCard({
   refreshError: unknown;
   onCompleteDetails: () => void;
 }) {
-  const queryClient = useQueryClient();
-  // The plan's Google Sheet layout (8 Oct); saving it rewrites any sheet already generated.
-  const formatMutation = useMutation({
-    mutationFn: (f: SheetFormat) => plansApi.update(token, plan.id, { sheetFormat: f }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plans"] }),
-  });
   const completeness = planCompleteness(plan);
+  const inactivePages = plan.inactivePages ?? [];
   // Two-step attach (user request, 11 Sep): the card shows a plain "Attach"
   // prompt; clicking it (or "Change" once one's attached) opens the popup
   // with the supported format, the template download and the link field
@@ -844,6 +871,15 @@ function PlanCard({
           </p>
         )}
 
+        {/* Pages switched off / rejected in Inventory since the plan was built (16 Oct). */}
+        {inactivePages.length > 0 && (
+          <Note tone="warn" className="text-[0.75rem]">
+            <span data-testid="plan-inactive-pages">
+              {inactivePages.length === 1 ? "1 page is" : `${inactivePages.length} pages are`} no longer available: {inactivePages.map((p) => `@${p.handle}${p.reason === "broken" ? " (not on Instagram)" : p.reason === "rejected" ? " (rejected)" : " (inactive)"}`).join(", ")}. Edit the plan to swap {inactivePages.length === 1 ? "it" : "them"}.
+            </span>
+          </Note>
+        )}
+
         {/* Expected engagement — same stat-cell treatment as the Inventory
             page card's "Performance metrics" row. */}
         <div className="grid grid-cols-3 gap-2">
@@ -902,28 +938,6 @@ function PlanCard({
             )}
           </div>
         )}
-
-        <label className="flex items-center justify-between gap-2 text-[0.75rem] text-text-muted">
-          <span>Sheet format</span>
-          {ownsPlan ? (
-            <select
-              value={sheetFormatOf(plan)}
-              onChange={(e) => formatMutation.mutate(e.target.value as SheetFormat)}
-              disabled={formatMutation.isPending}
-              aria-label={`Sheet format for ${plan.name}`}
-              className="h-7 rounded-[6px] border border-border-strong bg-surface px-2 text-[0.75rem] text-text focus:border-ink focus:outline-none"
-            >
-              {(Object.keys(SHEET_FORMAT_INFO) as SheetFormat[]).map((f) => (
-                <option key={f} value={f}>
-                  {SHEET_FORMAT_INFO[f].label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="font-medium text-text">{SHEET_FORMAT_INFO[sheetFormatOf(plan)].label}</span>
-          )}
-        </label>
-        {formatMutation.isError && <ErrorNotice message={formatMutation.error instanceof ApiError ? formatMutation.error.message : "Couldn't change the sheet format."} />}
 
         <div className="flex gap-2">
           <Button size="sm" variant="secondary" className="flex-1" onClick={() => onOpenSheet("client")} disabled={sheetPending}>

@@ -17,6 +17,7 @@ import { TruncationNote, PaymentsEmpty } from "@/components/payments/admin-payou
 import { payments as paymentsApi, ApiError, type PaidLedgerRow, type PendingLink } from "@/lib/api-client";
 import { money, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { formatLabel } from "@/lib/formats";
 
 /**
  * A creator's own Payments view (24 Sep redesign): Pending (their verified
@@ -180,7 +181,7 @@ function CreatorPendingList({
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate text-[0.8438rem] font-medium">{l.campaign?.title ?? "—"}</span>
                   <span className="text-[0.75rem] capitalize text-text-faint">
-                    {l.format} · {l.postedAt ? shortDate(l.postedAt) : `submitted ${shortDate(l.createdAt)}`}
+                    {formatLabel(l.format)} · {l.postedAt ? shortDate(l.postedAt) : `submitted ${shortDate(l.createdAt)}`}
                     {views !== null && ` · ${compactNumber(views)} views`}
                   </span>
                   <span className="mt-1 w-fit rounded-full border border-accent-2-line bg-accent-2-soft px-2 py-px text-[0.6875rem] font-medium text-accent-2">Awaiting payout</span>
@@ -199,7 +200,7 @@ function CreatorPendingList({
             <div>
               <p className="text-[0.75rem] text-text-muted">{detail.campaign?.title ?? "—"}</p>
               <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">
-                @{detail.asset.handle} · <span className="capitalize">{detail.format}</span>
+                @{detail.asset.handle} · <span>{formatLabel(detail.format)}</span>
               </h2>
               <div className="mt-1 flex items-center gap-2 text-[0.8125rem]">
                 <StatusPill status={detail.status} />
@@ -270,7 +271,7 @@ function CreatorPaidList({ rows, isLoading, error }: { rows: PaidLedgerRow[]; is
                     <div key={item.id} className="flex items-center justify-between gap-3 border-b border-border py-2 text-[0.8125rem] last:border-b-0">
                       <a href={item.link.url} target="_blank" rel="noreferrer" className="min-w-0 truncate font-medium text-text hover:underline">
                         {item.link.campaign?.title ?? item.link.url}
-                        <span className="font-normal capitalize text-text-faint"> · {item.link.format}</span>
+                        <span className="font-normal text-text-faint"> · {formatLabel(item.link.format)}</span>
                       </a>
                       <span className="tabular-nums">{money(item.amount)}</span>
                     </div>

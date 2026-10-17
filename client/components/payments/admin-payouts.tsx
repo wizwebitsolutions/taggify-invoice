@@ -32,6 +32,7 @@ import {
 } from "@/lib/api-client";
 import { money, compactNumber, initialsOf, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { formatLabel } from "@/lib/formats";
 
 /**
  * Payments → Internal · creator payouts (24 Sep redesign). List-first: the
@@ -490,13 +491,13 @@ function PendingTab({
                         <span className="truncate text-[0.8438rem] font-medium hover:underline">{link.campaign?.title ?? "—"}</span>
                         <span className="truncate text-[0.72rem] text-text-faint">
                           <span className="md:hidden">
-                            @{link.asset.handle} · <span className="capitalize">{link.format}</span> ·{" "}
+                            @{link.asset.handle} · <span>{formatLabel(link.format)}</span> ·{" "}
                           </span>
                           {link.url.replace(/^https?:\/\/(www\.)?/, "")}
                         </span>
                       </button>
                       <span className="hidden truncate text-[0.8125rem] text-text-2 md:block">@{link.asset.handle}</span>
-                      <span className="hidden text-[0.8125rem] capitalize text-text-2 md:block">{link.format}</span>
+                      <span className="hidden text-[0.8125rem] text-text-2 md:block">{formatLabel(link.format)}</span>
                       <span className="hidden text-[0.8125rem] text-text-2 md:block" title={link.postedAt ? "Posted" : "Not posted yet — submitted date"}>
                         {shortDate(link.postedAt ?? link.createdAt)}
                         {!link.postedAt && <span className="text-text-faint">*</span>}
@@ -587,7 +588,7 @@ function PendingTab({
                         inv.links.map((l) => (
                           <div key={l.id} data-testid="pending-invoice-link" className="flex items-center gap-3 border-b border-border bg-surface-2 px-5 py-2 pl-[52px] text-[0.78rem] text-text-2">
                             <span className="min-w-0 flex-1 truncate">
-                              {l.campaign?.title ?? "—"} · @{l.asset?.handle ?? "—"} · <span className="capitalize">{l.format}</span>
+                              {l.campaign?.title ?? "—"} · @{l.asset?.handle ?? "—"} · <span>{formatLabel(l.format)}</span>
                             </span>
                             <span className="tabular-nums">{money(l.cost ?? 0)}</span>
                           </div>
@@ -654,7 +655,7 @@ function PendingTab({
                 {detail.campaign?.title ?? "—"} · {personLabel(detail.asset.owner, "")}
               </p>
               <h2 className="text-[1.125rem] font-semibold tracking-[-0.02em]">
-                @{detail.asset.handle} · <span className="capitalize">{detail.format}</span>
+                @{detail.asset.handle} · <span>{formatLabel(detail.format)}</span>
               </h2>
               <p className="mt-1 text-[0.8125rem] text-accent-2">Not paid yet · in Pending</p>
             </div>
@@ -791,7 +792,7 @@ function PaidTab({ rows, isLoading, error, onChanged, token }: { rows: PaidLedge
                             {item.link.campaign?.title ?? item.link.url}
                           </a>
                           <span className="hidden text-text-2 md:block">@{item.link.asset?.handle ?? "—"}</span>
-                          <span className="hidden capitalize text-text-2 md:block">{item.link.format}</span>
+                          <span className="hidden text-text-2 md:block">{formatLabel(item.link.format)}</span>
                           <span className="hidden text-text-2 md:block">{item.link.postedAt ? shortDate(item.link.postedAt) : "—"}</span>
                           <span className="hidden tabular-nums text-text-2 md:block">{views === null ? "—" : compactNumber(views)}</span>
                           <span className="text-right font-semibold tabular-nums">{money(item.amount)}</span>

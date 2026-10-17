@@ -30,6 +30,21 @@ const overrideFields = {
 // (sample plan 1), "summary" = one campaign-overview block (sample plan 2).
 const sheetFormatSchema = z.enum(["breakdown", "summary"]);
 
+// Flat discount in rupees off the client subtotal, before GST (16 Oct). Null/0 = none.
+const discountSchema = z.number().min(0).max(9_999_999_999).nullable().optional();
+
+// POST /plans/:id/sheet (16 Oct): the format can be picked right where the
+// sheet is generated ("clicked client sheet → asks which format"). Saved on
+// the plan before the sheet is written, so the next generate reuses it.
+export const generateSheetSchema = z.object({ sheetFormat: sheetFormatSchema.optional() });
+
+// POST /plans/check-pages (17 Oct): the pages a plan is being built from.
+// `force` re-checks even pages confirmed within the last 24h.
+export const checkPagesSchema = z.object({
+  assetIds: z.array(z.string().min(1)).min(1).max(200),
+  force: z.boolean().optional(),
+});
+
 export const createPlanSchema = z.object({
   sheetFormat: sheetFormatSchema.optional(),
   name: z.string().min(1).max(150),
@@ -42,6 +57,7 @@ export const createPlanSchema = z.object({
   // mandatory"); budget is asked on the pages step, so it's optional here.
   notes: z.string().trim().min(1, "A brief note is required").max(1000),
   budget: z.number().positive().optional(),
+  discount: discountSchema,
   // Replaces the old isGstPlan boolean — a real percentage the plan maker
   // types, not a fixed 18%-or-nothing choice. Null/omitted = no GST line.
   gstPercent: z.number().int().min(0).max(100).nullable().optional(),
@@ -62,6 +78,7 @@ export const updatePlanSchema = z.object({
   clientAddress: z.string().max(300).nullable().optional(),
   notes: z.string().trim().min(1, "A brief note is required").max(1000).optional(),
   budget: z.number().positive().optional(),
+  discount: discountSchema,
   gstPercent: z.number().int().min(0).max(100).nullable().optional(),
   items: z.array(planItemSchema).max(200).optional(),
   // The execution sheet link (user request, 10 Sep — "option of attaching

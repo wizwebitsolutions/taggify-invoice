@@ -28,6 +28,7 @@ import { useAuth } from "@/lib/auth-context";
 import { campaigns as campaignsApi, links as linksApi, invoices as invoicesApi, ApiError, hasAccess, type Campaign, type Link as LinkRow, canUse } from "@/lib/api-client";
 import { initialsOf, roleLabel, money, count, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { formatLabel } from "@/lib/formats";
 
 export default function CampaignDetailPage() {
   return (
@@ -325,7 +326,7 @@ function CampaignDetailContent() {
                                     )}
                                   </span>
                                 }
-                                secondary={`${link.format} · ${ago(link.createdAt)} · ${link.url}`}
+                                secondary={`${formatLabel(link.format)} · ${ago(link.createdAt)} · ${link.url}`}
                               >
                                 <StatusSteps status={link.status} className="mt-1" animate={false} />
                               </Cell2>
@@ -354,7 +355,7 @@ function CampaignDetailContent() {
                 {detail ? (
                   <Card className="flex flex-col">
                     <CardHeader
-                      title={`@${detail.asset?.handle ?? "—"} · ${detail.format}`}
+                      title={`@${detail.asset?.handle ?? "—"} · ${formatLabel(detail.format)}`}
                       action={
                         <button type="button" onClick={() => setDetailId(null)} aria-label="Close post details" className="text-text-faint hover:text-text">
                           <CloseIcon className="h-4 w-4" />

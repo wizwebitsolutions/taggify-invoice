@@ -19,11 +19,13 @@ import { FloatingBar, BarButton } from "@/components/ui/floating-bar";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, AssetIcon, SearchIcon, CloseIcon, RefreshIcon, TeamIcon, ChevronDownIcon, CheckIcon, UploadIcon } from "@/components/icons";
 import { ImportPagesModal } from "@/components/inventory/import-pages-modal";
+import { RateFields, rateCardsFrom, missingRequiredRates, missingRatesMessage, type RateDraft } from "@/components/inventory/rate-fields";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/lib/auth-context";
-import { assets as assetsApi, auth as authApi, LINK_FORMATS as FORMATS, ApiError, hasAccess, type Asset, canUse } from "@/lib/api-client";
+import { assets as assetsApi, auth as authApi, ApiError, hasAccess, type Asset, type Grade, type PendingAssetEdit, GRADES, canUse } from "@/lib/api-client";
 import { money, count, roleLabel, initialsOf, compactNumber, followersLabel, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { FORMATS, FORMAT_LABELS, formatLabel } from "@/lib/formats";
 
 /**
  * Inventory (premium mockup 07): every page you can book, by category, as
@@ -77,6 +79,10 @@ function InventoryContent() {
   // real staff isAdmin, or a plan maker granted inventory.edit — never a
   // plain creator, whose own page is implicitly theirs.
   const canAssignOwner = isAdmin || (user?.role === "PLAN_MAKER" && canUse(user, "inventory.edit"));
+  // A plan maker with the inventory.edit switch on (16 Oct) can also *suggest*
+  // edits to any page — rates, category, grade, group link — which sit on the
+  // row until an admin approves them (PUT /assets/:id/propose-edit).
+  const canProposeEdits = !isAdmin && user?.role === "PLAN_MAKER" && canUse(user, "inventory.edit");
   const canManagePlans = hasAccess(user, "plans.edit") || (user?.role === "PLAN_MAKER" && canUse(user, "plans.edit"));
 
   function onCreatePlanFromSelection() {
@@ -136,7 +142,7 @@ function InventoryContent() {
             ) : undefined
           }
         />
-        <PagesSection token={token} isAdmin={isAdmin} isFullAdmin={isFullAdmin} canAssignOwner={canAssignOwner} showForm={showAddPage} setShowForm={setShowAddPage} canSelect={canManagePlans || isAdmin} selectedAssetIds={selectedAssetIds} setSelectedAssetIds={setSelectedAssetIds} />
+        <PagesSection token={token} isAdmin={isAdmin} isFullAdmin={isFullAdmin} canAssignOwner={canAssignOwner} canProposeEdits={canProposeEdits} showForm={showAddPage} setShowForm={setShowAddPage} canSelect={canManagePlans || isAdmin} selectedAssetIds={selectedAssetIds} setSelectedAssetIds={setSelectedAssetIds} />
       </div>
 
       {showImport && <ImportPagesModal token={token} onClose={() => setShowImport(false)} onImported={() => queryClient.invalidateQueries({ queryKey: ["assets"] })} />}
@@ -167,6 +173,7 @@ function PagesSection({
   isAdmin,
   isFullAdmin,
   canAssignOwner,
+  canProposeEdits,
   showForm,
   setShowForm,
   canSelect,
@@ -177,6 +184,8 @@ function PagesSection({
   isAdmin: boolean;
   isFullAdmin: boolean;
   canAssignOwner: boolean;
+  /** Plan maker with inventory.edit (16 Oct): may suggest edits that an admin approves. */
+  canProposeEdits: boolean;
   showForm: boolean;
   setShowForm: (v: boolean) => void;
   canSelect: boolean;
@@ -187,6 +196,8 @@ function PagesSection({
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("All");
+  // Grade A / B / C (16 Oct — "show pages inventory with Grade A, B & C").
+  const [gradeFilter, setGradeFilter] = useState<"All" | Grade | "none">("All");
   const [sortBy, setSortBy] = useState<"newest" | "followers-desc" | "followers-asc">("newest");
 
   const assetsQuery = useQuery({
@@ -216,12 +227,19 @@ function PagesSection({
     let result = allItems;
     if (categoryFilter !== "All") result = result.filter((a) => a.category === categoryFilter);
     if (ownerFilter !== "All") result = result.filter((a) => a.owner?.id === ownerFilter);
+    if (gradeFilter === "none") result = result.filter((a) => !a.grade);
+    else if (gradeFilter !== "All") result = result.filter((a) => a.grade === gradeFilter);
     const q = search.trim().toLowerCase();
     if (q) result = result.filter((a) => a.handle.toLowerCase().includes(q) || (a.category ?? "").toLowerCase().includes(q) || (a.owner?.name ?? "").toLowerCase().includes(q) || (a.owner?.phoneNumber ?? "").toLowerCase().includes(q));
     if (sortBy === "followers-desc") result = [...result].sort((a, b) => b.followers - a.followers);
     else if (sortBy === "followers-asc") result = [...result].sort((a, b) => a.followers - b.followers);
     return result;
-  }, [allItems, categoryFilter, ownerFilter, search, sortBy]);
+  }, [allItems, categoryFilter, ownerFilter, gradeFilter, search, sortBy]);
+  const gradeCounts = useMemo(() => {
+    const c: Record<string, number> = { A: 0, B: 0, C: 0, none: 0 };
+    for (const a of allItems) c[a.grade ?? "none"] += 1;
+    return c;
+  }, [allItems]);
 
   function toggleSelected(assetId: string) {
     setSelectedAssetIds((prev) => {
@@ -286,6 +304,17 @@ function PagesSection({
               </FilterSelect>
             )}
             {allItems.length > 0 && (
+              <FilterSelect value={gradeFilter} onChange={(v) => setGradeFilter(v as typeof gradeFilter)} aria-label="Filter by grade">
+                <option value="All">All grades</option>
+                {GRADES.map((g) => (
+                  <option key={g} value={g}>
+                    Grade {g} ({gradeCounts[g]})
+                  </option>
+                ))}
+                <option value="none">Not graded ({gradeCounts.none})</option>
+              </FilterSelect>
+            )}
+            {allItems.length > 0 && (
               <FilterSelect value={sortBy} onChange={(v) => setSortBy(v as typeof sortBy)} aria-label="Sort pages">
                 <option value="newest">Newest first</option>
                 <option value="followers-desc">Followers: high to low</option>
@@ -318,13 +347,14 @@ function PagesSection({
                 {canSelect && <TH className="w-9 pr-0" />}
                 <TH>Page</TH>
                 <TH className="hidden md:table-cell">Category</TH>
+                <TH className="hidden md:table-cell">Grade</TH>
                 <TH right className="hidden sm:table-cell">
                   Followers
                 </TH>
                 <TH right className="hidden lg:table-cell">
                   Avg views
                 </TH>
-                <TH right>Reel</TH>
+                <TH right>Rates</TH>
                 <TH className="hidden 2xl:table-cell">Campaigns</TH>
                 <TH className="hidden md:table-cell">Owner</TH>
                 <TH />
@@ -337,7 +367,9 @@ function PagesSection({
                 index={i}
                 token={token}
                 editable={isAdmin}
+                canPropose={canProposeEdits}
                 canSetActive={isFullAdmin && isAdmin}
+                canDelete={isFullAdmin && isAdmin}
                 selectable={canSelect}
                 selected={selectedAssetIds.has(asset.id)}
                 onToggleSelect={() => toggleSelected(asset.id)}
@@ -451,7 +483,9 @@ function AssetRow({
   index,
   token,
   editable,
+  canPropose,
   canSetActive,
+  canDelete,
   selectable,
   selected,
   onToggleSelect,
@@ -461,8 +495,12 @@ function AssetRow({
   index: number;
   token: string;
   editable: boolean;
+  /** Plan maker (16 Oct): the same editor, but Save *proposes* the change for an admin to approve. */
+  canPropose: boolean;
   /** Active / Inactive (8 Oct): PUT /assets/:id/active is ADMIN role + inventory.edit. */
   canSetActive: boolean;
+  /** Remove the page (16 Oct): ADMIN role + inventory.edit; the server refuses pages with posts or on an approved plan. */
+  canDelete: boolean;
   selectable: boolean;
   selected: boolean;
   onToggleSelect: () => void;
@@ -470,11 +508,13 @@ function AssetRow({
 }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
-  // reel/story only (user request, 14 Sep) — no custom formats any more; a
-  // legacy rate card in another format simply isn't shown or re-saved.
+  // The five page prices (14 Oct); a legacy rate card in another format
+  // (e.g. "carousel") simply isn't shown or re-saved.
   const formats: string[] = [...FORMATS];
-  const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(formats.map((f) => [f, asset.rateCards.find((rc) => rc.format === f)?.amount ?? ""])));
+  const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(formats.flatMap((f) => { const rc = asset.rateCards.find((r) => r.format === f); return rc && Number(rc.amount) > 0 ? [[f, String(rc.amount)]] : []; })));
   const [category, setCategory] = useState(asset.category ?? "");
+  const [grade, setGrade] = useState<Grade | "">(asset.grade ?? "");
+  const [groupLink, setGroupLink] = useState(asset.groupLink ?? "");
   // Only a figure that's already a manual override prefills — an empty box
   // means "use the scraped number", which is also how you clear an override.
   const manualFigure = (key: "avgViews" | "avgLikes" | "avgComments") => (asset.engagement.manual?.[key] ? String(asset.engagement[key] ?? "") : "");
@@ -490,6 +530,8 @@ function AssetRow({
       const figure = (raw: string) => (raw.trim() === "" ? null : Number(raw));
       return assetsApi.updateDetails(token, asset.id, {
         category: category.trim() === "" ? null : category.trim(),
+        grade: grade === "" ? null : grade,
+        groupLink: groupLink.trim() === "" ? null : groupLink.trim(),
         avgViews: figure(engagement.avgViews),
         avgLikes: figure(engagement.avgLikes),
         avgComments: figure(engagement.avgComments),
@@ -500,12 +542,51 @@ function AssetRow({
       queryClient.invalidateQueries({ queryKey: ["assets"] });
     },
   });
+  // A plan maker's version of Save (16 Oct): only what changed is proposed, nothing is applied yet.
+  const proposeMutation = useMutation({
+    mutationFn: () => {
+      const body: PendingAssetEdit = {};
+      const nextCategory = category.trim() === "" ? null : category.trim();
+      if (nextCategory !== (asset.category ?? null)) body.category = nextCategory;
+      const nextGrade = grade === "" ? null : grade;
+      if (nextGrade !== (asset.grade ?? null)) body.grade = nextGrade;
+      const nextLink = groupLink.trim() === "" ? null : groupLink.trim();
+      if (nextLink !== (asset.groupLink ?? null)) body.groupLink = nextLink;
+      const rateCards = formats.filter((f) => amounts[f]).map((f) => ({ format: f, amount: Number(amounts[f]) })).filter((rc) => Number(asset.rateCards.find((r) => r.format === rc.format)?.amount ?? 0) !== rc.amount);
+      if (rateCards.length > 0) body.rateCards = rateCards;
+      if (Object.keys(body).length === 0) return Promise.reject(new ApiError(400, "NOTHING_TO_CHANGE", "Nothing changed."));
+      return assetsApi.proposeEdit(token, asset.id, body);
+    },
+    onSuccess: () => {
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+    },
+  });
+  const decideEditMutation = useMutation({ mutationFn: (decision: "approve" | "reject") => assetsApi.decideEdit(token, asset.id, decision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
+  // Delete is two clicks on the row itself (no browser confirm dialog): "Delete" → "Confirm delete?".
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deleteMutation = useMutation({
+    mutationFn: () => assetsApi.remove(token, asset.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }),
+    onSettled: () => setConfirmingDelete(false),
+  });
+  const pendingEdit = asset.pendingEdit && typeof asset.pendingEdit === "object" ? asset.pendingEdit : null;
   const approvalMutation = useMutation({ mutationFn: (approvalStatus: "approved" | "rejected") => assetsApi.setApproval(token, asset.id, approvalStatus), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
   const refreshMutation = useMutation({ mutationFn: () => assetsApi.refreshProfile(token, asset.id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
   const active = asset.isActive !== false;
   const activeMutation = useMutation({ mutationFn: (on: boolean) => assetsApi.setActive(token, asset.id, on), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }) });
 
   const reelRate = asset.rateCards.find((rc) => rc.format === "reel");
+  // Reel stays the headline figure (11 Sep); every rate is in the tooltip, and
+  // a pending page says which required rates still block its approval (14 Oct).
+  const setRates = FORMATS.flatMap((f) => {
+    const rc = asset.rateCards.find((r) => r.format === f);
+    return rc && Number(rc.amount) > 0 ? [`${FORMAT_LABELS[f]} ${money(rc.amount)}`] : [];
+  });
+  const rateSummary = setRates.join(" · ");
+  const otherRateCount = setRates.length - (reelRate && Number(reelRate.amount) > 0 ? 1 : 0);
+  // Formats already priced on the page: editable in the row editor, not removable (the server keeps rate cards).
+  const savedFormats = FORMATS.filter((f) => asset.rateCards.some((rc) => rc.format === f && Number(rc.amount) > 0));
   const campaigns = asset.campaigns ?? [];
   const awaitingScrape = isAwaitingFirstScrape(asset);
 
@@ -534,7 +615,7 @@ function AssetRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.id, asset.profilePicUrl]);
   const showCover = Boolean(coverUrl) && !coverFailed;
-  const cols = selectable ? 9 : 8;
+  const cols = selectable ? 10 : 9;
 
   // One <tbody> per page so the main row and its expanded editor read as
   // one "card" (tests and screen readers alike).
@@ -564,6 +645,21 @@ function AssetRow({
                 {asset.approvalStatus === "pending" && <Tag tone="wait">Pending</Tag>}
                 {asset.approvalStatus === "rejected" && <Tag tone="bad">Rejected</Tag>}
                 {!active && <Tag tone="neutral">Inactive</Tag>}
+                {asset.profileBroken && (
+                  <Tag tone="bad" testId="broken-tag">
+                    <span title={asset.lastScrapeError ?? "Not found on Instagram"}>Not on Instagram</span>
+                  </Tag>
+                )}
+                {pendingEdit && (
+                  <Tag tone="info" testId="edit-pending-tag">
+                    Edit pending
+                  </Tag>
+                )}
+                {asset.groupLink && (
+                  <a href={asset.groupLink} target="_blank" rel="noopener noreferrer" className="text-[0.72rem] font-medium text-blue hover:text-text" title={asset.groupLink} data-testid="asset-group-link">
+                    Group ↗
+                  </a>
+                )}
               </div>
               <p className="text-[0.75rem] text-text-muted sm:hidden">
                 {awaitingScrape ? "Fetching from Instagram…" : followersLabel(asset.followers)}
@@ -573,6 +669,15 @@ function AssetRow({
           </div>
         </TD>
         <TD className="hidden md:table-cell">{asset.category ? <Tag tone="neutral" dot={false}>{asset.category}</Tag> : <span className="text-text-faint">—</span>}</TD>
+        <TD className="hidden md:table-cell" data-testid="asset-grade-cell">
+          {asset.grade ? (
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-[6px] border border-border-strong bg-surface-2 text-[0.75rem] font-semibold" title={`Grade ${asset.grade}`}>
+              {asset.grade}
+            </span>
+          ) : (
+            <span className="text-text-faint">—</span>
+          )}
+        </TD>
         <TD right className="hidden whitespace-nowrap sm:table-cell">
           {awaitingScrape ? (
             <span className="inline-flex items-center gap-1.5 text-[0.78rem] text-text-muted" data-testid="scrape-pending">
@@ -597,12 +702,15 @@ function AssetRow({
         </TD>
         <TD right className="whitespace-nowrap">
           {reelRate ? (
-            <span className="inline-flex items-center gap-1.5" data-testid="rate-card-cell">
+            <span className="inline-flex items-center gap-1.5" data-testid="rate-card-cell" title={rateSummary}>
               <span className="text-[0.75rem] text-text-muted">Reel</span>
               <span className="font-semibold tabular-nums">{money(reelRate.amount)}</span>
+              {otherRateCount > 0 && <span className="text-[0.72rem] text-text-faint">+{otherRateCount}</span>}
             </span>
           ) : (
-            <span className="text-text-faint" title="No reel rate set yet">—</span>
+            <span className="text-text-faint" data-testid="rate-card-cell" title={rateSummary ? `No reel rate set yet · ${rateSummary}` : "No reel rate set yet"}>
+              —{otherRateCount > 0 && <span className="ml-1 text-[0.72rem]">+{otherRateCount}</span>}
+            </span>
           )}
         </TD>
         <TD className="hidden 2xl:table-cell">
@@ -656,103 +764,129 @@ function AssetRow({
                 {active ? "Deactivate" : "Activate"}
               </Button>
             )}
-            {editable && (
-              <button type="button" onClick={() => setEditing((v) => !v)} className="text-[0.78rem] font-medium text-blue hover:text-text">
-                {editing ? "Close" : "Edit"}
+            {canDelete &&
+              (confirmingDelete ? (
+                <>
+                  <Button size="sm" variant="danger" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending} aria-label={`Confirm deleting @${asset.handle}`} data-testid="confirm-delete-page">
+                    {deleteMutation.isPending ? "Deleting…" : "Confirm delete"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)} disabled={deleteMutation.isPending}>
+                    Keep
+                  </Button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(true)}
+                  title="Remove this page from Inventory. Pages with posts or on an approved plan can't be deleted — deactivate those instead."
+                  aria-label={`Delete @${asset.handle}`}
+                  className="text-[0.78rem] font-medium text-rose hover:text-text"
+                  data-testid="delete-page"
+                >
+                  Delete
+                </button>
+              ))}
+            {(editable || canPropose) && (
+              <button type="button" onClick={() => setEditing((v) => !v)} className="text-[0.78rem] font-medium text-blue hover:text-text" data-testid={canPropose && !editable ? "suggest-edit" : undefined}>
+                {editing ? "Close" : editable ? "Edit" : "Suggest edit"}
               </button>
             )}
           </div>
         </TD>
       </TR>
-      {(editing || refreshMutation.isError || approvalMutation.isError || activeMutation.isError) && (
+      {(pendingEdit || refreshMutation.isError || approvalMutation.isError || activeMutation.isError || deleteMutation.isError || decideEditMutation.isError) && (
         <tr className="border-b border-border bg-surface-2">
           <td colSpan={cols} className="px-[18px] py-3">
             {refreshMutation.isError && <ErrorNotice message={refreshMutation.error instanceof ApiError ? refreshMutation.error.message : "Couldn't refresh from Instagram."} />}
             {approvalMutation.isError && <ErrorNotice message={approvalMutation.error instanceof ApiError ? approvalMutation.error.message : "Couldn't update approval status."} />}
             {activeMutation.isError && <ErrorNotice message={activeMutation.error instanceof ApiError ? activeMutation.error.message : "Couldn't change whether this page is active."} />}
-            {editing && (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_1fr]">
-                <div>
-                  <p className="mb-2 text-[0.72rem] font-medium text-text-muted">Rate card</p>
-                  <div className="flex flex-col gap-2">
-                    {formats.map((f) => (
-                      <div key={f} className="flex items-center justify-between gap-3">
-                        <span className="text-[0.8125rem] capitalize text-text-2">{f}</span>
-                        <MoneyField compact value={String(amounts[f] ?? "")} onChange={(v) => setAmounts((prev) => ({ ...prev, [f]: v }))} placeholder="—" aria-label={`${f} rate`} className="w-32" />
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mb-2 mt-3 text-[0.72rem] font-medium text-text-muted">Category</p>
-                  <ComboInput
-                    aria-label="Category"
-                    value={category}
-                    onChange={setCategory}
-                    suggestions={existingCategories.map((c) => ({ key: c, label: c }))}
-                    placeholder="Search or type a new category…"
-                  />
-                </div>
-                <div>
-                  <p className="mb-2 text-[0.72rem] font-medium text-text-muted">Engagement</p>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {(
-                      [
-                        ["avgLikes", "Avg. likes"],
-                        ["avgComments", "Avg. comments"],
-                        ["avgViews", "Avg. views"],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label key={key} className="flex flex-col gap-1">
-                        <IntegerField
-                          className="h-8 w-full px-2 text-center text-[0.8125rem]"
-                          value={engagement[key]}
-                          onChange={(v) => setEngagement((prev) => ({ ...prev, [key]: v }))}
-                          // An empty box falls back to the scraped figure, so the
-                          // placeholder shows what that currently is.
-                          placeholder={asset.engagement[key] === null ? "N/A" : compactNumber(asset.engagement[key]!)}
-                          aria-label={label}
-                        />
-                        <span className="truncate text-center text-[0.65rem] text-text-muted">{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <p className="mt-1.5 text-[0.68rem] text-text-muted">
-                    {asset.engagement.manual ? "Typed in here — clear a box to use the scraped number again." : "Leave blank to keep using the scraped numbers."}
-                  </p>
-                  {asset.engagement.sampleSize > 0 && (
-                    <p className="mt-1 text-[0.68rem] text-text-muted">
-                      Scraped from {asset.engagement.sampleSize} {asset.engagement.source === "profile" ? "recent post" : "scraped post"}
-                      {asset.engagement.sampleSize === 1 ? "" : "s"}
-                      {asset.engagement.source === "profile" ? " on the profile" : ""}
-                    </p>
-                  )}
-                  <p className="mb-2 mt-3 text-[0.72rem] font-medium text-text-muted">Campaigns</p>
-                  {campaigns.length === 0 ? (
-                    <p className="text-[0.78rem] text-text-faint">No campaigns yet.</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-1">
-                      {campaigns.map((c) => (
-                        <Tag key={c.id} tone="neutral" dot={false}>
-                          {c.title}
-                        </Tag>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="flex flex-col justify-end gap-2">
-                  {saveMutation.isError && <ErrorNotice message={saveMutation.error instanceof ApiError ? saveMutation.error.message : "Couldn't save."} />}
-                  <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
-                      Cancel
-                    </Button>
-                    <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
-                      {saveMutation.isPending ? "Saving…" : "Save"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
+            {deleteMutation.isError && <ErrorNotice message={deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "Couldn't delete this page."} />}
+            {decideEditMutation.isError && <ErrorNotice message={decideEditMutation.error instanceof ApiError ? decideEditMutation.error.message : "Couldn't save that decision."} />}
+            {pendingEdit && (
+              <PendingEditPanel
+                asset={asset}
+                pendingEdit={pendingEdit}
+                canDecide={editable}
+                pending={decideEditMutation.isPending}
+                onDecide={(d) => decideEditMutation.mutate(d)}
+              />
             )}
           </td>
         </tr>
+      )}
+      {editing && (
+        <AssetEditSheet
+          asset={asset}
+          editable={editable}
+          showCover={showCover}
+          coverUrl={coverUrl}
+          onClose={() => setEditing(false)}
+          busy={saveMutation.isPending || proposeMutation.isPending}
+          error={saveMutation.isError ? saveMutation.error : proposeMutation.isError ? proposeMutation.error : null}
+          onSubmit={() => (editable ? saveMutation.mutate() : proposeMutation.mutate())}
+        >
+          <Section title="Rate card" hint="One line per format the page offers. Pick a format to add another.">
+            <RateFields rates={amounts} onChange={setAmounts} required={false} showErrors={false} compact fixed={savedFormats} idPrefix={`@${asset.handle} `} />
+          </Section>
+          <Section title="Details">
+            <Field label="Category">
+              <ComboInput aria-label="Category" value={category} onChange={setCategory} suggestions={existingCategories.map((c) => ({ key: c, label: c }))} placeholder="Search or type a new category…" />
+            </Field>
+            <div className="grid grid-cols-[auto_1fr] gap-3">
+              <Field label="Grade">
+                <GradePicker value={grade} onChange={setGrade} idPrefix={`@${asset.handle} `} />
+              </Field>
+              <Field label="Group link">
+                <TextField type="url" value={groupLink} onChange={setGroupLink} placeholder="https://chat.whatsapp.com/…" aria-label={`@${asset.handle} group link`} />
+              </Field>
+            </div>
+          </Section>
+          {editable && (
+            <Section title="Engagement" hint={asset.engagement.manual ? "Typed in here — clear a box to use the scraped number again." : "Leave blank to keep using the scraped numbers."}>
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    ["avgLikes", "Avg. likes"],
+                    ["avgComments", "Avg. comments"],
+                    ["avgViews", "Avg. views"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex flex-col gap-1">
+                    <IntegerField
+                      className="h-9 w-full px-2 text-center text-[0.8125rem]"
+                      value={engagement[key]}
+                      onChange={(v) => setEngagement((prev) => ({ ...prev, [key]: v }))}
+                      // An empty box falls back to the scraped figure, so the placeholder shows what that currently is.
+                      placeholder={asset.engagement[key] === null ? "N/A" : compactNumber(asset.engagement[key]!)}
+                      aria-label={label}
+                    />
+                    <span className="truncate text-center text-[0.68rem] text-text-muted">{label}</span>
+                  </label>
+                ))}
+              </div>
+              {asset.engagement.sampleSize > 0 && (
+                <p className="text-[0.7rem] text-text-faint">
+                  Scraped from {asset.engagement.sampleSize} {asset.engagement.source === "profile" ? "recent post" : "scraped post"}
+                  {asset.engagement.sampleSize === 1 ? "" : "s"}
+                  {asset.engagement.source === "profile" ? " on the profile" : ""}
+                </p>
+              )}
+            </Section>
+          )}
+          <Section title="Campaigns">
+            {campaigns.length === 0 ? (
+              <p className="text-[0.78rem] text-text-faint">No campaigns yet.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1">
+                {campaigns.map((c) => (
+                  <Tag key={c.id} tone="neutral" dot={false}>
+                    {c.title}
+                  </Tag>
+                ))}
+              </div>
+            )}
+          </Section>
+        </AssetEditSheet>
       )}
     </tbody>
   );
@@ -792,9 +926,10 @@ function NewAssetModal({
 }) {
   const [handle, setHandle] = useState("");
   const [category, setCategory] = useState("");
+  const [grade, setGrade] = useState<Grade | "">("");
+  const [groupLink, setGroupLink] = useState("");
   const [ownerId, setOwnerId] = useState("");
-  const [reelRate, setReelRate] = useState("");
-  const [storyRate, setStoryRate] = useState("");
+  const [rates, setRates] = useState<RateDraft>({});
   const [submitted, setSubmitted] = useState(false);
   // Whoever can assign an owner picks which creator account the page sits
   // under (user request, 14 Sep; extended to plan makers 25 Sep); a plain
@@ -829,10 +964,10 @@ function NewAssetModal({
   const usingNewAccount = canAssignOwner && accountMode === "new" && !createdAccount;
   const ownerError = !canAssignOwner || createdAccount ? null : accountMode === "new" ? (newUserEmailValid ? null : "Enter the new account's email — it's their login.") : !ownerId ? "Pick the creator account this page belongs to." : null;
 
-  const rateCards = [
-    { format: "reel", amount: Number(reelRate) },
-    { format: "story", amount: Number(storyRate) },
-  ].filter((rc) => rc.amount > 0);
+  const rateCards = rateCardsFrom(rates);
+  // Admin-created pages are approved on creation, so the server requires
+  // No rate is mandatory (16 Oct) — kept as a hook for any future rule.
+  const ratesError = isAdmin ? missingRatesMessage(missingRequiredRates(rates)) : null;
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -842,7 +977,13 @@ function NewAssetModal({
         setCreatedAccount({ id: result.user.id, name: result.user.name, email: result.user.email ?? newUserEmail.trim(), password: result.generatedPassword });
         owner = result.user.id;
       }
-      return assetsApi.create(token, cleanHandle as string, "instagram", { ...(category ? { category } : {}), ...(canAssignOwner && owner ? { ownerId: owner } : {}), ...(rateCards.length > 0 ? { rateCards } : {}) });
+      return assetsApi.create(token, cleanHandle as string, "instagram", {
+        ...(category ? { category } : {}),
+        ...(grade ? { grade } : {}),
+        ...(groupLink.trim() ? { groupLink: groupLink.trim() } : {}),
+        ...(canAssignOwner && owner ? { ownerId: owner } : {}),
+        ...(rateCards.length > 0 ? { rateCards } : {}),
+      });
     },
     onSuccess: () => {
       onCreated();
@@ -919,7 +1060,7 @@ function NewAssetModal({
         onSubmit={(e) => {
           e.preventDefault();
           setSubmitted(true);
-          if (handleError || ownerError) return;
+          if (handleError || ownerError || ratesError) return;
           createMutation.mutate();
         }}
         noValidate
@@ -992,16 +1133,15 @@ function NewAssetModal({
         <Field label="Category (optional)">
           <ComboInput aria-label="Category" value={category} onChange={setCategory} suggestions={categorySuggestions} placeholder="Search or type a new category…" />
         </Field>
-        {isAdmin && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Reel rate (optional)">
-              <MoneyField value={reelRate} onChange={setReelRate} placeholder="0" aria-label="Reel rate" />
-            </Field>
-            <Field label="Story rate (optional)">
-              <MoneyField value={storyRate} onChange={setStoryRate} placeholder="0" aria-label="Story rate" />
-            </Field>
-          </div>
-        )}
+        <div className="grid grid-cols-[auto_1fr] gap-3">
+          <Field label="Grade (optional)">
+            <GradePicker value={grade} onChange={setGrade} />
+          </Field>
+          <Field label="Group link (optional)">
+            <TextField type="url" value={groupLink} onChange={setGroupLink} placeholder="https://chat.whatsapp.com/…" aria-label="Group link" />
+          </Field>
+        </div>
+        {isAdmin && <RateFields rates={rates} onChange={setRates} required showErrors={submitted} />}
         {isAdmin && <p className="-mt-2 text-[0.75rem] text-text-muted">Approved on creation. Followers and average views are fetched from Instagram right after — usually within a minute or two.</p>}
         {createMutation.isError && (
           <ErrorNotice
@@ -1016,6 +1156,178 @@ function NewAssetModal({
             {createMutation.isPending ? "Creating…" : !canAssignOwner ? "Add page" : usingNewAccount ? "Create account & page" : "Create page"}
           </Button>
         </div>
+      </form>
+    </Sheet>
+  );
+}
+
+/** Grade A / B / C as three toggle buttons (16 Oct); clicking the chosen one again clears it (optional field). */
+function GradePicker({ value, onChange, idPrefix = "" }: { value: Grade | ""; onChange: (v: Grade | "") => void; idPrefix?: string }) {
+  return (
+    <div role="radiogroup" aria-label={`${idPrefix}Grade`} className="inline-flex h-9 rounded-md border border-border bg-surface p-0.5">
+      {GRADES.map((g) => {
+        const on = value === g;
+        return (
+          <button
+            key={g}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            aria-label={`${idPrefix}Grade ${g}`}
+            onClick={() => onChange(on ? "" : g)}
+            className={cn("w-9 rounded-[5px] text-[0.8125rem] font-semibold transition-colors", on ? "bg-ink text-ink-fg" : "text-text-muted hover:bg-surface-2 hover:text-text")}
+          >
+            {g}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A planner's proposed edit on the row (16 Oct): current → proposed, per field.
+ * An admin approves (applied) or rejects (dropped); the planner just sees it waiting.
+ */
+function PendingEditPanel({ asset, pendingEdit, canDecide, pending, onDecide }: { asset: Asset; pendingEdit: PendingAssetEdit; canDecide: boolean; pending: boolean; onDecide: (d: "approve" | "reject") => void }) {
+  const rows: { label: string; from: string; to: string }[] = [];
+  if ("category" in pendingEdit) rows.push({ label: "Category", from: asset.category ?? "—", to: pendingEdit.category ?? "—" });
+  if ("grade" in pendingEdit) rows.push({ label: "Grade", from: asset.grade ?? "—", to: pendingEdit.grade ?? "—" });
+  if ("groupLink" in pendingEdit) rows.push({ label: "Group link", from: asset.groupLink ?? "—", to: pendingEdit.groupLink ?? "—" });
+  for (const rc of pendingEdit.rateCards ?? []) {
+    const current = asset.rateCards.find((r) => r.format === rc.format);
+    rows.push({ label: `${formatLabel(rc.format)} rate`, from: current ? money(current.amount) : "—", to: money(rc.amount) });
+  }
+  const by = asset.pendingEditBy?.name ?? asset.pendingEditBy?.email ?? "a planner";
+  const when = asset.pendingEditAt ? new Date(asset.pendingEditAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : null;
+  return (
+    <div className="mb-3 flex flex-col gap-2 rounded-md border border-blue-line bg-blue-soft p-3" data-testid="pending-edit-panel">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[0.78rem] font-semibold">
+          Suggested edit from {by}
+          {when ? <span className="font-normal text-text-muted"> · {when}</span> : null}
+        </p>
+        {canDecide && (
+          <div className="flex gap-1.5">
+            <Button size="sm" onClick={() => onDecide("approve")} disabled={pending} data-testid="approve-edit">
+              Apply
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => onDecide("reject")} disabled={pending} data-testid="reject-edit">
+              Discard
+            </Button>
+          </div>
+        )}
+      </div>
+      <table className="w-full text-[0.78rem]">
+        <tbody className="divide-y divide-border">
+          {rows.map((r) => (
+            <tr key={r.label}>
+              <td className="py-1 pr-3 text-text-muted">{r.label}</td>
+              <td className="py-1 pr-3 text-text-faint line-through">{r.from}</td>
+              <td className="py-1 font-semibold">{r.to}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!canDecide && <p className="text-[0.72rem] text-text-muted">Waiting for an admin to apply or discard this.</p>}
+    </div>
+  );
+}
+
+/** A titled block inside the edit sheet. */
+function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
+      <div>
+        <h3 className="text-[0.8125rem] font-semibold">{title}</h3>
+        {hint && <p className="mt-0.5 text-[0.72rem] text-text-muted">{hint}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * Inventory → Edit (17 Oct): the page's editor opens as a drawer on the
+ * right (the same Sheet primitive as "Create page", anchored to the edge on
+ * desktop, a bottom sheet on phones). Header = the page at a glance; body =
+ * the editable sections; footer = Cancel / Save (or "Send for approval" for a
+ * planner, whose changes wait on an admin). State lives in the row, so
+ * closing and reopening keeps what was typed until saved.
+ */
+function AssetEditSheet({
+  asset,
+  editable,
+  showCover,
+  coverUrl,
+  busy,
+  error,
+  onClose,
+  onSubmit,
+  children,
+}: {
+  asset: Asset;
+  editable: boolean;
+  showCover: boolean;
+  coverUrl: string | null;
+  busy: boolean;
+  error: unknown;
+  onClose: () => void;
+  onSubmit: () => void;
+  children: ReactNode;
+}) {
+  const active = asset.isActive !== false;
+  return (
+    <Sheet onClose={() => !busy && onClose()} overlayClassName="md:items-stretch md:justify-end md:p-0" panelClassName="md:h-full md:max-h-full md:max-w-[560px] md:rounded-none md:border-y-0 md:border-r-0">
+      <form
+        className="flex min-h-0 flex-1 flex-col"
+        data-testid="asset-edit-sheet"
+        noValidate
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!busy) onSubmit();
+        }}
+      >
+        <header className="flex items-start gap-3 border-b border-border px-6 py-4">
+          {showCover && coverUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={coverUrl} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover ring-1 ring-border" />
+          ) : (
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-faint ring-1 ring-inset ring-border">
+              <AssetIcon className="h-4 w-4" />
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h2 className="truncate text-[1.0625rem] font-semibold tracking-[-0.02em]">@{asset.handle}</h2>
+              {asset.approvalStatus === "pending" && <Tag tone="wait">Pending</Tag>}
+              {asset.approvalStatus === "rejected" && <Tag tone="bad">Rejected</Tag>}
+              {!active && <Tag tone="neutral">Inactive</Tag>}
+              {asset.grade && <Tag tone="info" dot={false}>Grade {asset.grade}</Tag>}
+            </div>
+            <p className="mt-0.5 truncate text-[0.78rem] text-text-muted">
+              {followersLabel(asset.followers)} followers
+              {asset.category ? ` · ${asset.category}` : ""}
+              {asset.owner ? ` · ${personLabel(asset.owner)}` : ""}
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close" disabled={busy}>
+            <CloseIcon className="h-4 w-4" />
+          </Button>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto bg-surface-2 p-4 md:p-6">{children}</div>
+        <footer className="flex flex-col gap-2 border-t border-border bg-surface px-6 py-4">
+          {error ? <ErrorNotice message={error instanceof ApiError ? error.message : editable ? "Couldn't save." : "Couldn't send this suggestion."} /> : null}
+          {!editable && <p className="text-[0.72rem] text-text-muted">Your changes go to an admin for approval; the page keeps its current details until then.</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy} data-testid={editable ? "asset-edit-save" : "send-suggestion"}>
+              {busy ? (editable ? "Saving…" : "Sending…") : editable ? "Save changes" : "Send for approval"}
+            </Button>
+          </div>
+        </footer>
       </form>
     </Sheet>
   );

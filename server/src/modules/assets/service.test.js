@@ -1,11 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ApiError } from "../../middleware/errorHandler.js";
 
-const mockPrisma = { asset: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(async () => null), updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => ({})) }, user: { findUnique: vi.fn(async () => ({ role: "CREATOR" })) }, link: { findMany: vi.fn(async () => []) } };
+const mockPrisma = {
+  asset: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(async () => null), updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => ({})), delete: vi.fn(async () => ({})) },
+  user: { findUnique: vi.fn(async () => ({ role: "CREATOR" })), findMany: vi.fn(async () => []) },
+  link: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
+  planItem: { count: vi.fn(async () => 0), deleteMany: vi.fn(async () => ({ count: 0 })) },
+  rateCard: { upsert: vi.fn(async ({ create }) => create) },
+  // An interactive transaction runs its callback against the same mocks; an array form just awaits its members.
+  $transaction: vi.fn(async (arg) => (typeof arg === "function" ? arg(mockPrisma) : Promise.all(arg))),
+};
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
-vi.mock("../scraping/service.js", () => ({ refreshAssetMetrics: vi.fn(async () => {}) }));
+const applyProfileMetrics = vi.fn(async () => ({}));
+vi.mock("../scraping/service.js", () => ({ refreshAssetMetrics: vi.fn(async () => {}), applyProfileMetrics: (...a) => applyProfileMetrics(...a) }));
+const getAccountMetricsBatch = vi.fn(async () => ({}));
+vi.mock("../../lib/apifyClient.js", () => ({ ApifyInstagramProvider: { getAccountMetricsBatch: (...a) => getAccountMetricsBatch(...a), getAccountMetrics: vi.fn() } }));
 
-const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails } = await import("./service.js");
+const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails, setApprovalStatus, missingRequiredRates, proposeAssetEdit, decideAssetEdit, deleteAsset, checkProfiles } = await import("./service.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
 // listAssets (23 Sep, Step 3) reads the *caller's* effective permissions
@@ -20,6 +31,9 @@ function roleForId(id) {
   if (id?.startsWith("pm") || id?.startsWith("plan")) return "PLAN_MAKER";
   return "CREATOR";
 }
+
+// Reel and Story — required for an admin's page (16 Oct; Static & Carousel was until then).
+const FULL_RATES = [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -37,7 +51,7 @@ describe("createAsset — admin registering a page for someone else (newTask.md 
 
   it("an ADMIN can register a page for another user by passing ownerId", async () => {
     const admin = { id: "admin-1", role: "ADMIN" };
-    const asset = await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "new-creator-1", category: "Meme page" });
+    const asset = await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "new-creator-1", category: "Meme page", rateCards: FULL_RATES });
     expect(asset.ownerId).toBe("new-creator-1");
     expect(asset.category).toBe("Meme page");
   });
@@ -106,12 +120,12 @@ describe("createAsset — PLAN_MAKER registering a vendor's page (25 Sep)", () =
 // the spot and can carry its first rate card; a creator's own page still
 // queues for approval.
 describe("createAsset — admin auto-approval and starting rate card", () => {
-  it("an ADMIN's page is created approved, with the reel/story rates in the same insert", async () => {
+  it("an ADMIN's page is created approved, with its rates in the same insert", async () => {
     const admin = { id: "admin-1", role: "ADMIN" };
-    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "reel", amount: 1 }] });
+    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "reel", amount: 1 }, { format: "post", amount: 2500 }] });
     const { data } = mockPrisma.asset.create.mock.calls[0][0];
     expect(data.approvalStatus).toBe("approved");
-    expect(data.rateCards).toEqual({ create: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }] });
+    expect(data.rateCards).toEqual({ create: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "post", amount: 2500 }] });
   });
 
   it("a CREATOR sending rateCards is refused — rate cards stay admin-only (they price links and plans)", async () => {
@@ -124,7 +138,7 @@ describe("createAsset — admin auto-approval and starting rate card", () => {
   it("a double-submit racing past the duplicate check gets a 409, not a 500", async () => {
     mockPrisma.asset.create.mockRejectedValueOnce(Object.assign(new Error("Unique constraint failed"), { code: "P2002" }));
     const admin = { id: "admin-1", role: "ADMIN" };
-    const err = await createAsset(admin, { platform: "instagram", handle: "twice.page", ownerId: "creator-1" }).catch((e) => e);
+    const err = await createAsset(admin, { platform: "instagram", handle: "twice.page", ownerId: "creator-1", rateCards: FULL_RATES }).catch((e) => e);
     expect(err.statusCode).toBe(409);
   });
 
@@ -235,6 +249,114 @@ describe("updateAssetDetails — Inventory's Edit panel (28 Sep)", () => {
 
     await expect(updateAssetDetails("nope", { category: "x" })).rejects.toMatchObject({ code: "ASSET_NOT_FOUND" });
     expect(mockPrisma.asset.update).not.toHaveBeenCalled();
+  });
+
+  it("saves grade and group link (16 Oct), and null clears either", async () => {
+    await updateAssetDetails("asset-1", { grade: "A", groupLink: "https://chat.whatsapp.com/abc" });
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ data: { grade: "A", groupLink: "https://chat.whatsapp.com/abc" } }));
+
+    await updateAssetDetails("asset-1", { grade: null, groupLink: null });
+    expect(mockPrisma.asset.update).toHaveBeenLastCalledWith(expect.objectContaining({ data: { grade: null, groupLink: null } }));
+  });
+});
+
+describe("grade + group link on creation (16 Oct)", () => {
+  it("an ADMIN's Create page stores both; omitted fields aren't written at all", async () => {
+    const admin = { id: "admin-1", role: "ADMIN" };
+    const asset = await createAsset(admin, { platform: "instagram", handle: "graded", ownerId: "creator-9", rateCards: FULL_RATES, grade: "B", groupLink: "https://t.me/graded" });
+    expect(asset.grade).toBe("B");
+    expect(asset.groupLink).toBe("https://t.me/graded");
+
+    await createAsset(admin, { platform: "instagram", handle: "plain", ownerId: "creator-9", rateCards: FULL_RATES });
+    expect(mockPrisma.asset.create.mock.calls[1][0].data).not.toHaveProperty("grade");
+    expect(mockPrisma.asset.create.mock.calls[1][0].data).not.toHaveProperty("groupLink");
+  });
+});
+
+describe("planner edit proposals (16 Oct — 'planner can edit inventory, admin approves first')", () => {
+  const planner = { id: "pm-1", role: "PLAN_MAKER" };
+  beforeEach(() => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ id: "asset-1", ownerId: "creator-7", handle: "memes", category: "Meme page", grade: null, pendingEdit: null });
+    mockPrisma.asset.update.mockImplementation(async ({ data }) => ({ id: "asset-1", handle: "memes", ...data }));
+  });
+
+  it("a non-planner with inventory.edit can only propose on a page it owns (review, 16 Oct)", async () => {
+    await expect(proposeAssetEdit({ id: "creator-1", role: "CREATOR" }, "asset-1", { grade: "A" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(proposeAssetEdit({ id: "fin-1", role: "FINANCE" }, "asset-1", { grade: "A" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(mockPrisma.asset.update).not.toHaveBeenCalled();
+    await proposeAssetEdit({ id: "creator-7", role: "CREATOR" }, "asset-1", { grade: "A" });
+    expect(mockPrisma.asset.update).toHaveBeenCalled();
+  });
+
+  it("parks the planner's changes on the row as pendingEdit — the live fields are untouched", async () => {
+    const result = await proposeAssetEdit(planner, "asset-1", { category: "News page", grade: "A", rateCards: [{ format: "reel", amount: 7000 }, { format: "reel", amount: 9000 }] });
+    const { data } = mockPrisma.asset.update.mock.calls[0][0];
+    expect(data.pendingEdit).toEqual({ category: "News page", grade: "A", rateCards: [{ format: "reel", amount: 7000 }] });
+    expect(data.pendingEditById).toBe("pm-1");
+    expect(data.pendingEditAt).toBeInstanceOf(Date);
+    expect(data).not.toHaveProperty("category");
+    expect(data).not.toHaveProperty("grade");
+    expect(result.pendingEdit.category).toBe("News page");
+  });
+
+  it("an ADMIN is told to edit directly, and a proposal with nothing in it is refused", async () => {
+    await expect(proposeAssetEdit({ id: "admin-1", role: "ADMIN" }, "asset-1", { grade: "A" })).rejects.toMatchObject({ code: "USE_DIRECT_EDIT" });
+    await expect(proposeAssetEdit(planner, "asset-1", {})).rejects.toMatchObject({ code: "NOTHING_TO_CHANGE" });
+    expect(mockPrisma.asset.update).not.toHaveBeenCalled();
+  });
+
+  it("approving applies category/grade/group link and upserts the proposed rates, then clears the proposal", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ id: "asset-1", handle: "memes", pendingEdit: { category: "News page", grade: "A", groupLink: null, rateCards: [{ format: "reel", amount: 7000 }] } });
+    const result = await decideAssetEdit("asset-1", "approve");
+    expect(mockPrisma.rateCard.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { assetId_format: { assetId: "asset-1", format: "reel" } }, update: expect.objectContaining({ amount: 7000 }) }));
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { pendingEdit: null, pendingEditById: null, pendingEditAt: null, category: "News page", grade: "A", groupLink: null } })
+    );
+    expect(result.category).toBe("News page");
+  });
+
+  it("rejecting only clears the proposal — nothing is applied", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ id: "asset-1", handle: "memes", pendingEdit: { category: "News page" } });
+    await decideAssetEdit("asset-1", "reject");
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pendingEdit: null, pendingEditById: null, pendingEditAt: null } }));
+    expect(mockPrisma.rateCard.upsert).not.toHaveBeenCalled();
+  });
+
+  it("deciding on a page with no proposal is a 400", async () => {
+    await expect(decideAssetEdit("asset-1", "approve")).rejects.toMatchObject({ code: "NO_PENDING_EDIT" });
+  });
+});
+
+describe("deleteAsset (16 Oct — 'inventory remove option, admin only')", () => {
+  beforeEach(() => {
+    mockPrisma.asset.findUnique.mockResolvedValue({ id: "asset-1", handle: "memes" });
+    mockPrisma.link.count.mockResolvedValue(0);
+    mockPrisma.planItem.count.mockResolvedValue(0);
+  });
+
+  it("removes the page and its draft plan lines in one transaction", async () => {
+    await deleteAsset("asset-1");
+    expect(mockPrisma.planItem.deleteMany).toHaveBeenCalledWith({ where: { assetId: "asset-1" } });
+    expect(mockPrisma.asset.delete).toHaveBeenCalledWith({ where: { id: "asset-1" } });
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+  });
+
+  it("refuses (409) a page with posts on record — deactivate instead", async () => {
+    mockPrisma.link.count.mockResolvedValue(3);
+    await expect(deleteAsset("asset-1")).rejects.toMatchObject({ code: "ASSET_IN_USE" });
+    expect(mockPrisma.asset.delete).not.toHaveBeenCalled();
+  });
+
+  it("refuses (409) a page on an approved plan", async () => {
+    mockPrisma.planItem.count.mockResolvedValue(1);
+    await expect(deleteAsset("asset-1")).rejects.toMatchObject({ code: "ASSET_IN_USE" });
+    expect(mockPrisma.planItem.count).toHaveBeenCalledWith({ where: { assetId: "asset-1", plan: { status: "APPROVED" } } });
+    expect(mockPrisma.asset.delete).not.toHaveBeenCalled();
+  });
+
+  it("404s on a page that doesn't exist", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValueOnce(null);
+    await expect(deleteAsset("nope")).rejects.toMatchObject({ code: "ASSET_NOT_FOUND" });
   });
 });
 
@@ -520,5 +642,120 @@ describe("fetchProfilePic — proxying an asset's Instagram picture (user report
     await fetchProfilePic("asset-sequential"); // served from cache, not in-flight (first call already settled)
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("No mandatory rates (16 Oct, later — 'remove the need part, need reel story rate')", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+
+  it("an ADMIN's page is created approved with any rates or none; a zero amount is simply not stored", async () => {
+    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1" });
+    expect(mockPrisma.asset.create.mock.calls[0][0].data.approvalStatus).toBe("approved");
+    expect(mockPrisma.asset.create.mock.calls[0][0].data).not.toHaveProperty("rateCards");
+
+    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1", rateCards: [{ format: "pr", amount: 1000 }, { format: "story", amount: 0 }] });
+    const { data } = mockPrisma.asset.create.mock.calls[1][0];
+    expect(data.approvalStatus).toBe("approved");
+    expect(data.rateCards).toEqual({ create: [{ format: "pr", amount: 1000 }] });
+  });
+
+  it("any mix of rates is stored alongside", async () => {
+    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1", rateCards: FULL_RATES });
+    expect(mockPrisma.asset.create.mock.calls[0][0].data.approvalStatus).toBe("approved");
+
+    const optional = ["entertainment", "pr", "political_reel", "post", "repost", "political_story", "reel_story", "repost_story"];
+    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1", rateCards: [...FULL_RATES, ...optional.map((format) => ({ format, amount: 7000 }))] });
+    const { data } = mockPrisma.asset.create.mock.calls[1][0];
+    expect(data.approvalStatus).toBe("approved");
+    expect(data.rateCards.create.map((r) => r.format)).toEqual(["reel", "story", ...optional]);
+  });
+
+  it("incompleteRates: 'pending' no longer changes anything — nothing is incomplete, so the page is approved", async () => {
+    await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }] }, { incompleteRates: "pending" });
+    const { data } = mockPrisma.asset.create.mock.calls[0][0];
+    expect(data.approvalStatus).toBe("approved");
+    expect(data.rateCards).toEqual({ create: [{ format: "reel", amount: 5000 }] });
+  });
+
+  it("approving a page needs no rates at all", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValueOnce({ approvalStatus: "pending", rateCards: [] });
+    await setApprovalStatus("asset-1", "approved");
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith({ where: { id: "asset-1" }, data: { approvalStatus: "approved" } });
+  });
+
+  it("an already-approved page stays approvable, and rejecting never needs rates", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValueOnce({ approvalStatus: "approved", rateCards: [] });
+    await expect(setApprovalStatus("asset-1", "approved")).resolves.toBeTruthy();
+    await expect(setApprovalStatus("asset-1", "rejected")).resolves.toBeTruthy();
+  });
+
+  it("missingRequiredRates is always empty", () => {
+    expect(missingRequiredRates([{ format: "story", amount: 1 }, { format: "post", amount: 1 }])).toEqual([]);
+    expect(missingRequiredRates(FULL_RATES)).toEqual([]);
+    expect(missingRequiredRates(undefined)).toEqual([]);
+  });
+});
+
+describe("checkProfiles — 'are these pages still up?' (17 Oct, plan wizard)", () => {
+  const HOUR = 60 * 60 * 1000;
+  const page = (over) => ({ id: "a1", handle: "one", platform: "instagram", profileCheckedAt: null, profileBroken: false, lastScrapeError: null, ...over });
+
+  beforeEach(() => {
+    mockPrisma.asset.update.mockImplementation(async ({ data }) => data);
+    getAccountMetricsBatch.mockResolvedValue({});
+  });
+
+  it("only asks Instagram about pages not confirmed in the last 24h; the rest answer from their last check", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([
+      page({ id: "a1", handle: "fresh", profileCheckedAt: new Date(Date.now() - 2 * HOUR) }),
+      page({ id: "a2", handle: "stale", profileCheckedAt: new Date(Date.now() - 30 * HOUR) }),
+      page({ id: "a3", handle: "never" }),
+      page({ id: "a4", handle: "brokenfresh", profileCheckedAt: new Date(Date.now() - 1 * HOUR), profileBroken: true, lastScrapeError: "gone" }),
+    ]);
+    getAccountMetricsBatch.mockResolvedValue({ stale: { followers: 10 }, never: null });
+
+    const r = await checkProfiles(["a1", "a2", "a3", "a4"]);
+
+    expect(getAccountMetricsBatch).toHaveBeenCalledWith(["stale", "never"]);
+    expect(r.checked).toBe(2);
+    expect(r.results.map((x) => [x.assetId, x.broken, x.fresh])).toEqual([
+      ["a1", false, false],
+      ["a2", false, true],
+      ["a3", true, true],
+      ["a4", true, false],
+    ]);
+    // Found → numbers stored (applyProfileMetrics stamps the check and clears broken); gone → flagged.
+    expect(applyProfileMetrics).toHaveBeenCalledWith("a2", { followers: 10 });
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "a3" }, data: expect.objectContaining({ profileBroken: true, lastScrapeError: expect.stringMatching(/Not found on Instagram/) }) }));
+    expect(r.results[3].reason).toBe("gone");
+  });
+
+  it("force re-checks everything, even pages confirmed an hour ago", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([page({ id: "a1", handle: "fresh", profileCheckedAt: new Date() })]);
+    getAccountMetricsBatch.mockResolvedValue({ fresh: { followers: 5 } });
+    const r = await checkProfiles(["a1"], { force: true });
+    expect(getAccountMetricsBatch).toHaveBeenCalledWith(["fresh"]);
+    expect(r.checked).toBe(1);
+  });
+
+  it("a page Instagram didn't answer for is reported unknown and left as it was; an outage is reported, not thrown", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([page({ id: "a1", handle: "slow" })]);
+    getAccountMetricsBatch.mockResolvedValue({});
+    const r = await checkProfiles(["a1"]);
+    expect(r.results[0]).toMatchObject({ assetId: "a1", broken: false, unknown: true });
+    expect(mockPrisma.asset.update).not.toHaveBeenCalled();
+
+    getAccountMetricsBatch.mockRejectedValue(new Error("Apify down"));
+    const down = await checkProfiles(["a1"]);
+    expect(down.error).toMatch(/Couldn't reach Instagram/);
+    expect(down.results[0].unknown).toBe(true);
+  });
+
+  it("skips non-Instagram pages without asking Apify", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([page({ id: "y1", handle: "tube", platform: "youtube" })]);
+    const r = await checkProfiles(["y1"]);
+    expect(getAccountMetricsBatch).not.toHaveBeenCalled();
+    expect(r.checked).toBe(0);
+    expect(r.results[0].fresh).toBe(false);
   });
 });

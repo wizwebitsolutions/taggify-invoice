@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 /** Must match client/.env.local's NEXT_PUBLIC_API_URL. Exported so a test
  * that needs to override one endpoint beyond what mockApi() sends can scope
@@ -114,4 +114,21 @@ export async function mockApi(page: Page) {
     // /api/links/:id/cost-revisions) is a plain array.
     return route.fulfill({ json: [] });
   });
+}
+
+/**
+ * Rates are entered one format at a time (16 Oct): pick the format in the
+ * "Add a rate for…" select, type the amount, press Add. `format` is the
+ * lib/formats key (reel, story, pr, repost_story…); `prefix` is the
+ * aria-label prefix a form uses when it shows several pages ("@page ").
+ */
+export async function addRate(scope: Page | Locator, format: string, amount: string, prefix = "") {
+  await scope.getByLabel(`${prefix}Add a rate for`, { exact: true }).selectOption(format);
+  await scope.getByLabel(`${prefix}New rate amount`, { exact: true }).fill(amount);
+  await scope.getByLabel(`${prefix}Add rate`, { exact: true }).click();
+}
+
+/** Plan wizard, pages step: add a format line for a picked page via its "Add format…" select. */
+export async function addPlanFormat(page: Page, assetId: string, format: string) {
+  await page.getByTestId(`plan-add-format-${assetId}`).selectOption(format);
 }

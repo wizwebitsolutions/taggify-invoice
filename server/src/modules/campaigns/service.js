@@ -5,6 +5,7 @@ import { campaignVisibilityWhere, canPlanMakerAccessCampaign, canCreatorAccessCa
 import { byPhaseThenPost, creatorPhaseNumberIn, creatorPhaseTitle, creatorRowsOf, groupsByRoot, phaseRowIds } from "../../lib/campaignPhases.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import { recomputePostQuota } from "../../lib/postQuota.js";
+import { plannedPagesFor } from "../../lib/comboSlots.js";
 
 const MAX_SHEET_BYTES = 5 * 1024 * 1024; // 5MB — plenty for a pages/work list, small enough to hold in memory
 
@@ -404,9 +405,17 @@ export async function createPhase(campaignId, { title } = {}, requester) {
     const phaseOnePages = await tx.campaignAssignment.findMany({
       where: { campaignId: root.id, status: "matched", assetId: { not: null } },
       select: { assetId: true, pageHandle: true, creatorPhone: true, format: true, cost: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
+    // A page on the campaign's plan is booked as one slot per plan line (a
+    // regular line's own format and cost — review fix 16 Oct, a page can be
+    // booked Reel + Static & Carousel) plus one per part per combo line
+    // (Reel + Story 14 Oct, Repost + Story 16 Oct). Every one of its Phase 1
+    // slots is copied, in Phase 1's order (oldest first), so each keeps its
+    // own format and price. Pages not on a plan (campaign sheet) keep one post each.
+    const planned = await plannedPagesFor(root.id, phaseOnePages.map((a) => a.assetId), tx);
     const seen = new Set();
-    const pages = phaseOnePages.filter((a) => !seen.has(a.assetId) && seen.add(a.assetId));
+    const pages = phaseOnePages.filter((a) => planned.has(a.assetId) || (!seen.has(a.assetId) && seen.add(a.assetId)));
 
     return tx.campaign.create({
       data: {

@@ -8,14 +8,17 @@ import { Sheet } from "@/components/ui/sheet";
 import { Field, Select } from "@/components/ui/form-field";
 import { ErrorNotice } from "@/components/ui/table-parts";
 import { links as linksApi, ApiError, LINK_FORMATS } from "@/lib/api-client";
+import { formatLabel, isBookableFormat } from "@/lib/formats";
 import { cn } from "@/lib/utils";
 
-// Standard formats every page should be able to post — mirrors the Assets
-// rate-card editor's list. A page's rate card only needs *some* of these
-// priced (unpriced ones just fail with "No rate card set…" per link when
-// submitted), but every page should still see the full set here rather
-// than only whichever formats happen to already have a price.
-const STANDARD_FORMATS = [...LINK_FORMATS];
+// The bookable formats (14 Oct): Reel, Entertainment / Brand, PR, Political,
+// Static & Carousel, Repost, Story, Political Story. A combo (Reel + Story,
+// Repost + Story) is never posted as one link — its two posts go up separately. A page's rate card only needs *some* of these
+// priced (unpriced ones say "(no rate set)"), but every page still sees the
+// full set rather than only whichever formats already have a price.
+const STANDARD_FORMATS: string[] = [...LINK_FORMATS];
+/** The page's priced formats that can be posted as a link, in the app's order. */
+const pricedBookable = (rateCards: { format: string }[] | undefined) => STANDARD_FORMATS.filter((f) => (rateCards ?? []).some((rc) => rc.format === f && isBookableFormat(rc.format)));
 
 /**
  * Bulk link upload — paste any number of post URLs (one per line) and
@@ -48,7 +51,7 @@ export function UploadLinksModal({
   const pageOptions = !selectedCampaign ? [] : selectedCampaign.bookedAssetIds ? assets.filter((a) => selectedCampaign.bookedAssetIds!.includes(a.id)) : assets;
   const [assetId, setAssetId] = useState(pageOptions[0]?.id ?? "");
   const [urlsText, setUrlsText] = useState("");
-  const [format, setFormat] = useState(assets[0]?.rateCards[0]?.format ?? STANDARD_FORMATS[0]);
+  const [format, setFormat] = useState<string>(pricedBookable(assets[0]?.rateCards)[0] ?? STANDARD_FORMATS[0]);
 
   const asset = assets.find((a) => a.id === assetId);
   const urls = urlsText.split("\n").map((u) => u.trim()).filter(Boolean);
@@ -59,9 +62,9 @@ export function UploadLinksModal({
   const quota = selectedCampaign?.pageQuota?.find((q) => q.assetId === assetId);
   const remaining = quota ? Math.max(0, quota.booked - quota.submitted) : null;
 
-  // reel/story only (14 Sep) — a legacy rate card with another format is
-  // not offered for new submissions.
-  const availableFormats = [...STANDARD_FORMATS];
+  // Bookable formats only — a legacy rate card with another format, or the
+  // Reel + Story / Repost + Story combos, is not offered for new submissions.
+  const availableFormats = STANDARD_FORMATS;
 
   // Keeps the page choice valid — on a campaign switch, and also when the
   // pages themselves arrive after the modal opened. The initial useState above
@@ -85,7 +88,7 @@ export function UploadLinksModal({
   // Keep the selected format valid when the chosen page changes, preferring
   // a format this page has actually priced.
   useEffect(() => {
-    const priced = asset?.rateCards.map((rc) => rc.format) ?? [];
+    const priced = pricedBookable(asset?.rateCards);
     if (priced.includes(format)) return;
     setFormat(priced[0] ?? STANDARD_FORMATS[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -185,7 +188,7 @@ export function UploadLinksModal({
               const priced = asset?.rateCards.some((rc) => rc.format === f);
               return (
                 <option key={f} value={f}>
-                  {f}
+                  {formatLabel(f)}
                   {priced ? "" : " (no rate set)"}
                 </option>
               );

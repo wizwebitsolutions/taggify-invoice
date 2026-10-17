@@ -45,15 +45,40 @@ const MAX_EMAIL_LENGTH = 254;
 const MAX_PHONE_LENGTH = 20;
 const EMAIL_PATTERN = /[^\s@,;<>()]+@[^\s@,;<>()]+\.[^\s@,;<>()]+/;
 const FOLLOWERS_HEADERS = ["followers", "follower count", "audience"];
-// Formats a rate column can name outright ("reel") or with a suffix ("reel
-// rate", "story cost"). reel/story only (14 Sep) — any other column, e.g.
-// "video price", is ignored rather than creating a rate card the app
-// can't use.
-import { FORMATS as STANDARD_FORMATS } from "../../lib/formats.js";
-const RATE_SUFFIX = /^(.+?)\s+(rate|cost|price|amount)$/;
+// Grade (16 Oct): A / B / C, optional. Anything else in the cell is ignored.
+const GRADE_HEADERS = ["grade", "page grade", "tier"];
+// Group link (16 Oct): the page's WhatsApp/Telegram group, optional, informational.
+const GROUP_LINK_HEADERS = ["group link", "group", "group url", "whatsapp group", "telegram group", "whatsapp link", "telegram link"];
+const GRADES = new Set(["A", "B", "C"]);
+// Rate columns (16 Oct): a header naming one of the ten formats with a
+// rate/cost/price/amount suffix ("Static & Carousel Rate", "Reels cost",
+// "Political price", "Political Story Rate", "Repost + Story Rate") — read
+// through lib/formats.js's formatFromText — or a bare header that is exactly
+// a singular alias ("Reel", "Story", "Political Story", "Repost + Story"). Both are whole-header lookups, so "Political Story" is
+// never read as "Political" nor "Repost + Story" as "Repost". Bare plurals
+// ("Reels", "Posts", "Stories") are usually post-count columns, "Image" isn't
+// a price, a bare "Brand" is more likely a name column, and "Post", "Static",
+// "Carousel", "PR", "Combo" are too vague on their own, so those need the
+// suffix; "Post URL" / "Post link" never count. Any other column, e.g. "video
+// price", is ignored rather than creating a rate card the app can't use.
+import { formatFromText, exactFormatAlias } from "../../lib/formats.js";
+
+const RATE_HEADER_SUFFIX = /\s(rate|cost|price|amount)$/;
+// Review fix (16 Oct): bare "Post", "Static", "Carousel", "PR" and "Combo"
+// are as likely a count, a link or a yes/no column as a price, so they need
+// the suffix too ("Static & Carousel", "Reel + Story" and other exact
+// multi-word names still count bare).
+const BARE_NON_RATE_HEADERS = new Set(["image", "brand", "post", "static", "carousel", "pr", "combo"]);
+
+/** The format a header names as a rate column, or null. Exported for tests. */
+export function rateFormatFromHeader(header) {
+  const h = String(header ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+  if (!h) return null;
+  if (RATE_HEADER_SUFFIX.test(h)) return formatFromText(h);
+  return BARE_NON_RATE_HEADERS.has(h) ? null : exactFormatAlias(h);
+}
 // Mirrors assets/schemas.js's rateCardEntrySchema / importAssetRowSchema so a
 // row the preview shows as "will be created" can't then fail the confirm schema.
-const MAX_FORMAT_LENGTH = 40;
 const MAX_RATE_COLUMNS = 20;
 // Postgres Int — Asset.followers is a plain Int, so "3000M" must not overflow it.
 const MAX_INT32 = 2_147_483_647;
@@ -135,6 +160,20 @@ export function parseContactPhone(raw) {
   if (digits.length < 10 || digits.length > 15) return null;
   const phone = `${run[0].startsWith("+") ? "+" : ""}${digits}`;
   return phone.length <= MAX_PHONE_LENGTH ? phone : null;
+}
+
+/** A group-link cell: an http(s) URL (a bare "chat.whatsapp.com/…" gets https://), else null. Exported for tests. */
+export function parseGroupLink(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  try {
+    const url = new URL(withScheme);
+    if (!/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) return null;
+    return withScheme.slice(0, 300);
+  } catch {
+    return null;
+  }
 }
 
 /** A "Vendor Contact" cell: its email (if it has a plausible one) and its phone (≥10 digits outside the email), either or both. */
@@ -279,6 +318,8 @@ export async function parseImportSheet(buffer, fileName = "") {
   const vendorPhoneCol = findColumn(headers, VENDOR_PHONE_HEADERS);
   const vendorEmailCol = findColumn(headers, VENDOR_EMAIL_HEADERS);
   const vendorCols = [vendorNameCol, vendorContactCol, vendorPhoneCol, vendorEmailCol].filter((c) => c !== null);
+  const gradeCol = findColumn(headers, GRADE_HEADERS);
+  const groupLinkCol = findColumn(headers, GROUP_LINK_HEADERS);
   const hasVendorColumn = vendorCols.length > 0;
   // "Vendor | Phone | Email" sheets: plain owner phone/email columns are the vendor's contact too (14 Oct review).
   const ownerPhoneCol = findColumn(headers, OWNER_PHONE_HEADERS);
@@ -288,15 +329,10 @@ export async function parseImportSheet(buffer, fileName = "") {
   const rateCols = [];
   const seenFormats = new Set();
   headers.forEach((h, i) => {
-    if (i === linkCol || i === handleOnlyCol || i === namedCol || i === ownerCol || i === categoryCol || i === followersCol || vendorCols.includes(i)) return;
+    if (i === linkCol || i === handleOnlyCol || i === namedCol || i === ownerCol || i === categoryCol || i === followersCol || i === gradeCol || i === groupLinkCol || vendorCols.includes(i)) return;
     if (rateCols.length >= MAX_RATE_COLUMNS) return;
-    let format = null;
-    if (STANDARD_FORMATS.includes(h)) format = h;
-    else {
-      const m = h.match(RATE_SUFFIX);
-      if (m) format = m[1].trim().slice(0, MAX_FORMAT_LENGTH);
-    }
-    if (!format || !STANDARD_FORMATS.includes(format) || seenFormats.has(format)) return;
+    const format = rateFormatFromHeader(h);
+    if (!format || seenFormats.has(format)) return;
     seenFormats.add(format);
     rateCols.push({ col: i, format });
   });
@@ -329,6 +365,9 @@ export async function parseImportSheet(buffer, fileName = "") {
       if (amount !== null) rateCards.push({ format, amount });
     }
     const category = categoryCol === null ? null : cellText(cells[categoryCol]).trim().slice(0, 40) || null;
+    const gradeText = gradeCol === null ? "" : cellText(cells[gradeCol]).trim().toUpperCase().replace(/^GRADE\s*/, "");
+    const grade = GRADES.has(gradeText) ? gradeText : null;
+    const groupLink = groupLinkCol === null ? null : parseGroupLink(cellText(cells[groupLinkCol]));
 
     // Explicit phone/email columns win; a combined contact cell fills whichever is still missing.
     const contact = vendorContactCol === null ? { phone: null, email: null } : classifyContact(cellText(cells[vendorContactCol]));
@@ -350,6 +389,8 @@ export async function parseImportSheet(buffer, fileName = "") {
       vendorPhone,
       vendorEmail,
       category,
+      grade,
+      groupLink,
       followers: followersCol === null ? null : parseFollowerCount(cells[followersCol]),
       rateCards,
       problem,

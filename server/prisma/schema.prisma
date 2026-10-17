@@ -276,6 +276,23 @@ model Asset {
   // Instagram's CDN links expire and flake. See assets/service.js storeProfilePic.
   profilePicStoredUrl String?
   category            String? // free-form, e.g. "Meme page", "News page" — not a fixed enum, same convention as RateCard.format
+  // 16 Oct: page grade A | B | C — set by hand (Inventory edit, Create page,
+  // the import sheet's "Grade" column), never derived. Null = not graded.
+  grade               String?
+  // 16 Oct: the page's WhatsApp/Telegram group link — informational, shown
+  // on the Inventory row. Null = none.
+  groupLink           String?
+  // 16 Oct: a planner's proposed edit (category / grade / group link / rates)
+  // waiting for an admin to approve — the live row stays as it was until
+  // then. { category?, grade?, groupLink?, rateCards? } or null.
+  pendingEdit         Json?
+  pendingEditById     String?
+  pendingEditAt       DateTime?
+  // 17 Oct: "is this page still up?" — set by the plan wizard's Instagram
+  // check (plans POST /check-pages) and by every successful profile scrape.
+  // broken = Instagram returned no profile (deactivated, renamed, private).
+  profileCheckedAt    DateTime?
+  profileBroken       Boolean   @default(false)
   approvalStatus      String    @default("pending") // pending | approved | rejected
   // Admin switch (8 Oct): an inactive page can't be added to new plans; everything else stays the same.
   isActive            Boolean   @default(true)
@@ -687,6 +704,9 @@ model Plan {
   // extra NOTES bullet on the PDF alongside the two fixed ones.
   notes           String?
   budget          Decimal?   @db.Decimal(12, 2)
+  // 16 Oct: a flat discount in rupees taken off the client subtotal before
+  // GST (user decision). Null/0 = none.
+  discount        Decimal?   @db.Decimal(12, 2)
   // Client-facing GST % on this plan's invoice/overview (user request, 17
   // Sep — replaces the old fixed-18%-or-nothing isGstPlan toggle, which
   // could only ever add exactly 18% or nothing). Null/0 = no GST line.
@@ -828,6 +848,8 @@ model ClientInvoice {
   campaignId    String?
   invoiceNumber String              @unique
   subtotal      Decimal             @db.Decimal(12, 2)
+  // 16 Oct: flat discount off the subtotal, before GST. total = subtotal - discount + gstAmount.
+  discount      Decimal             @default(0) @db.Decimal(12, 2)
   gstPercent    Decimal?            @db.Decimal(5, 2)
   gstAmount     Decimal             @default(0) @db.Decimal(12, 2)
   total         Decimal             @db.Decimal(12, 2)

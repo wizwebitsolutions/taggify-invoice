@@ -1,13 +1,14 @@
 import { z } from "zod";
 
-// reel/story only (14 Sep) — see lib/formats.js.
-import { formatSchema } from "../../lib/formats.js";
+// Bookable formats only (14 Oct) — a combo ("Reel + Story", "Repost +
+// Story") is posted as its two parts, each its own link. See lib/formats.js.
+import { bookableFormatSchema } from "../../lib/formats.js";
 
 export const createLinkSchema = z.object({
   campaignId: z.string().min(1),
   assetId: z.string().min(1),
   url: z.string().url(),
-  format: formatSchema,
+  format: bookableFormatSchema,
   customAmount: z.number().positive().optional(), // only honored for ADMIN callers
 });
 
@@ -16,7 +17,7 @@ export const createLinkSchema = z.object({
 export const bulkCreateLinkSchema = z.object({
   campaignId: z.string().min(1),
   assetId: z.string().min(1),
-  format: formatSchema,
+  format: bookableFormatSchema,
   urls: z.array(z.string().url()).min(1).max(200),
 });
 
@@ -61,7 +62,7 @@ export const bulkImportRowSchema = z.object({
   campaignTitle: z.string().min(1).max(150),
   pageHandle: z.string().min(1).max(60),
   url: z.string().url(),
-  format: formatSchema,
+  format: bookableFormatSchema,
   cost: z.number().positive().optional(),
 });
 

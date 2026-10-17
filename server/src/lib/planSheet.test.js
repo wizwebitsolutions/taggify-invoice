@@ -90,9 +90,9 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
     });
 
     expect(t.pageTabs.map((tab) => tab.title)).toEqual([
-      "News Pages — Q1 Meme Page Push · Plan A · Not active",
-      "Meme Pages — Q1 Meme Page Push · Plan A · Not active",
-      "Other Pages — Q1 Meme Page Push · Plan A · Not active",
+      "News Pages — Q1 Meme Page Push · Plan A",
+      "Meme Pages — Q1 Meme Page Push · Plan A",
+      "Other Pages — Q1 Meme Page Push · Plan A",
     ]);
     const meme = t.pageTabs[1];
     const pageRow = meme.rows.find((r) => r[0] === 1);
@@ -347,29 +347,49 @@ describe("previewExecutionSheetTemplate", () => {
  * and unapproved will show not active in sheet tab name as well, make it
  * highlighted in google sheet also".
  */
-describe("Active / Not active — tab name, band and tab colour (29 Sep)", () => {
+describe("Active / Not active — internal file only (29 Sep; client mark dropped 16 Oct)", () => {
   const approved = { ...basePlan, status: "APPROVED", variantLabel: "Plan A" };
   const draft = { ...basePlan, status: "DRAFT", variantLabel: "Plan B" };
+  const internal = { internal: true };
 
-  it("an approved plan's tabs say Active; anything else — draft, awaiting approval, rejected — says Not active", () => {
-    expect(planSheetTabTitles(approved).pagesTitle).toBe("Q1 Meme Page Push · Plan A · Active");
-    expect(planSheetTabTitles(approved).overviewTitle).toBe("Overview of Q1 Meme Page Push · Plan A · Active");
+  // 16 Oct — "in client sheet it should not show active mark".
+  it("the client file carries no status anywhere: not in tab names, not as a band, not as a tab colour", () => {
+    expect(planSheetTabTitles(approved).pagesTitle).toBe("Q1 Meme Page Push · Plan A");
+    expect(planSheetTabTitles(approved).overviewTitle).toBe("Overview of Q1 Meme Page Push · Plan A");
+    for (const status of ["DRAFT", "PENDING_APPROVAL", "REJECTED", "APPROVED"]) {
+      const t = buildPlanSheetTabs({ ...draft, status });
+      expect(planSheetTabTitles({ ...draft, status }).pagesTitle).toBe("Q1 Meme Page Push · Plan B");
+      expect(JSON.stringify(t.overviewRows)).not.toMatch(/ACTIVE/i);
+      expect(JSON.stringify(t.pageTabs.map((p) => p.rows))).not.toMatch(/ACTIVE/i);
+      expect(t.overviewRowSpecs[0].cellTypes[0]).toBe("navyBand");
+      expect(t.pageTabs[0].rowSpecs[0].cellTypes[0]).toBe("tableHeader");
+    }
+    expect(tabStatusRequests(3, approved)).toEqual([]);
+    expect(tabStatusRequests(3, approved, { internal: false })).toEqual([]);
+  });
+
+  it("the internal file's tabs say Active for an approved plan and Not active otherwise", () => {
+    expect(planSheetTabTitles(approved, internal).pagesTitle).toBe("INTERNAL — Q1 Meme Page Push · Plan A · Active · abc123");
     for (const status of ["DRAFT", "PENDING_APPROVAL", "REJECTED"]) {
-      expect(planSheetTabTitles({ ...draft, status }).pagesTitle).toBe("Q1 Meme Page Push · Plan B · Not active");
+      expect(planSheetTabTitles({ ...draft, status }, internal).pagesTitle).toBe("INTERNAL — Q1 Meme Page Push · Plan B · Not active · abc123");
     }
   });
 
   it("a long name is what gets shortened — never the variant or the status", () => {
-    const { overviewTitle } = planSheetTabTitles({ ...approved, name: "A".repeat(150) });
+    const { overviewTitle } = planSheetTabTitles({ ...approved, name: "A".repeat(150) }, internal);
     expect(overviewTitle.length).toBeLessThanOrEqual(100);
-    expect(overviewTitle).toMatch(/ · Plan A · Active$/);
+    expect(overviewTitle).toMatch(/ · Plan A · Active · abc123$/);
+    const client = planSheetTabTitles({ ...approved, name: "A".repeat(150) });
+    expect(client.overviewTitle.length).toBeLessThanOrEqual(100);
+    expect(client.overviewTitle).toMatch(/ · Plan A$/);
   });
 
-  it("both tabs open with a highlighted status band, green for Active and red for Not active", () => {
-    const on = buildPlanSheetTabs(approved);
-    const off = buildPlanSheetTabs(draft);
+  const annotated = (plan) => ({ ...plan, internal: { computedFollowers: 100000, computedPosts: 2, computedImpressions: 10000, computedSubtotal: 8000, computedGstAmount: 0, computedTotal: 8000 }, items: plan.items.map((i) => ({ ...i, cost: 3000 })) });
 
-    // Overview and every page tab open with the status band.
+  it("internal tabs open with a highlighted status band, green for Active and red for Not active", () => {
+    const on = buildPlanSheetTabs(annotated(approved), internal);
+    const off = buildPlanSheetTabs(annotated(draft), internal);
+
     expect(on.overviewRows[0][0]).toContain("ACTIVE");
     expect(on.overviewRowSpecs[0]).toMatchObject({ cellTypes: ["statusActive"], merge: true });
     expect(on.pageTabs[0].rows[0][0]).toContain("ACTIVE");
@@ -382,12 +402,40 @@ describe("Active / Not active — tab name, band and tab colour (29 Sep)", () =>
     expect(red.repeatCell.cell.userEnteredFormat.backgroundColor.red).toBeGreaterThan(red.repeatCell.cell.userEnteredFormat.backgroundColor.green);
   });
 
-  it("the tab itself is coloured by status too", () => {
-    const [on] = tabStatusRequests(3, approved);
-    const [off] = tabStatusRequests(4, draft);
+  it("the internal tab itself is coloured by status too", () => {
+    const [on] = tabStatusRequests(3, approved, internal);
+    const [off] = tabStatusRequests(4, draft, internal);
     expect(on.updateSheetProperties).toMatchObject({ properties: { sheetId: 3 }, fields: "tabColorStyle" });
     expect(on.updateSheetProperties.properties.tabColorStyle.rgbColor.green).toBeGreaterThan(0.5);
     expect(off.updateSheetProperties.properties.tabColorStyle.rgbColor.red).toBeGreaterThan(0.8);
+  });
+});
+
+describe("Flat discount rows (16 Oct)", () => {
+  const discounted = { ...basePlan, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, subtotal: 8000, discount: 1000, taxable: 7000, gstAmount: 1260, total: 8260 } };
+  const cell = (rows, label) => rows.find((r) => r.includes(label));
+
+  it("breakdown: Discount and After Discount sit between the Total row and GST", () => {
+    const t = buildPlanSheetTabs(discounted);
+    expect(cell(t.overviewRows, "Discount")).toContain("- ₹1,000");
+    expect(cell(t.overviewRows, "After Discount")).toContain("₹7,000");
+    expect(cell(t.overviewRows, "GST (18%)")).toContain("₹1,260");
+    const labels = t.overviewRows.map((r) => r[4]);
+    expect(labels.indexOf("Discount")).toBeLessThan(labels.indexOf("GST (18%)"));
+  });
+
+  it("summary: Discount and Cost After Discount follow Cost", () => {
+    const t = buildPlanSheetTabs({ ...discounted, sheetFormat: "summary" });
+    const labels = t.overviewRows.map((r) => r[0]);
+    expect(labels.indexOf("Cost")).toBeLessThan(labels.indexOf("Discount"));
+    expect(cell(t.overviewRows, "Cost After Discount")).toContain("₹7,000");
+  });
+
+  it("no discount → no discount rows at all", () => {
+    for (const format of ["breakdown", "summary"]) {
+      const t = buildPlanSheetTabs({ ...basePlan, sheetFormat: format, overview: { ...basePlan.overview, discount: 0, taxable: 8000 } });
+      expect(JSON.stringify(t.overviewRows)).not.toContain("Discount");
+    }
   });
 });
 
@@ -417,8 +465,8 @@ describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 S
     const reqs = reconcilePlanTabRequests(existing, sheetsFor(planA, planB));
 
     expect(renames(reqs)).toEqual([
-      [1, "Overview of speedXredbull · Plan A · Active"],
-      [3, "Overview of thriftXredbull · Plan B · Not active"],
+      [1, "Overview of speedXredbull · Plan A"],
+      [3, "Overview of thriftXredbull · Plan B"],
     ]);
     expect(deletes(reqs).sort()).toEqual([2, 4]);
   });
@@ -431,7 +479,7 @@ describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 S
 
     const reqs = reconcilePlanTabRequests(existing, sheetsFor(planA));
 
-    expect(renames(reqs)).toEqual([[10, "Overview of speedXredbull · Plan A · Active"]]);
+    expect(renames(reqs)).toEqual([[10, "Overview of speedXredbull · Plan A"]]);
     expect(deletes(reqs)).toEqual([12]); // exactly one Overview survives
   });
 
@@ -446,16 +494,16 @@ describe("reconcilePlanTabRequests — rename in place, never strand a tab (29 S
 
     const reqs = reconcilePlanTabRequests(existing, sheetsFor(linked));
 
-    expect(renames(reqs)).toEqual([[12, "Overview of speedXredbull · Plan A · Active"]]);
+    expect(renames(reqs)).toEqual([[12, "Overview of speedXredbull · Plan A"]]);
     expect(deletes(reqs)).toEqual([10]);
   });
 
-  it("a status flip or a rename keeps each category's own tab — Plan B approved later goes Not active → Active", () => {
+  it("a rename keeps each category's own tab, and a tab written with the pre-16 Oct status suffix is renamed to the bare client title", () => {
     const existing = [{ sheetId: 5, title: "Meme Pages — oldName · Plan B · Not active" }];
 
     const reqs = reconcilePlanTabRequests(existing, sheetsFor({ ...planB, status: "APPROVED" }));
 
-    expect(renames(reqs)).toEqual([[5, "Meme Pages — thriftXredbull · Plan B · Active"]]);
+    expect(renames(reqs)).toEqual([[5, "Meme Pages — thriftXredbull · Plan B"]]);
     expect(deletes(reqs)).toEqual([]);
   });
 
@@ -505,5 +553,21 @@ describe("plan sheet followers read as K / M", () => {
     expect(t.pageTabs[0].rows.some((r) => r[1] === "demo.page" && r[3] === "100K")).toBe(true);
     const summary = buildPlanSheetTabs({ ...basePlan, sheetFormat: "summary" });
     expect(summary.overviewRows.find((r) => r[0] === "Total Followers Targeted Overall")?.[1]).toBe("100K +");
+  });
+});
+
+describe("internal Margin is after the discount (16 Oct review)", () => {
+  it("Margin = (subtotal − discount) − our cost, in both layouts", () => {
+    const plan = {
+      ...basePlan,
+      overview: { ...basePlan.overview, subtotal: 8000, discount: 1000, taxable: 7000 },
+      internal: { computedFollowers: 100000, computedPosts: 2, computedImpressions: 10000, computedSubtotal: 8000, computedGstAmount: 0, computedTotal: 8000 },
+      items: [{ ...basePlan.items[0], cost: 1500 }], // 2 posts × 1500 = 3000 our cost
+    };
+    for (const sheetFormat of ["breakdown", "summary"]) {
+      const t = buildPlanSheetTabs({ ...plan, sheetFormat }, { internal: true });
+      const margin = t.overviewRows.find((r) => r.includes("Margin"));
+      expect(margin).toContain("₹4,000"); // 7000 − 3000, not 8000 − 3000
+    }
   });
 });

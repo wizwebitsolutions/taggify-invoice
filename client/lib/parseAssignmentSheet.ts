@@ -1,5 +1,39 @@
 import Papa from "papaparse";
 
+import { isCombo, formatFromText } from "./formats";
+
+/**
+ * A sheet row that can't be sent as-is — thrown by the campaign / work-import
+ * parsers so the screen can show the reason instead of "couldn't read that
+ * file". Today: a "Reel + Story" or "Repost + Story" row (14 Oct) — a
+ * campaign sheet row is one post, and a combo is two.
+ */
+export class SheetRowError extends Error {}
+
+/** The server's message for each combo on a campaign sheet row (campaigns/schemas.js). */
+export const COMBO_ROW_MESSAGES: Record<string, string> = {
+  reel_story: "Reel + Story is two posts: use one row per post (Reel and Story)",
+  repost_story: "Repost + Story is two posts: use one row per post (Repost and Story)",
+};
+
+/**
+ * A sheet's format cell → a format key via the shared alias list ("Static",
+ * "Reels", "Reel + Story", "combo"…). Unrecognised text passes through in
+ * lower case so the server answers with its own "unknown format" message.
+ */
+function sheetFormat(raw: string | undefined): string {
+  const text = raw?.trim() ?? "";
+  if (!text) return "";
+  return formatFromText(text) ?? text.toLowerCase();
+}
+
+/** Campaign/work-import rows take bookable formats only — a combo row is rejected with the server's own wording. */
+function bookableSheetFormat(raw: string | undefined, rowNumber: number): string {
+  const format = sheetFormat(raw);
+  if (isCombo(format)) throw new SheetRowError(`Row ${rowNumber}: ${COMBO_ROW_MESSAGES[format]}`);
+  return format;
+}
+
 /**
  * Parses an uploaded page/creator sheet (newTask.md #8) into rows the
  * campaign-creation API understands. CSV only — not because "Excel sheet"
@@ -41,7 +75,7 @@ export async function parseAssignmentSheet(source: CsvSource): Promise<ParsedAss
   const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
 
   const rows: ParsedAssignmentRow[] = [];
-  for (const row of data) {
+  for (const [index, row] of data.entries()) {
     const keys = Object.keys(row);
     const find = (headers: string[]) => keys.find((k) => headers.includes(k.trim().toLowerCase()));
     const handleKey = find(HANDLE_HEADERS) ?? keys[0];
@@ -57,7 +91,8 @@ export async function parseAssignmentSheet(source: CsvSource): Promise<ParsedAss
     const formatKey = find(FORMAT_HEADERS);
     const costKey = find(COST_HEADERS);
     const postUrl = urlKey ? row[urlKey]?.trim() : "";
-    const format = (formatKey ? row[formatKey]?.trim() : "")?.toLowerCase();
+    // Only a row that names a post sends its format, so only then can a combo be wrong. Row numbers count the header as row 1.
+    const format = postUrl ? bookableSheetFormat(formatKey ? row[formatKey] : undefined, index + 2) : sheetFormat(formatKey ? row[formatKey] : undefined);
     const rawCost = costKey ? row[costKey]?.trim() : "";
     const cost = rawCost ? Number(rawCost.replace(/[^\d.]/g, "")) : undefined;
 
@@ -93,7 +128,7 @@ export async function parseWorkImportSheet(source: CsvSource): Promise<ParsedWor
   const { data } = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
 
   const rows: ParsedWorkImportRow[] = [];
-  for (const row of data) {
+  for (const [index, row] of data.entries()) {
     const keys = Object.keys(row);
     const find = (headers: string[]) => keys.find((k) => headers.includes(k.trim().toLowerCase()));
     const campaignKey = find(CAMPAIGN_HEADERS);
@@ -105,7 +140,7 @@ export async function parseWorkImportSheet(source: CsvSource): Promise<ParsedWor
     const campaignTitle = campaignKey ? row[campaignKey]?.trim() : "";
     const pageHandle = handleKey ? row[handleKey]?.trim() : "";
     const url = urlKey ? row[urlKey]?.trim() : "";
-    const format = (formatKey ? row[formatKey]?.trim() : "")?.toLowerCase();
+    const format = url && campaignTitle && pageHandle ? bookableSheetFormat(formatKey ? row[formatKey] : undefined, index + 2) : "";
     if (!campaignTitle || !pageHandle || !url || !format) continue;
 
     const rawCost = costKey ? row[costKey]?.trim() : "";
@@ -197,7 +232,8 @@ function mapPageRow(row: Record<string, string>): ParsedPlanPageRow | null {
     pageUrl: pageUrl && /^https?:\/\//i.test(pageUrl) ? pageUrl : undefined,
     category: (categoryKey ? row[categoryKey]?.trim() : "") || undefined,
     followers: parseFollowerCount(followersKey ? row[followersKey] : undefined),
-    format: (formatKey ? row[formatKey]?.trim() : "")?.toLowerCase() || undefined,
+    // Plan lines take all ten formats, both combos included (14 Oct).
+    format: sheetFormat(formatKey ? row[formatKey] : undefined) || undefined,
     cost: parseMoney(costKey ? row[costKey] : undefined),
     clientCost: parseMoney(clientCostKey ? row[clientCostKey] : undefined),
     postsPerProfile: rawPosts ? Number(rawPosts) : undefined,
@@ -319,6 +355,8 @@ export const PLAN_SHEET_TEMPLATE_DETAILS: string[][] = [
 ];
 export const PLAN_SHEET_TEMPLATE_PAGES: string[][] = [
   ["Handle", "Page link", "Category", "Followers", "Format", "Posts per profile", "Cost", "Client cost"],
-  ["ghantaa", "https://www.instagram.com/ghantaa/", "Meme page", "8.7M", "reel", "2", "45000", "60000"],
-  ["laughter.colours", "https://www.instagram.com/laughter.colours/", "Meme page", "4.3M", "story", "1", "12000", "15000"],
+  ["ghantaa", "https://www.instagram.com/ghantaa/", "Meme page", "8.7M", "Reel", "2", "45000", "60000"],
+  ["laughter.colours", "https://www.instagram.com/laughter.colours/", "Meme page", "4.3M", "Story", "1", "12000", "15000"],
+  ["memes.daily", "https://www.instagram.com/memes.daily/", "Meme page", "2.1M", "Static & Carousel", "1", "9000", "12000"],
+  ["sarcastic.us", "https://www.instagram.com/sarcastic.us/", "Meme page", "3.4M", "Reel + Story", "1", "30000", "40000"],
 ];

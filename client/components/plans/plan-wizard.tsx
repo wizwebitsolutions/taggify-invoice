@@ -16,11 +16,14 @@ import { ProgressBar } from "@/components/ui/panel";
 import { ErrorNotice, EmptyState, TableSkeleton } from "@/components/ui/table-parts";
 import { CloseIcon, SearchIcon, ArrowRightIcon, DownloadIcon, PlusIcon } from "@/components/icons";
 import { GoogleAwareError } from "@/components/integrations/google-reconnect-notice";
-import { plans as plansApi, assets as assetsApi, LINK_FORMATS as FORMATS, ApiError, type Plan, type Asset, type PlanItemInput, type SheetFormat } from "@/lib/api-client";
+import { FORMATS, comboParts, comboSplitText, isCombo, formatLabel, formatFromText, isFormat, postsPerUnit, splitCombo } from "@/lib/formats";
+import { plans as plansApi, assets as assetsApi, ApiError, type Plan, type Asset, type PlanItemInput, type SheetFormat, type PageCheckResult } from "@/lib/api-client";
+import { Sheet } from "@/components/ui/sheet";
+import { PageCheckPanel } from "@/components/plans/page-check-panel";
 import { parsePlanPageSheet } from "@/lib/parseAssignmentSheet";
 import { money, compactNumber, followersLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { SHEET_FORMAT_INFO, SheetFormatPicker, categoryLabel, sheetFormatOf, splitByWeight } from "@/components/plans/sheet-format";
+import { SHEET_FORMAT_INFO, SheetFormatModal, categoryLabel, sheetFormatOf, splitByWeight } from "@/components/plans/sheet-format";
 import { formatIndian } from "@/components/ui/form-field";
 
 /**
@@ -29,7 +32,7 @@ import { formatIndian } from "@/components/ui/form-field";
  *   1. Client & brief   — name, client, contact and a mandatory brief.
  *   2. Budget & pages   — the internal budget first, then pages by category /
  *                         search / manual pick / sheet import, posts per page,
- *                         with a hard cap on our cost (server: PLAN_OVER_BUDGET).
+ *                         over budget is allowed and only warned about (16 Oct).
  *   3. Pricing          — internal cost per page (read-only), the overall client
  *                         total + impressions, GST %, and budget vs our cost.
  *   4. Preview & sheet  — the client view, the client/internal Google Sheets
@@ -39,7 +42,7 @@ import { formatIndian } from "@/components/ui/form-field";
  */
 type StepIndex = 1 | 2 | 3 | 4;
 const STEP_LABELS: Record<StepIndex, string> = { 1: "Client & brief", 2: "Budget & pages", 3: "Pricing", 4: "Preview & sheet" };
-const STEP_HINT: Record<StepIndex, string> = { 1: "Who is this for, and what's the brief?", 2: "Set the budget, then pick pages within it", 3: "Set the overall client total and expected impressions", 4: "Check the client view and generate the sheet" };
+const STEP_HINT: Record<StepIndex, string> = { 1: "Who is this for, and what's the brief?", 2: "Set the budget, then pick pages — going over it is allowed, you'll see by how much", 3: "Set the overall client total, discount and expected impressions", 4: "Check the client view and generate the sheet" };
 
 interface DraftItem {
   assetId: string;
@@ -48,20 +51,30 @@ interface DraftItem {
   postsPerProfile: string;
 }
 
-const isFormat = (f: string) => (FORMATS as readonly string[]).includes(f);
-// A plan saved before 14 Sep can carry a legacy format (carousel, video...);
-// the server now rejects those, so it's normalised to reel here with its
-// stored cost dropped (the rate card for reel applies instead). A legacy
-// per-page clientCost is dropped the same way — the client-facing number is
-// the overall override now (14 Sep), so the next save wipes old markups.
+// Every line keeps its own format — all ten (14 Oct) are valid plan lines.
+// A plan saved with a legacy name is read through the shared alias list
+// ("carousel" → Static & Carousel), keeping its cost; anything unrecognisable
+// (the server rejects it) becomes a reel with its stored cost dropped, so the
+// reel rate applies instead. A legacy per-page clientCost is dropped the same
+// way — the client-facing number is the overall override now (14 Sep).
 const toDraft = (plan: Plan): DraftItem[] => {
   const out: DraftItem[] = [];
   for (const i of plan.items ?? []) {
-    const line = isFormat(i.format) ? { assetId: i.assetId, format: i.format, cost: i.cost, postsPerProfile: String(i.postsPerProfile) } : { assetId: i.assetId, format: FORMATS[0], cost: "", postsPerProfile: String(i.postsPerProfile) };
-    // One line per page + format (a page can have a reel and a story); two legacy formats both read as reel.
+    const known = isFormat(i.format) ? i.format : formatFromText(i.format);
+    const line = known ? { assetId: i.assetId, format: known as string, cost: i.cost, postsPerProfile: String(i.postsPerProfile) } : { assetId: i.assetId, format: "reel", cost: "", postsPerProfile: String(i.postsPerProfile) };
+    // One line per page + format (a page can have a reel and a story); two lines that read as the same format
+    // (e.g. a legacy "carousel" next to a "post") merge. If their prices differ, the merged line takes the
+    // posts-weighted price so the line's total stays what was saved (14 Oct review), not the first line's price.
     const same = out.find((o) => o.assetId === line.assetId && o.format === line.format);
-    if (same) same.postsPerProfile = String(Number(same.postsPerProfile) + Number(line.postsPerProfile));
-    else out.push(line);
+    if (same) {
+      const a = Number(same.postsPerProfile);
+      const b = Number(line.postsPerProfile);
+      if (same.cost && line.cost && Number(same.cost) !== Number(line.cost)) {
+        const totalPaise = Math.round(Number(same.cost) * 100) * a + Math.round(Number(line.cost) * 100) * b;
+        same.cost = String(Math.round(totalPaise / (a + b)) / 100);
+      }
+      same.postsPerProfile = String(a + b);
+    } else out.push(line);
   }
   return out;
 };
@@ -69,11 +82,22 @@ const toInput = (items: DraftItem[]): PlanItemInput[] =>
   items.map((i) => ({ assetId: i.assetId, format: i.format, cost: i.cost ? Number(i.cost) : undefined, postsPerProfile: Math.max(1, Number(i.postsPerProfile) || 1) }));
 const rateFor = (asset: Asset | undefined, format: string) => Number(asset?.rateCards.find((rc) => rc.format === format)?.amount ?? 0);
 const itemCost = (i: DraftItem, asset: Asset | undefined) => (i.cost ? Number(i.cost) : rateFor(asset, i.format));
+/** Pages on a plan, not lines: a page booked in several formats is one page (16 Oct). */
+const pageCount = (lines: { assetId: string }[]) => new Set(lines.map((l) => l.assetId)).size;
 const itemPosts = (i: DraftItem) => Math.max(1, Number(i.postsPerProfile) || 1);
-/** Only reel/story exist app-wide (14 Sep); a page's priced formats narrow that further. */
+/** Posts a line produces — a combo (Reel + Story, Repost + Story) is two posts per booking (14 Oct). */
+const linePosts = (i: { format: string; postsPerProfile: string | number }) => Math.max(1, Number(i.postsPerProfile) || 1) * postsPerUnit(i.format);
+/** The page's priced formats, in the app's format order; all of them when it has none (each then says "no rate yet"). */
 const formatsFor = (asset: Asset | undefined): string[] => {
-  const priced = (asset?.rateCards ?? []).map((rc) => rc.format).filter(isFormat);
+  const priced = FORMATS.filter((f) => rateFor(asset, f) > 0);
   return priced.length > 0 ? priced : [...FORMATS];
+};
+/** "Reel ₹17,142.85 + Story ₹12,857.15" / "Repost ₹x + Story ₹y" — one combo's price as its two posts. */
+const comboSplitLabel = (format: string, split: Record<string, number | string> | null | undefined) => comboSplitText(format, split, money);
+/** A draft combo line's split from the page's part rates (same rule as the server); null for a single format. */
+const draftComboSplit = (i: DraftItem, asset: Asset | undefined) => {
+  const parts = comboParts(i.format);
+  return parts && isCombo(i.format) ? splitCombo(i.format, itemCost(i, asset), rateFor(asset, parts[0]), rateFor(asset, parts[1])) : null;
 };
 const instagramUrl = (handle: string) => `https://www.instagram.com/${handle.replace(/^@/, "")}/`;
 
@@ -103,6 +127,8 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
   // edited alongside the total cost it taxes. Still saved through the same
   // Step 2/3 "Next" mutation below; IntegerField caps it at 100.
   const [gstPercent, setGstPercent] = useState<string>(initialPlan?.gstPercent != null ? String(initialPlan.gstPercent) : "");
+  // Flat discount in rupees (16 Oct), taken off the quoted total before GST. "" = none.
+  const [discount, setDiscount] = useState<string>(initialPlan?.discount ? String(Math.round(Number(initialPlan.discount))) : "");
   const [seededInitial, setSeededInitial] = useState(false);
   useEffect(() => {
     if (seededInitial || initialPlan || initialAssetIds.length === 0 || allAssets.length === 0) return;
@@ -123,6 +149,7 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
     setOverrideCost("");
     setOverrideImpressions("");
     setGstPercent(variant.gstPercent != null ? String(variant.gstPercent) : "");
+    setDiscount("");
     setStep(2);
   }
   function close() {
@@ -138,6 +165,7 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
         overrideCost: overrideCost ? Number(overrideCost) : null,
         overrideImpressions: overrideImpressions ? Number(overrideImpressions) : null,
         gstPercent: gstPercent.trim() ? Number(gstPercent) : null,
+        discount: discount.trim() ? Number(discount) : null,
       }),
     onSuccess: (saved) => {
       savedPlan(saved);
@@ -217,6 +245,8 @@ export function PlanWizard({ token, plan: initialPlan, initialAssetIds, onClose,
           setOverrideImpressions={setOverrideImpressions}
           gstPercent={gstPercent}
           setGstPercent={setGstPercent}
+          discount={discount}
+          setDiscount={setDiscount}
           onBack={() => setStep(2)}
           saving={saveItems.isPending}
           error={saveItems.isError ? saveItems.error : null}
@@ -243,7 +273,7 @@ function FooterBar({ onBack, meta, children }: { onBack?: () => void; meta?: Rea
   );
 }
 
-/** "Budget left" bar shared by steps 2 and 3 — the one number the hard cap is about. */
+/** "Budget left" bar shared by steps 2 and 3. Over budget is allowed (16 Oct) — the bar just turns red and says by how much. */
 function BudgetLeft({ budget, quoted }: { budget: number | null; quoted: number }) {
   if (budget == null || !(budget > 0)) return null;
   const left = budget - quoted;
@@ -383,8 +413,9 @@ function PagesStep({
 
   const budgetNumber = budget ? Number(budget) : null;
   const hasBudget = budgetNumber != null && budgetNumber > 0;
-  const remaining = hasBudget ? budgetNumber - quoted : 0;
   const overBudget = hasBudget && quoted > budgetNumber;
+  // Lines for a format the page has no rate for, with no cost typed yet — the server would refuse them (NO_RATE_CARD).
+  const linesWithoutCost = items.filter((i) => !(itemCost(i, assets.find((a) => a.id === i.assetId)) > 0)).length;
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -418,9 +449,10 @@ function PagesStep({
       setItems((prev) => prev.filter((i) => i.assetId !== asset.id));
       return;
     }
-    if (!hasBudget) return setCapMessage("Enter the budget first — pages are picked within it.");
-    if (!(costToAdd(asset) > 0)) return setCapMessage(`@${asset.handle} has no reel or story rate yet — set one in Inventory first.`);
-    if (costToAdd(asset) > remaining) return setCapMessage(`@${asset.handle} (${money(costToAdd(asset))}) doesn't fit in the ${money(Math.max(0, remaining))} left.`);
+    if (!hasBudget) return setCapMessage("Enter the budget first — pages are picked against it.");
+    // Going over the budget is allowed (16 Oct) — the "Over budget by" bar says so; nothing blocks here.
+    // A page with no rates can still be picked (16 Oct): its cost is typed on the line.
+    if (!(costToAdd(asset) > 0)) setCapMessage(`@${asset.handle} has no rates yet — type the ${formatLabel(newItem(asset).format)} cost on its line.`);
     setItems((prev) => [...prev, newItem(asset)]);
   }
   function updateItem(assetId: string, format: string, patch: Partial<DraftItem>) {
@@ -428,14 +460,6 @@ function PagesStep({
     const current = lineOf(assetId, format);
     if (!current) return;
     const next = { ...current, ...patch };
-    if (hasBudget) {
-      const asset = assetById.get(assetId);
-      const delta = itemCost(next, asset) * itemPosts(next) - itemCost(current, asset) * itemPosts(current);
-      if (delta > remaining) {
-        setCapMessage(`That would take @${asset?.handle ?? assetId} over the ${money(Math.max(0, remaining))} left.`);
-        return;
-      }
-    }
     setItems((prev) => prev.map((i) => (i === current ? next : i)));
   }
   /** Turns a format on for a picked page (a new line, within the budget) or off (it keeps at least one). */
@@ -448,25 +472,19 @@ function PagesStep({
       return;
     }
     const cost = rateFor(asset, format);
-    if (!(cost > 0)) return setCapMessage(`@${asset.handle} has no ${format} rate yet — set one in Inventory first.`);
-    if (hasBudget && cost > remaining) return setCapMessage(`A ${format} on @${asset.handle} (${money(cost)}) doesn't fit in the ${money(Math.max(0, remaining))} left.`);
+    // Any format can be added (16 Oct); one with no rate on the page needs its cost typed on the line.
+    if (!(cost > 0)) setCapMessage(`@${asset.handle} has no ${formatLabel(format)} rate — type its cost on the line.`);
     setItems((prev) => [...prev, { assetId: asset.id, format, cost: "", postsPerProfile: "1" }]);
   }
   function addTopN() {
     setCapMessage("");
-    if (!hasBudget) return setCapMessage("Enter the budget first — pages are picked within it.");
+    if (!hasBudget) return setCapMessage("Enter the budget first — pages are picked against it.");
     const n = Math.max(1, Number(topN) || 0);
+    // Every candidate is added (16 Oct — over budget is allowed); pages with no rate yet need a typed cost.
     const candidates = visible.filter((a) => !itemByAsset.has(a.id)).slice(0, n);
-    let left = remaining;
-    const fits: DraftItem[] = [];
-    for (const a of candidates) {
-      const c = costToAdd(a);
-      if (!(c > 0) || c > left) continue;
-      left -= c;
-      fits.push(newItem(a));
-    }
-    if (fits.length < candidates.length) setCapMessage(`Added ${fits.length} of ${candidates.length} — the rest don't fit in the budget.`);
-    setItems((prev) => [...prev, ...fits]);
+    const unpriced = candidates.filter((a) => !(costToAdd(a) > 0)).length;
+    if (unpriced > 0) setCapMessage(`${unpriced} of ${candidates.length} added pages have no rate — type their cost on the line.`);
+    setItems((prev) => [...prev, ...candidates.map(newItem)]);
   }
 
   const importMutation = useMutation({
@@ -480,12 +498,22 @@ function PagesStep({
   const attachRowsMutation = useMutation({
     mutationFn: (rows: Awaited<ReturnType<typeof parsePlanPageSheet>>) => plansApi.importSheetPages(token, plan.id, rows),
     onSuccess: (result) => {
-      setSheetResultMsg(`${result.matchedCount} matched, ${result.createdCount} new page${result.createdCount === 1 ? "" : "s"} created.`);
+      const needsCost = result.needsCost ?? [];
+      setSheetResultMsg(
+        `${result.matchedCount} matched, ${result.createdCount} new page${result.createdCount === 1 ? "" : "s"} created.` +
+          (needsCost.length > 0 ? ` ${needsCost.length} line${needsCost.length === 1 ? " has" : "s have"} no cost in the sheet — type ${needsCost.length === 1 ? "it" : "them"} on the line${needsCost.length === 1 ? "" : "s"} below.` : "")
+      );
       if (result.failures.length > 0) setSheetError(result.failures.map((f) => `@${f.handle}: ${f.reason}`).join(" "));
       const serverItems = toDraft(result.plan);
       const key = (i: DraftItem) => `${i.assetId}:${i.format}`;
       const serverIds = new Set(serverItems.map(key));
-      setItems((prevLocal) => [...serverItems, ...prevLocal.filter((i) => !serverIds.has(key(i)))]);
+      // Sheet rows without a cost come in as lines with an empty cost box (16 Oct — "if not filled can add up later").
+      const blankCost: DraftItem[] = needsCost.map((n) => ({ assetId: n.assetId, format: n.format, cost: "", postsPerProfile: String(n.postsPerProfile) }));
+      setItems((prevLocal) => {
+        const kept = prevLocal.filter((i) => !serverIds.has(key(i)));
+        const keptIds = new Set(kept.map(key));
+        return [...serverItems, ...kept, ...blankCost.filter((b) => !serverIds.has(key(b)) && !keptIds.has(key(b)))];
+      });
       onPlanChanged(result.plan);
       queryClient.invalidateQueries({ queryKey: ["assets"] });
     },
@@ -516,7 +544,7 @@ function PagesStep({
   return (
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           {/* Budget comes first (user request, 14 Sep — "after this, budget
               selection, according to the budget can add no. of post per page"). */}
           <Card className="p-[18px]" data-testid="budget-card">
@@ -536,7 +564,7 @@ function PagesStep({
           <Card className="flex flex-col">
             <CardHeader
               title="Pick pages"
-              meta={<span className="text-[0.78rem] text-text-muted">{items.length} selected</span>}
+              meta={<span className="text-[0.78rem] text-text-muted">{pageCount(items)} selected</span>}
               action={
                 <label className="relative block w-[200px]">
                   <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-faint" />
@@ -576,25 +604,29 @@ function PagesStep({
                   <tr>
                     <TH className="w-9 pr-0" />
                     <TH>Page</TH>
-                    <TH className="hidden xl:table-cell">Category</TH>
+                    <TH className="hidden 2xl:table-cell">Category</TH>
                     <TH right className="hidden sm:table-cell">
                       Followers
                     </TH>
                     <TH>Format</TH>
-                    <TH right>Posts</TH>
-                    <TH right className="hidden lg:table-cell">
-                      Cost
-                    </TH>
+                    <TH right>Cost</TH>
+                    <TH>Posts × cost / post</TH>
                   </tr>
                 </THead>
                 <tbody>
                   {visible.map((asset) => {
                     const item = itemByAsset.get(asset.id);
-                    const lines = linesOf(asset.id);
+                    // Shown in the app's format order, whatever order they were picked in.
+                    const lines = linesOf(asset.id).sort((a, b) => FORMATS.indexOf(a.format as (typeof FORMATS)[number]) - FORMATS.indexOf(b.format as (typeof FORMATS)[number]));
                     const selected = Boolean(item);
-                    const formats = formatsFor(asset);
-                    const priced = costToAdd(asset) > 0;
-                    const fits = selected || (hasBudget && priced && costToAdd(asset) <= remaining);
+                    // Every format is offered (16 Oct — "option of adding all … can select multiple") from one
+                    // dropdown (14 Oct — "give format dropdown"); unpriced ones say "no rate" and need a typed cost.
+                    const formatOptions = FORMATS.map((f) => {
+                      const rate = rateFor(asset, f);
+                      return { value: f, label: formatLabel(f), hint: rate > 0 ? money(rate) : "no rate", muted: !(rate > 0) };
+                    });
+                    const fits = selected || hasBudget;
+                    const rowTotal = lines.reduce((sum, l) => sum + itemCost(l, asset) * itemPosts(l), 0);
                     return (
                       <TR key={asset.id} selected={selected}>
                         <TD className="w-9 pr-0">
@@ -603,59 +635,105 @@ function PagesStep({
                             checked={selected}
                             onChange={() => toggleAsset(asset)}
                             disabled={!fits}
-                            title={!fits ? (!hasBudget ? "Enter the budget first" : !priced ? "No reel/story rate set for this page" : "Doesn't fit in the budget left") : undefined}
+                            title={!fits ? "Enter the budget first" : undefined}
                             aria-label={`Select @${asset.handle}`}
                             className="h-4 w-4 rounded accent-[var(--ink)] disabled:opacity-40"
                           />
                         </TD>
                         <TD>
                           {/* user request, 14 Sep — "instagram page link should be open on clicking page name" */}
-                          <a href={instagramUrl(asset.handle)} target="_blank" rel="noopener noreferrer" className="font-semibold hover:text-blue hover:underline" title={`Open @${asset.handle} on Instagram`}>
+                          <a href={instagramUrl(asset.handle)} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap font-semibold hover:text-blue hover:underline" title={`Open @${asset.handle} on Instagram`}>
                             @{asset.handle}
                           </a>
                         </TD>
-                        <TD className="hidden xl:table-cell">{asset.category ? <Tag tone="neutral" dot={false}>{asset.category}</Tag> : <span className="text-text-faint">—</span>}</TD>
+                        <TD className="hidden 2xl:table-cell">{asset.category ? <Tag tone="neutral" dot={false}>{asset.category}</Tag> : <span className="text-text-faint">—</span>}</TD>
                         <TD right className="hidden whitespace-nowrap tabular-nums text-text-muted sm:table-cell">
                           {followersLabel(asset.followers)} followers
                         </TD>
                         <TD>
                           {selected && item ? (
-                            <div className="flex gap-1" role="group" aria-label={`Formats for @${asset.handle}`}>
-                              {formats.map((f) => {
-                                const on = lines.some((l) => l.format === f);
+                            // Pick a format to add it as a line (16 Oct — same "select a format, then its rate" control as Inventory);
+                            // the lines themselves sit stacked in the last column, each with its own remove button.
+                            <select
+                              value=""
+                              onChange={(e) => e.target.value && toggleFormat(asset, e.target.value)}
+                              aria-label={`Add a format for @${asset.handle}`}
+                              className="h-8 max-w-[11rem] rounded-[6px] border border-border bg-surface px-2 text-[0.78rem] text-text focus:border-ink focus:outline-none"
+                              data-testid={`plan-add-format-${asset.id}`}
+                            >
+                              <option value="">{lines.length === 0 ? "Add format…" : `+ Add format (${lines.length} picked)`}</option>
+                              {formatOptions
+                                .filter((o) => !lines.some((l) => l.format === o.value))
+                                .map((o) => (
+                                  <option key={o.value} value={o.value}>
+                                    {o.label} · {o.hint}
+                                  </option>
+                                ))}
+                            </select>
+                          ) : (
+                            <span className="text-text-faint">—</span>
+                          )}
+                        </TD>
+                        <TD right className="whitespace-nowrap tabular-nums">
+                          {selected && item ? (
+                            <span className="font-semibold" data-testid={`plan-row-total-${asset.id}`} title="Posts × cost per post, all formats">
+                              {money(rowTotal)}
+                            </span>
+                          ) : costToAdd(asset) ? (
+                            money(costToAdd(asset))
+                          ) : (
+                            <span className="text-text-faint">—</span>
+                          )}
+                        </TD>
+                        <TD>
+                          {selected && item ? (
+                            // One line per picked format, stacked (16 Oct): posts × cost per post, and a remove button.
+                            // Blank cost = the page's rate.
+                            <div className="flex flex-col items-start gap-1.5" data-testid={`plan-lines-${asset.id}`}>
+                              {lines.map((l) => {
+                                const rate = rateFor(asset, l.format);
+                                const needsCost = !(itemCost(l, asset) > 0);
+                                const split = needsCost ? null : draftComboSplit(l, asset);
                                 return (
-                                  <button
-                                    key={f}
-                                    type="button"
-                                    aria-pressed={on}
-                                    onClick={() => toggleFormat(asset, f)}
-                                    className={cn("h-7 rounded-[6px] border px-2 text-[0.75rem] capitalize transition-colors", on ? "border-ink bg-ink text-ink-fg" : "border-border-strong bg-surface text-text-2 hover:bg-surface-2")}
+                                  <div
+                                    key={l.format}
+                                    className={cn("flex shrink-0 items-center gap-1.5 rounded-md border bg-surface-2 py-1 pl-2 pr-1", needsCost ? "border-rose" : "border-border")}
+                                    data-testid={`plan-line-${asset.id}-${l.format}`}
+                                    title={needsCost ? `No ${formatLabel(l.format)} rate on the page — type a ${formatLabel(l.format)} cost` : undefined}
                                   >
-                                    {f}
-                                  </button>
+                                    <span className="whitespace-nowrap text-[0.72rem] font-medium text-text-2">{formatLabel(l.format)}</span>
+                                    <IntegerField value={l.postsPerProfile} onChange={(v) => updateItem(asset.id, l.format, { postsPerProfile: v })} max={99} aria-label={`${formatLabel(l.format)} posts for @${asset.handle}`} className="h-8 w-12 rounded-[6px] px-2 text-[0.78rem] shadow-none" />
+                                    <span className="text-[0.72rem] text-text-faint">×</span>
+                                    <MoneyField
+                                      compact
+                                      value={l.cost}
+                                      onChange={(v) => updateItem(asset.id, l.format, { cost: v })}
+                                      placeholder={rate > 0 ? formatIndian(String(rate)) : "Cost"}
+                                      aria-label={`${formatLabel(l.format)} cost for @${asset.handle}`}
+                                      aria-invalid={needsCost || undefined}
+                                      className={cn("w-24", needsCost && "[&_input]:border-rose")}
+                                    />
+                                    {split && (
+                                      <span className="whitespace-nowrap pr-1 text-[0.68rem] text-text-faint" data-testid={`combo-split-${asset.id}-${l.format}`}>
+                                        {comboSplitLabel(l.format, split)} each
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleFormat(asset, l.format)}
+                                      aria-label={`Remove ${formatLabel(l.format)} for @${asset.handle}`}
+                                      title={lines.length === 1 ? "Untick the page to remove its last format" : `Remove ${formatLabel(l.format)}`}
+                                      className="flex h-6 w-6 items-center justify-center rounded-[5px] text-text-faint hover:bg-surface hover:text-text"
+                                    >
+                                      <CloseIcon className="h-3 w-3" />
+                                    </button>
+                                  </div>
                                 );
                               })}
                             </div>
                           ) : (
                             <span className="text-text-faint">—</span>
                           )}
-                        </TD>
-                        <TD right>
-                          {selected && item ? (
-                            <div className="flex flex-col items-end gap-1">
-                              {lines.map((l) => (
-                                <span key={l.format} className="inline-flex items-center gap-1.5">
-                                  {lines.length > 1 && <span className="text-[0.72rem] capitalize text-text-muted">{l.format}</span>}
-                                  <IntegerField value={l.postsPerProfile} onChange={(v) => updateItem(asset.id, l.format, { postsPerProfile: v })} max={99} aria-label={`${l.format === "story" ? "Story" : "Reel"} posts for @${asset.handle}`} className="h-8 w-14 rounded-[6px] px-2 text-[0.78rem] shadow-none" />
-                                </span>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-text-faint">—</span>
-                          )}
-                        </TD>
-                        <TD right className="hidden tabular-nums lg:table-cell">
-                          {selected && item ? money(lines.reduce((s, l) => s + itemCost(l, asset) * itemPosts(l), 0)) : costToAdd(asset) ? money(costToAdd(asset)) : <span className="text-text-faint">—</span>}
                         </TD>
                       </TR>
                     );
@@ -673,10 +751,34 @@ function PagesStep({
               <b className="tabular-nums">{new Set(items.map((i) => i.assetId)).size}</b>
             </div>
             <div className="flex items-center justify-between text-[0.8125rem]">
-              <span className="text-text-muted">Client cost so far</span>
+              <span className="text-text-muted">Our cost so far</span>
               <b className="tabular-nums">{money(quoted)}</b>
             </div>
             {hasBudget ? <BudgetLeft budget={budgetNumber} quoted={quoted} /> : <p className="text-[0.75rem] text-text-faint">Enter a budget to start picking pages.</p>}
+            {overBudget && (
+              <Note tone="warn" className="text-[0.75rem]">
+                <span data-testid="over-budget-warning">Over budget by {money(quoted - budgetNumber)}. You can carry on — the plan will show it as over budget.</span>
+              </Note>
+            )}
+            {/* "Are these pages still up?" (17 Oct) — checked on Instagram (24h cache), with a swap for any that aren't. */}
+            {items.length > 0 && (
+              <PageCheckPanel
+                token={token}
+                assets={assets}
+                pickedIds={[...new Set(items.map((i) => i.assetId))]}
+                onReplace={(oldId, replacement) => {
+                  setCapMessage("");
+                  setItems((prev) => {
+                    const moved = prev.filter((i) => i.assetId === oldId).map((i) => ({ ...i, assetId: replacement.id, cost: "" }));
+                    const rest = prev.filter((i) => i.assetId !== oldId);
+                    // The replacement may already be on the plan: keep its lines, add only the formats it lacks.
+                    const have = new Set(rest.filter((i) => i.assetId === replacement.id).map((i) => i.format));
+                    return [...rest, ...moved.filter((i) => !have.has(i.format))];
+                  });
+                  queryClient.invalidateQueries({ queryKey: ["assets"] });
+                }}
+              />
+            )}
             {maxPosts > 1 && (
               <p className="border-t border-border pt-2 text-[0.72rem] text-text-muted">
                 Pages with more than one post run as phases — creators will see this as {maxPosts} campaigns (Phase 1 to {maxPosts}).
@@ -685,7 +787,7 @@ function PagesStep({
           </Card>
           <Card className="p-[18px]">
             <p className="text-[0.8375rem] font-semibold">Attach a Google Sheet of pages (optional)</p>
-            <p className="mt-1 text-[0.78rem] text-text-muted">A handle not already in Inventory gets added as a new pending page — a cost column is required for those rows since a new page has no rate card yet.</p>
+            <p className="mt-1 text-[0.78rem] text-text-muted">Columns: Handle, Format (Reel, Entertainment / Brand, PR, Political, Static &amp; Carousel, Repost, Story, Political Story, Reel + Story or Repost + Story), Cost and Posts. A handle not already in Inventory is added as a new pending page. A row with no cost (and no rate on the page) still comes in — type its cost on the line before moving on.</p>
             <div className="mt-3 flex flex-col gap-2">
               <TextField type="url" value={sheetLink} onChange={setSheetLink} placeholder="https://docs.google.com/spreadsheets/…" />
               <Button type="button" variant="secondary" disabled={!sheetLink.trim() || importMutation.isPending || attachRowsMutation.isPending} onClick={() => importMutation.mutate(sheetLink)}>
@@ -703,8 +805,13 @@ function PagesStep({
         </div>
       </div>
       {error ? <ErrorNotice message={error instanceof ApiError ? error.message : "Couldn't save these pages."} /> : null}
-      <FooterBar onBack={onBack} meta={`${items.length} page${items.length === 1 ? "" : "s"} · ${money(quoted)}${hasBudget ? ` of ${money(budgetNumber)}` : ""}`}>
-        <Button type="button" onClick={onNext} disabled={saving || !hasBudget || overBudget} title={!hasBudget ? "Enter the budget first" : overBudget ? "Over budget — remove pages or posts" : undefined}>
+      <FooterBar onBack={onBack} meta={`${pageCount(items)} page${pageCount(items) === 1 ? "" : "s"} · ${money(quoted)}${hasBudget ? ` of ${money(budgetNumber)}` : ""}`}>
+        <Button
+          type="button"
+          onClick={onNext}
+          disabled={saving || !hasBudget || linesWithoutCost > 0}
+          title={!hasBudget ? "Enter the budget first" : linesWithoutCost > 0 ? "Type a cost for every format that has no rate" : undefined}
+        >
           {saving ? "Saving…" : "Next: Pricing"} <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </FooterBar>
@@ -726,6 +833,8 @@ function PriceStep({
   setOverrideImpressions,
   gstPercent,
   setGstPercent,
+  discount,
+  setDiscount,
   onBack,
   onNext,
   saving,
@@ -746,21 +855,25 @@ function PriceStep({
   /** GST % (user request, 23 Sep — moved here from Step 1, the pricing step it actually taxes). "" = no GST line. */
   gstPercent: string;
   setGstPercent: (v: string) => void;
+  /** Flat discount in rupees (16 Oct), off the quoted total before GST. "" = none. */
+  discount: string;
+  setDiscount: (v: string) => void;
   onBack: () => void;
   onNext: () => void;
   saving: boolean;
   error: unknown;
 }) {
-  // The quoted total is a markup and may exceed the budget — the budget only
-  // caps the pages (Step 2). Nothing here blocks Next.
+  // The quoted total is a markup and may exceed the budget. Nothing here blocks Next.
   const belowComputed = Boolean(overrideCost) && quoted < computedQuoted;
   const markup = quoted - subtotal;
-  // Mirrors the server's gstOn (plans/service.js) — rounded to paise so this
-  // preview matches what the saved plan's overview will actually show.
+  // Mirrors the server's annotatePlan: discount first (floored at 0), then GST
+  // on what's left, rounded to paise so this preview matches the saved overview.
+  const discountNum = discount.trim() ? Number(discount) : 0;
+  const taxable = Math.max(0, quoted - discountNum);
   const gstPercentNum = gstPercent.trim() ? Number(gstPercent) : null;
-  const gstAmount = gstPercentNum ? Math.round(quoted * (gstPercentNum / 100) * 100) / 100 : 0;
-  const totalWithGst = quoted + gstAmount;
-  const computedViews = items.reduce((s, i) => s + (assetById.get(i.assetId)?.engagement.avgViews ?? 0) * itemPosts(i), 0);
+  const gstAmount = gstPercentNum ? Math.round(taxable * (gstPercentNum / 100) * 100) / 100 : 0;
+  const totalWithGst = taxable + gstAmount;
+  const computedViews = items.reduce((s, i) => s + (assetById.get(i.assetId)?.engagement.avgViews ?? 0) * linePosts(i), 0);
   const expectedViews = overrideImpressions ? Number(overrideImpressions) : computedViews;
   const cpm = expectedViews > 0 ? (quoted / expectedViews) * 1000 : null;
   const categories = [...new Set(items.map((i) => assetById.get(i.assetId)?.category).filter(Boolean))].join(", ");
@@ -769,7 +882,7 @@ function PriceStep({
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
         <Card>
-          <CardHeader title={`${items.length} page${items.length === 1 ? "" : "s"}${categories ? ` · ${categories}` : ""}`} meta={<span className="text-[0.78rem] text-text-muted">internal cost is what each page earns; the client total is set on the right</span>} />
+          <CardHeader title={`${pageCount(items)} page${pageCount(items) === 1 ? "" : "s"}${categories ? ` · ${categories}` : ""}`} meta={<span className="text-[0.78rem] text-text-muted">our cost is what each page earns; the client total is set on the right</span>} />
           {items.length === 0 ? (
             <EmptyState label="No pages picked yet — go back and select some." />
           ) : (
@@ -783,7 +896,7 @@ function PriceStep({
                   <TH right className="hidden md:table-cell">
                     Exp. impressions
                   </TH>
-                  <TH right>Internal cost</TH>
+                  <TH right>Our cost</TH>
                 </tr>
               </THead>
               <tbody>
@@ -791,16 +904,20 @@ function PriceStep({
                   const asset = assetById.get(i.assetId);
                   const ours = itemCost(i, asset);
                   const posts = itemPosts(i);
+                  const totalPosts = linePosts(i);
                   return (
                     <TR key={`${i.assetId}:${i.format}`}>
                       <TD>
-                        <Cell2 primary={`@${asset?.handle ?? "—"}`} secondary={`${i.format}${posts > 1 ? ` · ${posts} posts` : ""}`} />
+                        <Cell2
+                          primary={`@${asset?.handle ?? "—"}`}
+                          secondary={`${formatLabel(i.format)}${totalPosts > 1 ? ` · ${totalPosts} posts` : ""}${isCombo(i.format) ? ` · ${comboSplitLabel(i.format, draftComboSplit(i, asset))}` : ""}`}
+                        />
                       </TD>
                       <TD right className="hidden tabular-nums text-text-muted sm:table-cell">
                         {asset ? followersLabel(asset.followers) : "—"}
                       </TD>
                       <TD right className="hidden tabular-nums text-text-muted md:table-cell">
-                        {asset?.engagement.avgViews != null ? compactNumber(asset.engagement.avgViews * posts) : "—"}
+                        {asset?.engagement.avgViews != null ? compactNumber(asset.engagement.avgViews * totalPosts) : "—"}
                       </TD>
                       <TD right className="tabular-nums text-text-muted" data-testid={`internal-cost-${i.assetId}`}>
                         {money(ours)}
@@ -830,7 +947,20 @@ function PriceStep({
               </p>
             )}
             <Row label="Quoted to client" value={money(quoted)} bold />
-            <EditableRow label="GST %" hint="Optional — applied to the quoted total above">
+            <EditableRow label="Discount" hint="Optional — a flat amount off, before GST">
+              <MoneyField compact value={discount} onChange={setDiscount} placeholder="0" aria-label="Discount" className="ml-auto w-36" />
+            </EditableRow>
+            {discountNum > 0 && (
+              <>
+                {discountNum > quoted && (
+                  <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[0.75rem] text-amber-800" data-testid="discount-over-quoted">
+                    The discount is more than the quoted total — the client would pay nothing.
+                  </p>
+                )}
+                <Row label="After discount" value={money(taxable)} bold />
+              </>
+            )}
+            <EditableRow label="GST %" hint={discountNum > 0 ? "Optional — applied after the discount" : "Optional — applied to the quoted total above"}>
               <IntegerField value={gstPercent} onChange={setGstPercent} max={100} placeholder="e.g. 18" aria-label="GST percent" className="ml-auto h-8 w-20 text-right" />
             </EditableRow>
             {gstPercentNum != null && (
@@ -904,19 +1034,23 @@ function SendStep({
 }) {
   const variantMutation = useMutation({ mutationFn: () => plansApi.createVariant(token, plan.id), onSuccess: onAddVariant });
   const [share, setShare] = useState<{ sharedWith?: string; shareError?: string } | null>(null);
+  // "Client sheet" opens the format popup first (16 Oct); the pick travels with the generate call.
+  const [pickingFormat, setPickingFormat] = useState(false);
   const generateMutation = useMutation({
-    mutationFn: async (variant: "client" | "internal") => {
-      const result = await plansApi.generateSheet(token, plan.id, variant);
+    mutationFn: async ({ variant, sheetFormat }: { variant: "client" | "internal"; sheetFormat?: SheetFormat }) => {
+      const result = await plansApi.generateSheet(token, plan.id, variant, sheetFormat);
       setShare(result);
       return plansApi.get(token, plan.id);
     },
     onMutate: () => setShare(null),
-    onSuccess: onSaved,
+    onSuccess: (saved) => {
+      setPickingFormat(false);
+      onSaved(saved);
+    },
   });
-  const pendingVariant = generateMutation.isPending ? generateMutation.variables : null;
-  // The plan's Google Sheet layout (8 Oct), saved as soon as it's picked; the next generate uses it.
+  const pendingVariant = generateMutation.isPending ? generateMutation.variables?.variant : null;
   const format = sheetFormatOf(plan);
-  const formatMutation = useMutation({ mutationFn: (f: SheetFormat) => plansApi.update(token, plan.id, { sheetFormat: f }), onSuccess: onSaved });
+  const inactivePages = plan.inactivePages ?? [];
   // Pages by category, biggest audience first — the sheet's own tabs.
   const groups = (() => {
     // Case-insensitive, like the sheet's tabs ("news" and "NEWS" are one category).
@@ -976,7 +1110,7 @@ function SendStep({
                         <tr key={g.label}>
                           <td className="px-3 py-1.5 font-semibold">{g.label}</td>
                           <td className="px-3 py-1.5 tabular-nums">{followersLabel(g.followers)}</td>
-                          <td className="px-3 py-1.5 tabular-nums">{g.items.reduce((sum, i) => sum + i.postsPerProfile, 0)}</td>
+                          <td className="px-3 py-1.5 tabular-nums">{g.items.reduce((sum, i) => sum + linePosts(i), 0)}</td>
                           <td className="px-3 py-1.5 text-right tabular-nums">{money(categoryCosts[n] ?? 0)}</td>
                         </tr>
                       ))}
@@ -1013,8 +1147,11 @@ function SendStep({
                               <td className="w-8 px-3 py-1.5 tabular-nums text-text-muted">{i + 1}</td>
                               <td className="px-3 py-1.5 font-semibold">{item.asset?.handle ?? "—"}</td>
                               <td className="px-3 py-1.5 tabular-nums">{followersLabel(item.asset?.followers ?? 0)}</td>
-                              <td className="px-3 py-1.5 capitalize">{item.format}</td>
-                              <td className="px-3 py-1.5 tabular-nums">{item.postsPerProfile}</td>
+                              <td className="px-3 py-1.5">
+                                {formatLabel(item.format)}
+                                {isCombo(item.format) && item.comboSplit && <span className="block text-[0.7rem] text-text-faint">{comboSplitLabel(item.format, item.comboSplit)} each</span>}
+                              </td>
+                              <td className="px-3 py-1.5 tabular-nums">{linePosts(item)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1031,22 +1168,23 @@ function SendStep({
           <div className="flex items-center justify-between">
             <p className="text-[0.875rem] font-semibold">Generate the sheet</p>
             <p className="text-[0.78rem] text-text-muted">
-              {money(plan.overview.total)} · {plan.items.length} pages
+              {money(plan.overview.total)} · {pageCount(plan.items)} pages
             </p>
           </div>
-          <div className="flex flex-col gap-2">
-            <p className="text-[0.78rem] font-semibold">Sheet format</p>
-            <SheetFormatPicker value={format} onChange={(f) => f !== format && formatMutation.mutate(f)} disabled={formatMutation.isPending || generateMutation.isPending} />
-            <p className="text-[0.72rem] text-text-muted">For this plan only. Pages go in one tab per category either way; an already-generated sheet is rewritten in the new format.</p>
-            {formatMutation.isError && <GoogleAwareError error={formatMutation.error} fallback="Couldn't change the sheet format." />}
-          </div>
-          {generateMutation.isError && <GoogleAwareError error={generateMutation.error} fallback="Couldn't generate the sheet." />}
+          {inactivePages.length > 0 && (
+            <Note tone="warn">
+              <span data-testid="inactive-pages-warning">
+                {inactivePages.length === 1 ? "A page on this plan is" : `${inactivePages.length} pages on this plan are`} no longer usable ({[...new Set(inactivePages.map((p) => (p.reason === "broken" ? "not found on Instagram" : p.reason === "rejected" ? "rejected" : "switched off")))].join(", ")}): {inactivePages.map((p) => `@${p.handle}`).join(", ")}. Swap {inactivePages.length === 1 ? "it" : "them"} out on the pages step before sharing.
+              </span>
+            </Note>
+          )}
+          {generateMutation.isError && !pickingFormat && <GoogleAwareError error={generateMutation.error} fallback="Couldn't generate the sheet." />}
           {share?.shareError && <Note tone="warn">{share.shareError}</Note>}
           {share?.sharedWith && <Note tone="ok">{share.sharedWith} can edit this sheet.</Note>}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5 rounded-[10px] border border-ink bg-surface-2 p-3">
               <p className="text-[0.72rem] font-semibold">Client sheet</p>
-              <Button type="button" size="sm" onClick={() => generateMutation.mutate("client")} disabled={generateMutation.isPending}>
+              <Button type="button" size="sm" onClick={() => setPickingFormat(true)} disabled={generateMutation.isPending} data-testid="generate-client-sheet">
                 {pendingVariant === "client" ? "Generating…" : plan.clientSheetUrl ? "Regenerate" : "Generate"}
               </Button>
               {plan.clientSheetUrl && (
@@ -1057,7 +1195,7 @@ function SendStep({
             </div>
             <div className="flex flex-col gap-1.5 rounded-[10px] border border-border p-3">
               <p className="text-[0.72rem] font-medium text-text-muted">Internal sheet</p>
-              <Button type="button" size="sm" variant="secondary" onClick={() => generateMutation.mutate("internal")} disabled={generateMutation.isPending}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => generateMutation.mutate({ variant: "internal" })} disabled={generateMutation.isPending}>
                 {pendingVariant === "internal" ? "Generating…" : plan.internalSheetUrl ? "Regenerate" : "Generate"}
               </Button>
               {plan.internalSheetUrl && (
@@ -1081,11 +1219,22 @@ function SendStep({
           </div>
         </Card>
       </div>
-      <FooterBar onBack={onBack} meta={`${plan.items.length} pages · ${money(plan.overview.total)}`}>
+      <FooterBar onBack={onBack} meta={`${pageCount(plan.items)} pages · ${money(plan.overview.total)}`}>
         <Button type="button" onClick={onDone}>
           Done
         </Button>
       </FooterBar>
+      {pickingFormat && (
+        <SheetFormatModal
+          planName={plan.pitchGroupId ? `${plan.name} · ${plan.variantLabel}` : plan.name}
+          value={format}
+          existingUrl={plan.clientSheetUrl}
+          pending={generateMutation.isPending}
+          error={generateMutation.isError ? <GoogleAwareError error={generateMutation.error} fallback="Couldn't generate the sheet." /> : null}
+          onClose={() => !generateMutation.isPending && setPickingFormat(false)}
+          onConfirm={(sheetFormat) => generateMutation.mutate({ variant: "client", sheetFormat })}
+        />
+      )}
     </div>
   );
 }

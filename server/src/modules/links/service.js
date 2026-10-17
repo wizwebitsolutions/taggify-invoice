@@ -8,6 +8,31 @@ import { creatorPhaseLabels, phaseRowIds } from "../../lib/campaignPhases.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import { assertCanActOnPage, assertPageBooked } from "../../lib/pageOwnership.js";
 import { recomputePostQuota } from "../../lib/postQuota.js";
+import { openComboSlots, isComboSlot } from "../../lib/comboSlots.js";
+import { formatLabel } from "../../lib/formats.js";
+
+const SLOT_TAKEN = Symbol("SLOT_TAKEN");
+
+/**
+ * Creates a combo page's post at its slot's cost and claims the slot, in one
+ * transaction. Returns null (nothing written) when the slot was claimed in
+ * the meantime — the conditional updateMany is the guard, not the earlier read.
+ */
+async function createLinkClaimingSlot(slot, { campaignId, assetId, submittedById, url, format }) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const link = await tx.link.create({
+        data: { campaignId, assetId, submittedById, url, format, cost: slot.cost, customRate: false, status: "SUBMITTED" },
+      });
+      const { count } = await tx.campaignAssignment.updateMany({ where: { id: slot.id, linkId: null }, data: { linkId: link.id, postUrl: url } });
+      if (count === 0) throw SLOT_TAKEN;
+      return link;
+    });
+  } catch (err) {
+    if (err === SLOT_TAKEN) return null;
+    throw err;
+  }
+}
 
 export async function createLink(user, { campaignId, assetId, url, format, customAmount }) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId }, include: { rateCards: true } });
@@ -22,22 +47,34 @@ export async function createLink(user, { campaignId, assetId, url, format, custo
 async function createOneLink(user, asset, { campaignId, assetId, url, format, customAmount }) {
   // Non-admin callers get the asset's rate-card price; only an admin caller
   // may pass customAmount to override it for a negotiated deal.
-  let cost;
-  let customRate = false;
+  let link = null;
   if (customAmount != null && user.role === "ADMIN") {
-    cost = customAmount;
-    customRate = true;
+    link = await prisma.link.create({
+      data: { campaignId, assetId, submittedById: user.id, url, format, cost: customAmount, customRate: true, status: "SUBMITTED" },
+    });
   } else {
-    const rateCard = asset.rateCards.find((rc) => rc.format === format);
-    if (!rateCard) {
-      throw new ApiError(400, "NO_RATE_CARD", `No rate card set for format "${format}" on this asset`);
+    // A combo page (Reel + Story / Repost + Story): the post takes its part of the
+    // combo price from an open slot of its format anywhere in the phase (the
+    // row the creator picked first) and claims that slot, both in one
+    // transaction. The post stays on the row the creator picked: quota and
+    // money group a page's posts by phase, not by row. A slot claimed by
+    // someone else in the meantime rolls the insert back and the next open
+    // slot is tried; only when none of that format is left is the post priced
+    // from the rate card (postQuota then flags it over quota).
+    for (const slot of await openComboSlots(prisma, { campaignId, assetId, format })) {
+      link = await createLinkClaimingSlot(slot, { campaignId, assetId, submittedById: user.id, url, format });
+      if (link) break;
     }
-    cost = rateCard.amount;
+    if (!link) {
+      const rateCard = asset.rateCards.find((rc) => rc.format === format);
+      if (!rateCard) {
+        throw new ApiError(400, "NO_RATE_CARD", `No ${formatLabel(format)} rate set for this page`);
+      }
+      link = await prisma.link.create({
+        data: { campaignId, assetId, submittedById: user.id, url, format, cost: rateCard.amount, customRate: false, status: "SUBMITTED" },
+      });
+    }
   }
-
-  const link = await prisma.link.create({
-    data: { campaignId, assetId, submittedById: user.id, url, format, cost, customRate, status: "SUBMITTED" },
-  });
 
   await prisma.linkStatusEvent.create({ data: { linkId: link.id, status: "SUBMITTED", actedById: user.id } });
   // Still submits past the booking (29 Sep — the creator may post extra), but
@@ -101,7 +138,7 @@ export async function autoAttachLink(asset, { campaignId, url, format, cost }) {
   let customRate = cost != null;
   if (resolvedCost == null) {
     const rateCard = asset.rateCards?.find((rc) => rc.format === format);
-    if (!rateCard) throw new ApiError(400, "NO_RATE_CARD", `No rate card set for format "${format}" on @${asset.handle}`);
+    if (!rateCard) throw new ApiError(400, "NO_RATE_CARD", `No ${formatLabel(format)} rate set for @${asset.handle}`);
     resolvedCost = rateCard.amount;
   }
 
@@ -454,8 +491,16 @@ export async function deleteLink(linkId) {
   if (link.status === "INVOICED" || link.invoiceItem) throw ALREADY_INVOICED("delete it");
   if (link.payoutItem) throw new ApiError(409, "ON_PAYOUT", "This post is on a vendor payout, so it can't be deleted");
 
+  // A combo part's slot (Reel + Story / Repost + Story) this post claimed got
+  // the post's URL written onto it when it was claimed (createLinkClaimingSlot
+  // / the plan's execution sheet), so it's freed outright — URL too, or it'd
+  // still show the deleted post. Any other row — a regular line's slot or a
+  // campaign-sheet row, even on a combo page — keeps its URL (it came from
+  // the sheet) and is only unlinked, so it can auto-attach again.
+  const slot = await prisma.campaignAssignment.findFirst({ where: { linkId }, select: { id: true, campaignId: true, format: true, cost: true } });
+  const comboClaim = slot ? await isComboSlot(prisma, slot, link.assetId) : false;
   await prisma.$transaction([
-    prisma.campaignAssignment.updateMany({ where: { linkId }, data: { linkId: null } }),
+    prisma.campaignAssignment.updateMany({ where: { linkId }, data: comboClaim ? { linkId: null, postUrl: null } : { linkId: null } }),
     prisma.link.delete({ where: { id: linkId } }),
   ]);
   await recomputePostQuota(link.campaignId, link.assetId);

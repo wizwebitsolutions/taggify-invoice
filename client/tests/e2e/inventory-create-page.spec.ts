@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { signIn, mockApi, API_URL } from "./fixtures";
+import { signIn, mockApi, API_URL, addRate } from "./fixtures";
 
 /**
  * Inventory → "Create page" popup (user request, 23 Sep):
@@ -22,6 +22,12 @@ function testAssets() {
     { id: "a1", ownerId: "creator-1", platform: "instagram", handle: "meme.page", followers: 100000, category: "Meme page", approvalStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", rateCards: [], engagement: { avgLikes: null, avgComments: null, avgViews: null, sampleSize: 0 }, owner: owners[0] },
     { id: "a2", ownerId: "creator-1", platform: "instagram", handle: "news.page", followers: 200000, category: "News page", approvalStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", rateCards: [], engagement: { avgLikes: null, avgComments: null, avgViews: null, sampleSize: 0 }, owner: owners[0] },
   ];
+}
+
+/** Reel and Story rates, added one at a time (16 Oct) — no rate is mandatory any more; these just give the create bodies something to check. */
+async function fillRequiredRates(page: import("@playwright/test").Page) {
+  await addRate(page, "reel", "20000");
+  await addRate(page, "story", "15000");
 }
 
 test.describe("Inventory — Create page popup: category search + inline new user (23 Sep)", () => {
@@ -91,6 +97,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.getByLabel("New user name").fill("Amit Kumar");
     await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByLabel("Instagram handle").fill("@amit.memes");
+    await fillRequiredRates(page);
     // Nothing created while filling in, and no password shown mid-form.
     expect(calls).toHaveLength(0);
     await expect(page.getByTestId("generated-password")).toHaveCount(0);
@@ -137,6 +144,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.getByRole("button", { name: "Create page" }).click();
     await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByLabel("Instagram handle").fill("taken.page");
+    await fillRequiredRates(page);
     await page.getByRole("button", { name: "Create account & page" }).click();
 
     const form = page.getByTestId("create-page-form");
@@ -161,6 +169,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.getByLabel("Creator account").click();
     await page.getByRole("option", { name: /Priya Creator/ }).click();
     await page.getByLabel("Instagram handle").fill("priya.page");
+    await fillRequiredRates(page);
     await page.getByTestId("create-page-form").getByRole("button", { name: "Create page" }).click();
 
     await expect(page.getByTestId("create-page-form")).toHaveCount(0);
@@ -181,7 +190,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.getByRole("button", { name: "Add page" }).first().click();
     await expect(page.getByRole("tab", { name: "Existing account" })).toHaveAttribute("aria-selected", "true");
     // Admin-only extras stay hidden — a plan maker's page is always pending, never priced.
-    await expect(page.getByLabel("Reel rate")).toHaveCount(0);
+    await expect(page.getByTestId("rate-fields")).toHaveCount(0);
     await expect(page.getByText("Approved on creation.")).toHaveCount(0);
 
     await page.getByLabel("Creator account").click();
@@ -213,6 +222,49 @@ test.describe("Inventory — Create page popup: category search + inline new use
     expect(calls[1].body).toMatchObject({ handle: "amit.memes", ownerId: "new-creator-1" });
   });
 
+  test("admin: rates are added one format at a time, none is mandatory, and they're sent in the app's format order (16 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    const calls = await mockCreateFlow(page, { owners });
+
+    await page.goto("/inventory");
+    await page.getByRole("button", { name: "Create page" }).click();
+    const form = page.getByTestId("create-page-form");
+    // No boxes up front — a select of the ten formats, an amount and Add.
+    await expect(form.getByTestId("rate-fields")).toContainText("No rates yet");
+    await expect(form.getByLabel("Add a rate for", { exact: true }).locator("option")).toHaveCount(11); // placeholder + ten formats
+    await expect(form.getByTestId("rate-fields")).toContainText("Every rate is optional");
+    await page.getByLabel("Creator account").click();
+    await page.getByRole("option", { name: /Priya Creator/ }).click();
+    await page.getByLabel("Instagram handle").fill("priced.page");
+
+    await addRate(form, "reel", "20000");
+    await expect(form.getByLabel("Reel rate", { exact: true })).toHaveValue("20,000");
+    // A priced format leaves the select; a removed one comes back.
+    await expect(form.getByLabel("Add a rate for", { exact: true }).locator("option", { hasText: /^Reel$/ })).toHaveCount(0);
+    await addRate(form, "repost_story", "30000");
+    await form.getByLabel("Remove Repost + Story rate", { exact: true }).click();
+    await expect(form.getByLabel("Repost + Story rate", { exact: true })).toHaveCount(0);
+    await addRate(form, "story", "15000");
+    await addRate(form, "pr", "12000");
+    await addRate(form, "repost_story", "30000");
+    // Editing an added line in place.
+    await form.getByLabel("PR rate", { exact: true }).fill("12000");
+
+    await form.getByRole("button", { name: "Create page" }).click();
+    await expect(form).toHaveCount(0);
+    expect(calls.map((c) => c.path)).toEqual(["/assets"]);
+    expect(calls[0].body).toMatchObject({
+      handle: "priced.page",
+      rateCards: [
+        { format: "reel", amount: 20000 },
+        { format: "pr", amount: 12000 },
+        { format: "story", amount: 15000 },
+        { format: "repost_story", amount: 30000 },
+      ],
+    });
+  });
+
   test("regression (24 Sep): no horizontal overflow in the form or the success screen at phone width, even with a long name and password", async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 780 });
     await signIn(page, "ADMIN");
@@ -224,6 +276,7 @@ test.describe("Inventory — Create page popup: category search + inline new use
     await page.getByLabel("New user name").fill("Aarav Khanna Productions Private Limited Mumbai");
     await page.getByLabel("New user email").fill("amit.kumar@gmail.com");
     await page.getByLabel("Instagram handle").fill("a.very.long.instagram.handle_x");
+    await fillRequiredRates(page);
 
     const noOverflow = (testId: string) =>
       page.getByTestId(testId).evaluate((el) => el.scrollWidth <= el.clientWidth + 1);

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { signIn, mockApi, API_URL } from "./fixtures";
+import { signIn, mockApi, API_URL, addRate } from "./fixtures";
 
 /**
  * Email is the login since 24 Sep, so an admin can fix it (a typo at
@@ -99,6 +99,9 @@ test.describe("Resolve pending pages — a phone that's already someone else's i
     await page.getByRole("button", { name: /still need.*creating/ }).click();
     await page.getByRole("button", { name: "Create" }).click();
     await page.getByLabel("Creator's email").fill("new.person@gmail.com");
+    await addRate(page, "reel", "20000");
+    await addRate(page, "story", "15000");
+    await addRate(page, "post", "9000");
     await page.getByRole("button", { name: "Create page" }).click();
 
     await expect(page.getByText(/That phone number already belongs to Ops Admin/)).toBeVisible();

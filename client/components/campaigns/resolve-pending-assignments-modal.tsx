@@ -6,7 +6,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { MoneyField, PhoneField } from "@/components/ui/form-field";
+import { PhoneField } from "@/components/ui/form-field";
+import { RateFields, rateCardsFrom, missingRequiredRates } from "@/components/inventory/rate-fields";
+import { useAuth } from "@/lib/auth-context";
 import { Sheet } from "@/components/ui/sheet";
 import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
@@ -16,7 +18,6 @@ import {
   assets as assetsApi,
   auth as authApi,
   admin as adminApi,
-  LINK_FORMATS,
   ApiError,
   type CampaignAssignment,
   type User,
@@ -111,6 +112,12 @@ function PendingAssignmentRow({
   const [email, setEmail] = useState("");
   const [category, setCategory] = useState("");
   const [rates, setRates] = useState<Record<string, string>>({});
+  // Only a full admin can set rates, and their page is approved on creation —
+  // so Reel and Story are required up front (14 Oct).
+  const { user } = useAuth();
+  const isFullAdmin = user?.role === "ADMIN";
+  const [attempted, setAttempted] = useState(false);
+  const ratesMissing = isFullAdmin && missingRequiredRates(rates).length > 0;
   const [phoneBlurred, setPhoneBlurred] = useState(false);
   // "Option of creating account under user" (user request, 12 Sep): the
   // page can be attached to a creator who already has an account instead
@@ -192,14 +199,12 @@ function PendingAssignmentRow({
         }
       }
 
+      const rateCards = isFullAdmin ? rateCardsFrom(rates) : [];
       const asset = await assetsApi.create(token, assignment.pageHandle, "instagram", {
         category: category || undefined,
         ownerId,
+        ...(rateCards.length > 0 ? { rateCards } : {}),
       });
-      const rateCards = Object.entries(rates)
-        .filter(([, amount]) => amount.trim())
-        .map(([format, amount]) => ({ format, amount: Number(amount) }));
-      if (rateCards.length > 0) await assetsApi.updateRateCard(token, asset.id, rateCards);
       await campaignsApi.resolveAssignment(token, campaignId, assignment.id, asset.id);
       return generatedPassword;
     },
@@ -336,18 +341,19 @@ function PendingAssignmentRow({
             </>
           )}
           <CategoryPicker value={category} onChange={setCategory} />
-          <div className="grid grid-cols-2 gap-2">
-            {LINK_FORMATS.map((format) => (
-              <div key={format} className="flex items-center justify-between gap-2">
-                <span className="text-[0.75rem] capitalize text-text-faint">{format}</span>
-                <MoneyField compact value={rates[format] ?? ""} onChange={(v) => setRates((prev) => ({ ...prev, [format]: v }))} placeholder="rate" aria-label={`${format} rate`} className="w-28" />
-              </div>
-            ))}
-          </div>
+          {isFullAdmin && <RateFields compact rates={rates} onChange={setRates} required showErrors={attempted} />}
           {resolveMutation.isError && (
             <ErrorNotice message={resolveMutation.error instanceof ApiError ? resolveMutation.error.message : "Couldn't create this page."} />
           )}
-          <Button size="sm" onClick={() => resolveMutation.mutate()} disabled={!canSubmit || resolveMutation.isPending}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setAttempted(true);
+              if (ratesMissing) return;
+              resolveMutation.mutate();
+            }}
+            disabled={!canSubmit || resolveMutation.isPending}
+          >
             {resolveMutation.isPending ? (mode === "existing" ? "Attaching…" : "Creating…") : mode === "existing" ? "Attach page" : "Create page"}
           </Button>
         </div>

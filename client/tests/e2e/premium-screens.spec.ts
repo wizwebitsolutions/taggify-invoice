@@ -89,6 +89,30 @@ test.describe("premium screens", () => {
     await expect(page.getByTestId("approval-detail")).toContainText("Zomato Diwali");
   });
 
+  test("/approvals: a new page lists every rate, and approving one without its required rates shows the server's reason (14 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    const pendingPage = { ...asset("asset-p", "new.page", "Meme page"), approvalStatus: "pending" };
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [pendingPage] }));
+    await page.route(`${API_URL}/assets/asset-p/approval`, (route) =>
+      route.fulfill({ status: 400, json: { error: { code: "RATES_REQUIRED", message: "Set Reel and Story rates before approving." } } })
+    );
+
+    await page.goto("/approvals");
+    await page.getByTestId("approval-row-asset-p").click();
+    // The desktop panel (a row click also mounts the phone sheet's copy, hidden at this width).
+    const detail = page.getByTestId("approval-detail").first();
+    const rates = detail.getByTestId("approval-page-rates");
+    await expect(rates).toContainText("Reel rate₹12,000");
+    await expect(rates).toContainText("Static & Carousel rate—");
+    await expect(rates).toContainText("Reel + Story rate—");
+    await expect(rates).toContainText("Repost + Story rate—");
+    await expect(rates).toContainText("Entertainment / Brand rate—");
+    await expect(detail.getByTestId("approval-rates-needed")).toBeVisible();
+    await detail.getByTestId("approve-next").click();
+    await expect(detail).toContainText("Set Reel and Story rates before approving.");
+  });
+
   test("campaigns is a table with budget-used and remaining columns", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);

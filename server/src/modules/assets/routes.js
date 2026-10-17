@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema } from "./schemas.js";
+import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, proposeEditSchema, decideEditSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import { requireRole } from "../../middleware/requireRole.js";
@@ -86,6 +86,36 @@ router.put("/:id/approval", requireAccess("inventory.approve"), validateBody(set
 router.put("/:id/active", requireRole("ADMIN"), requireAccess("inventory.edit"), validateBody(setActiveSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.setAssetActive(req.params.id, req.body.isActive));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Remove a page (16 Oct) — admins only, same gate as Active/Inactive. Refused
+// (409) for a page with posts or on an approved plan: deactivate those instead.
+router.delete("/:id", requireRole("ADMIN"), requireAccess("inventory.edit"), async (req, res, next) => {
+  try {
+    res.json(await assetsService.deleteAsset(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A planner's proposed edit (16 Oct): PLAN_MAKER is bare here, so its own
+// inventory.edit switch (on by default, an admin can turn it off) is what lets
+// it through. Any other role granted inventory.edit may only propose on a page
+// it owns (service). The live row isn't touched until an admin decides below.
+router.put("/:id/propose-edit", requireAccess("inventory.edit", "PLAN_MAKER"), validateBody(proposeEditSchema), async (req, res, next) => {
+  try {
+    res.json(await assetsService.proposeAssetEdit(req.user, req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/:id/edit-decision", requireAccess("inventory.approve"), validateBody(decideEditSchema), async (req, res, next) => {
+  try {
+    res.json(await assetsService.decideAssetEdit(req.params.id, req.body.decision));
   } catch (err) {
     next(err);
   }

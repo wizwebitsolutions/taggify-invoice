@@ -48,7 +48,8 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
     await expect(page.getByRole("button", { name: "Internal sheet" })).toBeVisible();
   });
 
-  test("clicking Client sheet on an ungenerated plan calls generate, then the button reflects the cached link on refetch", async ({ page }) => {
+  // 16 Oct — "Client sheet" first asks which of the two formats to use; confirming generates.
+  test("clicking Client sheet on an ungenerated plan asks for the format, then calls generate; the button reflects the cached link on refetch", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     let generateCalled = false;
@@ -60,10 +61,14 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
 
     await page.goto("/plans?maker=all");
     await page.getByRole("button", { name: "Client sheet" }).click();
+    await expect(page.getByTestId("sheet-format-modal")).toBeVisible();
+    expect(generateCalled).toBe(false);
+    const [tab] = await Promise.all([page.waitForEvent("popup"), page.getByTestId("sheet-format-confirm").click()]);
+    await tab.close();
     await expect.poll(() => generateCalled).toBe(true);
   });
 
-  test("clicking Client sheet on an already-generated plan opens the cached link directly, without calling generate", async ({ page }) => {
+  test("clicking Client sheet on an already-generated plan offers the cached link to open as is, without calling generate", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     let generateCalled = false;
@@ -75,9 +80,10 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
 
     await page.goto("/plans?maker=all");
     await expect(page.getByRole("button", { name: "Client sheet ↗" })).toBeVisible();
-    const [popup] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: "Client sheet ↗" }).click()]);
-    expect(popup.url()).toContain("docs.google.com/spreadsheets/d/sheet-1");
-    await popup.close();
+    await page.getByRole("button", { name: "Client sheet ↗" }).click();
+    // Same format as the sheet already has → a plain link to it; the format cards are still there to regenerate differently.
+    await expect(page.getByTestId("sheet-format-open-existing")).toHaveAttribute("href", "https://docs.google.com/spreadsheets/d/sheet-1/edit?gid=1#gid=1");
+    await expect(page.getByTestId("sheet-format-confirm")).toHaveText("Regenerate");
     expect(generateCalled).toBe(false);
   });
 
@@ -93,10 +99,11 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
     await context.route(`${API_URL}/integrations/google/authorize**`, (route) => route.fulfill({ contentType: "text/html", body: "<title>consent</title>" }));
 
     await page.goto("/plans?maker=all");
+    await page.getByRole("button", { name: "Client sheet" }).first().click();
     // The generate path opens a blank tab first (popup-blocker-safe); it just stays blank on failure.
-    const [blank] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: "Client sheet" }).first().click()]);
+    const [blank] = await Promise.all([page.waitForEvent("popup"), page.getByTestId("sheet-format-confirm").click()]);
     await blank.close();
-    // Only on the card that was clicked, not every card.
+    // Shown once, inside the format popup that's still open — not on every card.
     await expect(page.getByTestId("google-reconnect-notice")).toHaveCount(1);
     const notice = page.getByTestId("google-reconnect-notice");
     await expect(notice).toContainText("access has expired or been revoked");
@@ -114,7 +121,8 @@ test.describe("Plans list — Client sheet / Internal sheet buttons", () => {
     await page.route(`${API_URL}/plans/plan-1/sheet`, (route) => route.fulfill({ status: 503, json: { error: { code: "GOOGLE_RECONNECT_REQUIRED", message: "Google access expired." } } }));
 
     await page.goto("/plans?maker=all");
-    const [blank] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: "Client sheet" }).click()]);
+    await page.getByRole("button", { name: "Client sheet" }).click();
+    const [blank] = await Promise.all([page.waitForEvent("popup"), page.getByTestId("sheet-format-confirm").click()]);
     await blank.close();
     const notice = page.getByTestId("google-reconnect-notice");
     await expect(notice).toContainText("Ask an admin to reconnect");

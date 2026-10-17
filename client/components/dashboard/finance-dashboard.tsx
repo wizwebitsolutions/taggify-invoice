@@ -26,6 +26,7 @@ import { links as linksApi, invoices as invoicesApi, assets as assetsApi, campai
 import { money, count, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { lastNMonths } from "@/lib/dates";
 import { useState } from "react";
+import { formatLabel } from "@/lib/formats";
 
 const INVOICE_STATUS_ORDER: Invoice["status"][] = ["DRAFT", "RAISED", "APPROVED", "REJECTED", "PAID"];
 const DAY = 24 * 60 * 60 * 1000;
@@ -311,7 +312,7 @@ export function FinanceDashboard() {
                 <div className="flex flex-col gap-2">
                   {needsCost.slice(0, 5).map((l) => (
                     <div key={l.id} className="flex items-center gap-3">
-                      <Cell2 primary={`@${l.asset?.handle ?? "—"} · ${l.format}`} secondary={l.campaign?.title ?? "—"} />
+                      <Cell2 primary={`@${l.asset?.handle ?? "—"} · ${formatLabel(l.format)}`} secondary={l.campaign?.title ?? "—"} />
                       {/* Cost revision itself is an Admin action; Finance opens the campaign to flag it. */}
                       <Button size="sm" variant="secondary" className="ml-auto" onClick={() => router.push(`/campaigns/view?id=${l.campaignId}`)}>
                         Open campaign

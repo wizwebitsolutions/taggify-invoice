@@ -1,5 +1,7 @@
 import { prisma } from "./prisma.js";
 import { phaseRowIds } from "./campaignPhases.js";
+import { comboPagesFor } from "./comboSlots.js";
+import { BOOKABLE_FORMATS } from "./formats.js";
 
 /**
  * Posts beyond what a campaign phase booked for a page (user decision, 29 Sep
@@ -47,6 +49,46 @@ export function overQuotaIds(links, booked) {
   );
 }
 
+/**
+ * A combo page (Reel + Story 14 Oct, Repost + Story 16 Oct) is booked per
+ * format — a slot per part per post (reel + story, repost + story) — so its quota is counted per format: a second reel
+ * against one reel slot is over quota even while the story slot is still
+ * open, and a format with no slot at all (a post on a reel/story combo) has
+ * every unpaid post over quota. `bookedByFormat` is { format: slots }.
+ * Used for combo pages, and for a page whose slots in the phase span more
+ * than one format (a plan page booked Reel x1 + Static & Carousel x1: a
+ * second reel is over quota, it doesn't take the static's place). A page
+ * booked in one format only keeps the count rule above.
+ */
+export function overQuotaIdsByFormat(links, bookedByFormat) {
+  const byFormat = new Map();
+  for (const l of links) {
+    const key = l.format ?? "";
+    if (!byFormat.has(key)) byFormat.set(key, []);
+    byFormat.get(key).push(l);
+  }
+  const over = new Set();
+  for (const [format, group] of byFormat) {
+    const booked = bookedByFormat[format] ?? 0;
+    const ids = booked === 0 ? group.filter((l) => !l.paid).map((l) => l.id) : overQuotaIds(group, booked);
+    for (const id of ids) over.add(id);
+  }
+  return over;
+}
+
+/**
+ * A non-combo page's slots, when they're booked in more than one format and
+ * every slot names a current bookable format (review fix, 16 Oct: a plan can
+ * book a page for several formats, one slot per line). Otherwise null: one
+ * format only, or a legacy/sheet slot with no or an old format, keeps the
+ * count rule exactly as before.
+ */
+function multiFormatBooking(slots) {
+  if (!Array.isArray(slots) || slots.length < 2) return null;
+  if (!slots.every((s) => BOOKABLE_FORMATS.includes(s?.format))) return null;
+  return new Set(slots.map((s) => s.format)).size > 1 ? slots : null;
+}
+
 /** Money has actually left for this post — it's on a PAID invoice or a PAID payout. A raised/approved invoice or a draft payout doesn't count yet. */
 const PAID_SELECT = { invoiceItem: { select: { invoice: { select: { status: true } } } }, payoutItem: { select: { payout: { select: { status: true } } } } };
 export const isPaidLink = (l) => l.invoiceItem?.invoice?.status === "PAID" || l.payoutItem?.payout?.status === "PAID";
@@ -59,13 +101,25 @@ export const isPaidLink = (l) => l.invoiceItem?.invoice?.status === "PAID" || l.
 export async function recomputePostQuota(campaignId, assetId, db = prisma) {
   if (!campaignId || !assetId) return [];
   const rowIds = await phaseRowIds(campaignId, db);
-  const [booked, rows] = await Promise.all([
-    db.campaignAssignment.count({ where: { campaignId: { in: rowIds }, assetId } }),
-    db.link.findMany({ where: { campaignId: { in: rowIds }, assetId }, select: { id: true, postedAt: true, createdAt: true, overQuota: true, ...PAID_SELECT } }),
+  const combo = (await comboPagesFor(campaignId, [assetId], db)).has(assetId);
+  const [booking, slotFormats, rows] = await Promise.all([
+    combo
+      ? db.campaignAssignment.findMany({ where: { campaignId: { in: rowIds }, assetId }, select: { format: true } })
+      : db.campaignAssignment.count({ where: { campaignId: { in: rowIds }, assetId } }),
+    combo ? null : db.campaignAssignment.findMany({ where: { campaignId: { in: rowIds }, assetId }, select: { format: true } }),
+    db.link.findMany({ where: { campaignId: { in: rowIds }, assetId }, select: { id: true, format: true, postedAt: true, createdAt: true, overQuota: true, ...PAID_SELECT } }),
   ]);
   const links = rows.map((l) => ({ ...l, paid: isPaidLink(l) }));
 
-  const over = overQuotaIds(links, booked);
+  let over;
+  const perFormat = combo ? booking : multiFormatBooking(slotFormats);
+  if (perFormat) {
+    const bookedByFormat = {};
+    for (const { format } of perFormat) bookedByFormat[format ?? ""] = (bookedByFormat[format ?? ""] ?? 0) + 1;
+    over = overQuotaIdsByFormat(links, bookedByFormat);
+  } else {
+    over = overQuotaIds(links, booking);
+  }
   const toFlag = links.filter((l) => over.has(l.id) && !l.overQuota).map((l) => l.id);
   const toClear = links.filter((l) => !over.has(l.id) && l.overQuota).map((l) => l.id);
   if (toFlag.length > 0) await db.link.updateMany({ where: { id: { in: toFlag } }, data: { overQuota: true } });

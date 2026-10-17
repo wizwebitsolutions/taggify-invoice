@@ -34,7 +34,10 @@ const rahul = { id: "creator-2", name: "Rahul Creator", phoneNumber: "+919000000
 const rahul2 = { id: "creator-3", name: "Rahul Creator", phoneNumber: "+919000000003", email: null };
 const owners = [priya, rahul, rahul2];
 
-const row = (overrides) => ({ rowNumber: 2, rawHandle: "x", handle: "x", ownerRef: null, category: null, followers: null, rateCards: [], problem: null, ...overrides });
+// Page Name and the Entertainment / Reel / Story rates are required cells since 17 Oct (previewImport's "incomplete");
+// the defaults carry them so the status tests below keep reading as they always did.
+const REQUIRED_RATES = [{ format: "entertainment", amount: 3000 }, { format: "reel", amount: 5000 }, { format: "story", amount: 1500 }];
+const row = (overrides) => ({ rowNumber: 2, rawHandle: "x", handle: "x", pageName: "Page X", ownerRef: null, category: null, followers: null, rateCards: REQUIRED_RATES, problem: null, ...overrides });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -145,7 +148,7 @@ describe("previewImport — per-row status", () => {
 // campaign/plan imports use, then the same parser + preview as a file.
 describe("previewImportFromSheetUrl", () => {
   it("fetches the shared sheet as CSV and previews it exactly like an uploaded file", async () => {
-    fetchSheetCsv.mockResolvedValue("handle,owner\n@sheet.page,+919000000001\n");
+    fetchSheetCsv.mockResolvedValue("handle,page name,owner,entertainment rate,reel rate,story rate\n@sheet.page,Sheet Page,+919000000001,3000,5000,1500\n");
     const preview = await previewImportFromSheetUrl("https://docs.google.com/spreadsheets/d/abc/edit#gid=0");
     expect(fetchSheetCsv).toHaveBeenCalledWith("https://docs.google.com/spreadsheets/d/abc/edit#gid=0");
     expect(preview.rows[0]).toMatchObject({ handle: "sheet.page", status: "ready", ownerId: "creator-1" });
@@ -297,7 +300,7 @@ describe("importAssets — creating the confirmed rows", () => {
 
   it("creates each page under its account (approved, since only admins import), with any rate cards from the sheet", async () => {
     const result = await importAssets(admin, [
-      { handle: "@One.Page", ownerId: "creator-1", category: "News page", followers: 1000, rateCards: [{ format: "reel", amount: 5000 }] },
+      { handle: "@One.Page", ownerId: "creator-1", category: "News page", followers: 1000, rateCards: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "post", amount: 2500 }] },
       { handle: "two.page", ownerId: "creator-2" },
     ]);
     expect(result.skipped).toEqual([]);
@@ -308,9 +311,11 @@ describe("importAssets — creating the confirmed rows", () => {
     expect(mockPrisma.asset.create).toHaveBeenCalledWith(
       expect.objectContaining({
         // Admin-only route → approved on creation (14 Sep), same as createAsset.
-        data: expect.objectContaining({ handle: "One.Page", ownerId: "creator-1", category: "News page", followers: 4321, approvalStatus: "approved", rateCards: { create: [{ format: "reel", amount: 5000 }] } }),
+        data: expect.objectContaining({ handle: "One.Page", ownerId: "creator-1", category: "News page", followers: 4321, approvalStatus: "approved", rateCards: { create: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "post", amount: 2500 }] } }),
       })
     );
+    // No rate is mandatory (16 Oct, later): an admin's row with no Reel / Story rate is approved too.
+    expect(mockPrisma.asset.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ handle: "two.page", approvalStatus: "approved" }) }));
     // The confirmed Instagram profile is stored straight away.
     expect(applyProfileMetrics).toHaveBeenCalledWith("asset-One.Page", expect.objectContaining({ followers: 4321 }));
   });
@@ -517,10 +522,50 @@ describe("previewImport — vendor matching and newVendors", () => {
   });
 
   it("a Google Sheet link goes through the same vendor path", async () => {
-    fetchSheetCsv.mockResolvedValue(["Page Link,Vendor Name,Vendor Contact", "https://instagram.com/sheet.page,Fresh Vendor,fresh@vendor.in", "https://instagram.com/mine.page,Priya,+91 90000 00001"].join("\n"));
+    fetchSheetCsv.mockResolvedValue(["Page Name,Page Link,Vendor Name,Vendor Contact,Entertainment Rate,Reel Rate,Story Rate", "Sheet,https://instagram.com/sheet.page,Fresh Vendor,fresh@vendor.in,3000,5000,1500", "Mine,https://instagram.com/mine.page,Priya,+91 90000 00001,3000,5000,1500"].join("\n"));
     const preview = await previewImportFromSheetUrl("https://docs.google.com/spreadsheets/d/abc/edit", admin);
     expect(preview.rows[0]).toMatchObject({ status: "owner-unknown", reason: "New vendor: Fresh Vendor", vendor: { name: "Fresh Vendor", phone: null, email: "fresh@vendor.in" } });
     expect(preview.rows[1]).toMatchObject({ status: "ready", ownerId: "creator-1" });
     expect(preview.newVendors).toEqual([{ key: "fresh@vendor.in", name: "Fresh Vendor", phone: null, email: "fresh@vendor.in", rowNumbers: [2] }]);
+  });
+});
+
+describe("previewImport — required cells (17 Oct: Page Name + Entertainment, Reel and Story rates)", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+  const full = [{ format: "entertainment", amount: 2 }, { format: "reel", amount: 1 }, { format: "story", amount: 1 }];
+
+  it("a row missing any of them is 'incomplete' and names what's missing; missingRates stays empty (no approval rule)", async () => {
+    const parsed = {
+      hasOwnerColumn: true,
+      rows: [
+        row({ rowNumber: 2, handle: "full.page", ownerRef: "9000000001", rateCards: full }),
+        row({ rowNumber: 3, handle: "no.story", ownerRef: "9000000001", rateCards: [{ format: "entertainment", amount: 2 }, { format: "reel", amount: 1 }, { format: "post", amount: 1 }] }),
+        row({ rowNumber: 4, handle: "no.rates", pageName: null, ownerRef: "9000000001", rateCards: [] }),
+      ],
+    };
+    const result = await previewImport(parsed, admin);
+    expect(result.rows.map((r) => [r.handle, r.status, r.missingRates, r.missingFields])).toEqual([
+      ["full.page", "ready", [], []],
+      ["no.story", "incomplete", [], ["Story Rate"]],
+      ["no.rates", "incomplete", [], ["Page Name", "Entertainment / Brand Rate", "Reel Rate", "Story Rate"]],
+    ]);
+    expect(result.rows[2].reason).toBe("Missing: Page Name, Entertainment / Brand Rate, Reel Rate, Story Rate.");
+    expect(result.summary.incomplete).toBe(2);
+  });
+
+  it("a page already in Inventory reads 'exists', not 'incomplete'; a creator's own sheet only needs Page Name", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "taken.page", ownerId: "creator-1", owner: priya }]);
+    const result = await previewImport({ hasOwnerColumn: true, rows: [row({ handle: "taken.page", ownerRef: "9000000001", rateCards: [] })] }, admin);
+    expect(result.rows[0].status).toBe("exists");
+
+    mockPrisma.asset.findMany.mockResolvedValue([]);
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const mine = await previewImport({ hasOwnerColumn: false, rows: [row({ handle: "mine.page", rateCards: [] }), row({ rowNumber: 3, handle: "noname.page", pageName: null, rateCards: [] })] }, creator);
+    expect(mine.rows.map((r) => r.status)).toEqual(["ready", "incomplete"]);
+  });
+
+  it("anyone else's rows carry an empty missingRates (their pages land pending without rates anyway)", async () => {
+    const result = await previewImport({ hasOwnerColumn: false, rows: [row({ handle: "mine.page" })] }, { id: "creator-1", role: "CREATOR" });
+    expect(result.rows[0].missingRates).toEqual([]);
   });
 });

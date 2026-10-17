@@ -34,6 +34,7 @@ import {
 } from "@/lib/api-client";
 import { money, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { lastNMonths } from "@/lib/dates";
+import { formatLabel } from "@/lib/formats";
 
 const LINK_PIPELINE_ORDER: LinkRow["status"][] = [
   "SUBMITTED",
@@ -153,7 +154,7 @@ export function AdminDashboard() {
       out.push({
         id: `shot-${l.id}`,
         title: `Screenshot proof · @${l.asset?.handle ?? "—"}`,
-        sub: `${l.campaign?.title ?? "—"} · ${l.format} · submitted ${daysSince(l.createdAt)}d ago`,
+        sub: `${l.campaign?.title ?? "—"} · ${formatLabel(l.format)} · submitted ${daysSince(l.createdAt)}d ago`,
         href: `/approvals?item=${l.id}`,
         waitingDays: daysSince(l.createdAt),
         secondary: { label: "View", href: `/approvals?item=${l.id}` },
@@ -164,7 +165,7 @@ export function AdminDashboard() {
       out.push({
         id: `ins-${l.id}`,
         title: `Insights · @${l.asset?.handle ?? "—"}`,
-        sub: `${l.campaign?.title ?? "—"} · ${l.format} · ${daysSince(l.createdAt)}d ago`,
+        sub: `${l.campaign?.title ?? "—"} · ${formatLabel(l.format)} · ${daysSince(l.createdAt)}d ago`,
         href: `/approvals?item=${l.id}`,
         waitingDays: daysSince(l.createdAt),
         primary: { label: "Approve", onClick: () => approveInsights.mutate(l.id), pending: approveInsights.isPending },

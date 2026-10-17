@@ -102,6 +102,9 @@ export async function applyProfileMetrics(assetId, metrics) {
       lastScrapedAt: new Date(),
       lastScrapeError: null,
       scrapeQueuedAt: null,
+      // Instagram answered, so the page exists (17 Oct — plan wizard's check).
+      profileCheckedAt: new Date(),
+      profileBroken: false,
     },
   });
 }

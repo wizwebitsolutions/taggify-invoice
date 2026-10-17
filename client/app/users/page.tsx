@@ -7,7 +7,7 @@ import { RequireAuth } from "@/components/auth/require-auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
-import { Field, TextField, Select, MoneyField, PhoneField } from "@/components/ui/form-field";
+import { Field, TextField, Select, PhoneField } from "@/components/ui/form-field";
 import { CategoryPicker } from "@/components/ui/category-picker";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { PlusIcon, TeamIcon, AssetIcon, SearchIcon } from "@/components/icons";
@@ -18,11 +18,12 @@ import { Tabs } from "@/components/ui/chips";
 import { Tag } from "@/components/ui/tag";
 import { Card, CardHeader, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
 import { useAuth } from "@/lib/auth-context";
+import { FORMATS, formatLabel } from "@/lib/formats";
+import { RateFields, rateCardsFrom, missingRequiredRates } from "@/components/inventory/rate-fields";
 import {
   admin as adminApi,
   auth as authApi,
   assets as assetsApi,
-  LINK_FORMATS,
   ApiError,
   hasAccess,
   PERMISSION_KEYS,
@@ -299,16 +300,24 @@ function UsersContent() {
                         ) : (
                           <div className="flex flex-col gap-2">
                             {(pagesByOwner.get(selected.id) ?? []).map((p) => {
-                              const reel = p.rateCards.find((r) => r.format === "reel");
-                              const story = p.rateCards.find((r) => r.format === "story");
+                              // Every rate the page has, in format order (14 Oct — five prices).
+                              const rates = FORMATS.flatMap((f) => {
+                                const rc = p.rateCards.find((r) => r.format === f);
+                                return rc ? [{ format: f, amount: rc.amount }] : [];
+                              });
                               return (
                                 <div key={p.id} className="flex items-center gap-3 rounded-[10px] border border-border px-3 py-2.5">
                                   <Cell2 primary={`@${p.handle}`} secondary={`${p.category ?? "—"} · ${followersLabel(p.followers)}`} />
-                                  <div className="ml-auto text-right">
-                                    <p className="text-[0.7rem] text-text-muted">Reel / Story</p>
-                                    <p className="text-[0.78rem] font-semibold tabular-nums">
-                                      {reel ? money(reel.amount) : "—"} / {story ? money(story.amount) : "—"}
-                                    </p>
+                                  <div className="ml-auto text-right" data-testid="page-rates">
+                                    {rates.length === 0 ? (
+                                      <p className="text-[0.78rem] text-text-faint">No rates yet</p>
+                                    ) : (
+                                      rates.map((r) => (
+                                        <p key={r.format} className="text-[0.72rem] tabular-nums">
+                                          <span className="text-text-muted">{formatLabel(r.format)}</span> <span className="font-semibold">{money(r.amount)}</span>
+                                        </p>
+                                      ))
+                                    )}
                                   </div>
                                 </div>
                               );
@@ -663,6 +672,11 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
   const phoneValid = phoneDigits.length === 0 || phoneDigits.length === 10;
   const showPhoneError = phoneBlurred && !phoneValid;
   const canSubmit = emailValid && phoneValid && (!requiresPage || validPages.length > 0);
+  // A full admin's page is approved on creation, so the server needs Reel
+  // and Story up front (RATES_REQUIRED, 14 Oct). Anyone else
+  // can't set rates at all — their pages land pending for an admin to price.
+  const [ratesAttempted, setRatesAttempted] = useState(false);
+  const pagesMissingRates = actorIsFullAdmin ? submittedPages.filter((p) => missingRequiredRates(p.rates).length > 0) : [];
 
   function updatePage(index: number, patch: Partial<DraftPage>) {
     setPages((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
@@ -695,14 +709,14 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
       const failures: string[] = [];
       for (const page of submittedPages) {
         try {
-          const asset = await assetsApi.create(token, page.handle, "instagram", {
+          // Rates go in the create call itself — an admin's page is approved
+          // on creation, so the server checks the required ones there.
+          const rateCards = actorIsFullAdmin ? rateCardsFrom(page.rates) : [];
+          await assetsApi.create(token, page.handle, "instagram", {
             category: page.category || undefined,
             ownerId: result.user.id,
+            ...(rateCards.length > 0 ? { rateCards } : {}),
           });
-          const rateCards = Object.entries(page.rates)
-            .filter(([, amount]) => amount.trim())
-            .map(([format, amount]) => ({ format, amount: Number(amount) }));
-          if (rateCards.length > 0) await assetsApi.updateRateCard(token, asset.id, rateCards);
         } catch (err) {
           failures.push(`@${page.handle} — ${err instanceof ApiError ? err.message : "couldn't be created"}`);
         }
@@ -724,6 +738,8 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
             onClose();
             return;
           }
+          setRatesAttempted(true);
+          if (pagesMissingRates.length > 0) return;
           createMutation.mutate();
         }}
         className="flex flex-1 min-h-0 flex-col gap-5 overflow-y-auto p-6 pt-1"
@@ -824,14 +840,18 @@ function CreateUserModal({ token, actorIsFullAdmin, onClose, onCreated }: { toke
                       )}
                     </div>
                     <CategoryPicker value={page.category} onChange={(v) => updatePage(i, { category: v })} />
-                    <div className="grid grid-cols-2 gap-2">
-                      {LINK_FORMATS.map((format) => (
-                        <div key={format} className="flex items-center justify-between gap-2">
-                          <span className="text-[0.75rem] capitalize text-text-faint">{format}</span>
-                          <MoneyField compact value={page.rates[format] ?? ""} onChange={(v) => updatePage(i, { rates: { ...page.rates, [format]: v } })} placeholder="rate" aria-label={`${format} rate`} className="w-28" />
-                        </div>
-                      ))}
-                    </div>
+                    {actorIsFullAdmin ? (
+                      <RateFields
+                        compact
+                        rates={page.rates}
+                        onChange={(rates) => updatePage(i, { rates })}
+                        required
+                        showErrors={ratesAttempted && Boolean(page.handle.trim())}
+                        idPrefix={pages.length > 1 ? `Page ${i + 1} ` : ""}
+                      />
+                    ) : (
+                      <p className="text-[0.72rem] text-text-muted">Pages you add land pending — an admin sets their rates before approving.</p>
+                    )}
                   </div>
                 ))}
                 <button

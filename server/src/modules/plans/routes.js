@@ -2,8 +2,9 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createPlanSchema, updatePlanSchema, createVariantSchema, importSheetUrlSchema, importSheetPagesSchema, clientInvoiceSchema, confirmPlanInvoiceAttachmentSchema, planFromSheetSchema, planSheetSyncSchema, addPendingPageSchema } from "./schemas.js";
+import { createPlanSchema, updatePlanSchema, createVariantSchema, importSheetUrlSchema, importSheetPagesSchema, clientInvoiceSchema, confirmPlanInvoiceAttachmentSchema, planFromSheetSchema, planSheetSyncSchema, addPendingPageSchema, generateSheetSchema, checkPagesSchema } from "./schemas.js";
 import * as plansService from "./service.js";
+import { checkProfiles } from "../assets/service.js";
 import { fetchSheetCsv, fetchSheetTabs } from "../campaigns/service.js";
 import { buildPlanPdf, buildPlanGroupPdf } from "../../lib/planPdf.js";
 import { buildClientInvoicePdf } from "../../lib/clientInvoicePdf.js";
@@ -250,6 +251,18 @@ router.post("/:id/sheet-pending/add", canEdit, validateBody(addPendingPageSchema
 
 // Every tab of the sheet (the uploaded plan sheet has a Details tab and a
 // Pages tab — 22 Sep); the client parses them.
+// "Are these pages still up?" (17 Oct) — the plan wizard confirms its picked
+// pages on Instagram. Only pages not checked in the last 24h cost an Apify
+// call (assets/service.js checkProfiles); a broken page is flagged so the
+// wizard can offer a replacement. Anyone who may edit plans may run it.
+router.post("/check-pages", canEdit, validateBody(checkPagesSchema), async (req, res, next) => {
+  try {
+    res.json(await checkProfiles(req.body.assetIds, { force: req.body.force === true }));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/import-sheet-tabs", canEdit, validateBody(importSheetUrlSchema), async (req, res, next) => {
   try {
     res.json({ tabs: await fetchSheetTabs(req.body.url) });
@@ -286,9 +299,11 @@ router.post("/:id/import-sheet-pages", canEdit, validateBody(importSheetPagesSch
 // real-numbers version into its own separate (never public) spreadsheet
 // instead. Returns the link to a brand-new spreadsheet owned by whichever
 // Google account completed /integrations/google/authorize.
-router.post("/:id/sheet", canEdit, async (req, res, next) => {
+// Body may carry `sheetFormat` (16 Oct) — picked in the popup that opens on
+// "Client sheet"; it's saved on the plan and used for this and later generates.
+router.post("/:id/sheet", canEdit, validateBody(generateSheetSchema), async (req, res, next) => {
   try {
-    res.json(await plansService.generatePlanSheet(req.params.id, req.user, { internal: req.query.variant === "internal" }));
+    res.json(await plansService.generatePlanSheet(req.params.id, req.user, { internal: req.query.variant === "internal", sheetFormat: req.body?.sheetFormat }));
   } catch (err) {
     next(err);
   }

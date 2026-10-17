@@ -7,6 +7,7 @@
  * for the Sheets API) reads the same keys, it just formats/lays them out
  * differently.
  */
+import { formatLabel } from "./formats.js";
 
 export function dateStr(d) {
   return d ? new Date(d).toISOString().slice(0, 10) : "";
@@ -35,7 +36,7 @@ export function linkRecord(link) {
     campaign: link.campaign?.title ?? "",
     page: link.asset ? `@${link.asset.handle}` : "",
     creator: link.submittedBy?.name ?? "",
-    format: link.format,
+    format: formatLabel(link.format),
     cost: Number(link.cost),
     status: link.status,
     invoiced: link.invoiceItem ? "Yes" : "No",

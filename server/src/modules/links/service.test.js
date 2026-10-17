@@ -5,7 +5,9 @@ const mockPrisma = {
   link: { findUnique: vi.fn(), update: vi.fn(), findFirst: vi.fn(), create: vi.fn(), delete: vi.fn() },
   linkCostRevision: { create: vi.fn(), findMany: vi.fn() },
   linkStatusEvent: { create: vi.fn() },
-  campaign: { findMany: vi.fn() },
+  campaign: { findMany: vi.fn(), findUnique: vi.fn(async () => null) },
+  // Reel + Story combo lookups (14 Oct, lib/comboSlots.js): no plan by default.
+  plan: { findUnique: vi.fn(async () => null) },
   asset: { findMany: vi.fn(), findUnique: vi.fn() },
   teamMembership: { findUnique: vi.fn() },
   user: { findUnique: vi.fn() },
@@ -482,7 +484,7 @@ describe("deleteLink", () => {
   // Other tests swap mockPrisma.campaignAssignment out wholesale, so set ours here.
   beforeEach(() => {
     mockPrisma.link.findUnique.mockReset();
-    mockPrisma.campaignAssignment = { updateMany: vi.fn() };
+    mockPrisma.campaignAssignment = { updateMany: vi.fn(), findFirst: vi.fn(async () => null) };
   });
 
   it("refuses a post on an invoice, by status or by invoice item, and writes nothing", async () => {
@@ -512,5 +514,306 @@ describe("deleteLink", () => {
     expect(mockPrisma.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { linkId: "l1" }, data: { linkId: null } });
     expect(mockPrisma.link.delete).toHaveBeenCalledWith({ where: { id: "l1" } });
     expect(recomputePostQuota).toHaveBeenCalledWith("c1", "a1");
+  });
+});
+
+describe("createLink on a Reel + Story combo page (14 Oct)", () => {
+  const page = { id: "asset-1", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 20000 }, { format: "story", amount: 15000 }] };
+  const creator = { id: "creator-1", role: "CREATOR" };
+  let tx;
+
+  // `slots` are the page's open combo slots across the phase's rows ("c1" and
+  // its extra-post row "c1-p2"); `slot` is shorthand for one on "c1".
+  // `claimed` is what the conditional claim returns: a number for every
+  // claim, or a function of the slot id (0 = someone else got it first).
+  function comboCampaign({ slot, slots, claimed = 1, comboItems = [{ assetId: "asset-1", format: "reel_story" }] } = {}) {
+    const open = slots ?? (slot ? [{ campaignId: "c1", ...slot }] : []);
+    mockPrisma.asset.findUnique.mockResolvedValue(page);
+    mockPrisma.campaign.findUnique = vi.fn(async () => ({ id: "c1", parentCampaignId: null, phaseNumber: 1 }));
+    mockPrisma.campaign.findMany = vi.fn(async () => [{ id: "c1" }, { id: "c1-p2" }]);
+    mockPrisma.plan.findUnique = vi.fn(async () => ({ items: comboItems }));
+    mockPrisma.campaignAssignment = {
+      // assertPageBooked → booked.
+      findFirst: vi.fn(async () => ({ id: "booking-1" })),
+      // openComboSlots → the open slots of the asked format on the asked rows.
+      findMany: vi.fn(async ({ where }) => open.filter((s) => where.campaignId.in.includes(s.campaignId) && (!s.format || s.format === where.format))),
+    };
+    mockPrisma.link.create = vi.fn(async ({ data }) => ({ id: "rate-card-link", ...data }));
+    mockPrisma.linkStatusEvent.create = vi.fn();
+    tx = {
+      link: { create: vi.fn(async ({ data }) => ({ id: "slot-link", ...data })) },
+      campaignAssignment: { updateMany: vi.fn(async ({ where }) => ({ count: typeof claimed === "function" ? claimed(where.id) : claimed })) },
+    };
+    mockPrisma.$transaction = vi.fn(async (fn) => fn(tx));
+  }
+
+  it("a combo post takes the open slot's split cost and claims that slot in one transaction", async () => {
+    comboCampaign({ slot: { id: "slot-reel", cost: 17142.85 } });
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/1", format: "reel" });
+
+    expect(link).toMatchObject({ id: "slot-link", cost: 17142.85, customRate: false, format: "reel" });
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { id: "slot-reel", linkId: null }, data: { linkId: "slot-link", postUrl: "https://ig/reel/1" } });
+    expect(mockPrisma.link.create).not.toHaveBeenCalled();
+    // Slots are looked up across the phase's rows, for this format, unclaimed and priced.
+    expect(mockPrisma.campaignAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { campaignId: { in: ["c1", "c1-p2"] }, assetId: "asset-1", format: "reel", linkId: null, cost: { not: null } } })
+    );
+    // The page is a combo page because the root's plan has a reel_story line for it.
+    expect(mockPrisma.plan.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "c1" } }));
+    // Both combos' lines are read (16 Oct).
+    expect(mockPrisma.plan.findUnique.mock.calls[0][0].select.items.where.format).toEqual({ in: ["reel_story", "repost_story"] });
+  });
+
+  // Repost + Story (16 Oct): the same slot claim, for the repost and story parts.
+  describe("Repost + Story combo pages (16 Oct)", () => {
+    const withRepostRate = () => mockPrisma.asset.findUnique.mockResolvedValue({ ...page, rateCards: [...page.rateCards, { format: "repost", amount: 6000 }] });
+
+    it("a repost on a Repost + Story page claims the repost slot at its split cost", async () => {
+      comboCampaign({ slots: [{ id: "slot-repost", campaignId: "c1", format: "repost", cost: 4285.71 }], comboItems: [{ assetId: "asset-1", format: "repost_story" }] });
+      withRepostRate();
+
+      const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/p/rp1", format: "repost" });
+
+      expect(link).toMatchObject({ id: "slot-link", cost: 4285.71, format: "repost" });
+      expect(tx.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { id: "slot-repost", linkId: null }, data: { linkId: "slot-link", postUrl: "https://ig/p/rp1" } });
+      expect(mockPrisma.link.create).not.toHaveBeenCalled();
+    });
+
+    it("its story claims the story slot too", async () => {
+      comboCampaign({ slots: [{ id: "slot-story", campaignId: "c1", format: "story", cost: 5714.29 }], comboItems: [{ assetId: "asset-1", format: "repost_story" }] });
+
+      const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/s/rp", format: "story" });
+      expect(link).toMatchObject({ id: "slot-link", cost: 5714.29 });
+    });
+
+    it("a repost on a Reel + Story-only page (and a reel on a Repost + Story-only page) is not a combo post: rate card, no slot lookup", async () => {
+      comboCampaign({ slots: [{ id: "slot-repost", campaignId: "c1", format: "repost", cost: 1 }] });
+      withRepostRate();
+      const repost = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/p/rp2", format: "repost" });
+      expect(repost).toMatchObject({ id: "rate-card-link", cost: 6000 });
+      expect(mockPrisma.campaignAssignment.findMany).not.toHaveBeenCalled();
+
+      comboCampaign({ slots: [{ id: "slot-reel", campaignId: "c1", format: "reel", cost: 1 }], comboItems: [{ assetId: "asset-1", format: "repost_story" }] });
+      const reel = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/rp3", format: "reel" });
+      expect(reel).toMatchObject({ id: "rate-card-link", cost: 20000 });
+      expect(mockPrisma.campaignAssignment.findMany).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("a page with both combos takes reel, repost and story slots by format", async () => {
+      const both = [
+        { assetId: "asset-1", format: "reel_story" },
+        { assetId: "asset-1", format: "repost_story" },
+      ];
+      comboCampaign({ slots: [{ id: "slot-repost", campaignId: "c1", format: "repost", cost: 4285.71 }, { id: "slot-reel", campaignId: "c1", format: "reel", cost: 17142.85 }], comboItems: both });
+      withRepostRate();
+      expect(await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/p/b1", format: "repost" })).toMatchObject({ cost: 4285.71 });
+      expect(await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/b2", format: "reel" })).toMatchObject({ cost: 17142.85 });
+    });
+  });
+
+  it("a second post of the same format (no open slot left) falls back to the rate card", async () => {
+    comboCampaign({ slot: null });
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/2", format: "reel" });
+
+    expect(link).toMatchObject({ id: "rate-card-link", cost: 20000, customRate: false });
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("a slot claimed in the meantime (and no other open) rolls the insert back and falls back to the rate card", async () => {
+    comboCampaign({ slot: { id: "slot-story", cost: 12857.15 }, claimed: 0 });
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/s/1", format: "story" });
+
+    expect(tx.link.create).toHaveBeenCalled();
+    expect(link).toMatchObject({ id: "rate-card-link", cost: 15000 });
+  });
+
+  it("an admin's custom amount still wins over the combo slot", async () => {
+    comboCampaign({ slot: { id: "slot-reel", cost: 17142.85 } });
+
+    // An admin sets a custom amount through the work import (createLink is the page owner's route).
+    mockPrisma.campaign.findMany.mockResolvedValue([{ id: "c1", title: "Launch" }]);
+    mockPrisma.asset.findMany.mockResolvedValue([{ ...page, handle: "demo.page" }]);
+    mockPrisma.link.findFirst.mockResolvedValue(null);
+    const result = await bulkImportLinks(admin, { rows: [{ campaignTitle: "Launch", pageHandle: "demo.page", url: "https://ig/reel/3", format: "reel", cost: 9999 }] });
+
+    expect(result.created[0]).toMatchObject({ id: "rate-card-link", cost: 9999, customRate: true });
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("a campaign without a plan (or a page with no combo line) is unchanged: rate card, no slot lookup", async () => {
+    comboCampaign({ slot: { id: "slot-reel", cost: 1 } });
+    mockPrisma.plan.findUnique = vi.fn(async () => null);
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/4", format: "reel" });
+    expect(link).toMatchObject({ id: "rate-card-link", cost: 20000 });
+
+    // A format that isn't a combo half never even looks.
+    mockPrisma.plan.findUnique.mockClear();
+    page.rateCards.push({ format: "post", amount: 8000 });
+    await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/p/9", format: "post" });
+    expect(mockPrisma.plan.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("bulk upload goes through the same path: the first reel claims the slot, the second is rate-card priced", async () => {
+    let open = [{ id: "slot-reel", campaignId: "c1", cost: 17142.85 }];
+    comboCampaign();
+    mockPrisma.campaignAssignment.findMany = vi.fn(async () => {
+      const s = open;
+      open = [];
+      return s;
+    });
+    mockPrisma.link.findFirst.mockResolvedValue(null);
+
+    const result = await bulkCreateLink(creator, { campaignId: "c1", assetId: "asset-1", format: "reel", urls: ["https://ig/reel/a", "https://ig/reel/b"] });
+
+    expect(result.created.map((l) => l.cost)).toEqual([17142.85, 20000]);
+  });
+
+  // Review fix (14 Oct): a plan with 2 posts per page puts post 2's combo
+  // slots on their own row ("c1-p2"), and postQuota counts the booking over
+  // the whole phase — so a second reel submitted on the root row must take
+  // post 2's slot at its split price, not the full reel rate.
+  it("a second combo reel on the root row claims the extra-post row's slot (split price), and the post stays on the row picked", async () => {
+    comboCampaign({ slots: [{ id: "slot-reel-p2", campaignId: "c1-p2", format: "reel", cost: 17142.85 }] });
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/p2", format: "reel" });
+
+    expect(link).toMatchObject({ id: "slot-link", cost: 17142.85, campaignId: "c1" });
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { id: "slot-reel-p2", linkId: null }, data: { linkId: "slot-link", postUrl: "https://ig/reel/p2" } });
+    expect(mockPrisma.link.create).not.toHaveBeenCalled();
+  });
+
+  it("prefers the slot on the row the creator picked over an older one on another row", async () => {
+    comboCampaign({
+      slots: [
+        { id: "slot-reel-root", campaignId: "c1", format: "reel", cost: 17142.85 },
+        { id: "slot-reel-p2", campaignId: "c1-p2", format: "reel", cost: 17142.86 },
+      ],
+    });
+    // The DB returns oldest first; the extra-post row's slot happens to be older.
+    const findMany = mockPrisma.campaignAssignment.findMany;
+    mockPrisma.campaignAssignment.findMany = vi.fn(async (args) => [...(await findMany(args))].reverse());
+
+    await createLink(creator, { campaignId: "c1-p2", assetId: "asset-1", url: "https://ig/reel/x", format: "reel" });
+
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "slot-reel-p2", linkId: null } }));
+  });
+
+  it("a slot claimed in the meantime moves on to the next open slot of that format instead of the rate card", async () => {
+    comboCampaign({
+      slots: [
+        { id: "slot-story-root", campaignId: "c1", format: "story", cost: 12857.15 },
+        { id: "slot-story-p2", campaignId: "c1-p2", format: "story", cost: 12857.14 },
+      ],
+      claimed: (id) => (id === "slot-story-root" ? 0 : 1),
+    });
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/s/2", format: "story" });
+
+    expect(link).toMatchObject({ id: "slot-link", cost: 12857.14 });
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.link.create).not.toHaveBeenCalled();
+  });
+
+  // Review fix (14 Oct): deleting a combo post frees its slot completely.
+  it("deleting a post on a combo page clears the claimed slot's URL as well as its link", async () => {
+    const claimed = { id: "slot-reel", campaignId: "c1", format: "reel", cost: 17142.85, linkId: "l9" };
+    comboCampaign({ slots: [claimed] });
+    mockPrisma.campaignAssignment.findFirst = vi.fn(async () => claimed);
+    mockPrisma.link.findUnique.mockResolvedValueOnce({ id: "l9", status: "SUBMITTED", campaignId: "c1", assetId: "asset-1", invoiceItem: null, payoutItem: null });
+    mockPrisma.campaignAssignment.updateMany = vi.fn(async () => ({ count: 1 }));
+    mockPrisma.link.delete.mockResolvedValue({ id: "l9" });
+    mockPrisma.$transaction = vi.fn(async (ops) => Promise.all(ops));
+
+    await deleteLink("l9");
+
+    expect(mockPrisma.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { linkId: "l9" }, data: { linkId: null, postUrl: null } });
+  });
+
+  // Review fix (16 Oct): only a combo part's slot had its URL written by a
+  // claim. A regular full-price slot (or campaign-sheet row) on the same
+  // combo page got its URL from the sheet — it's kept so the row can attach again.
+  it("deleting a post on a combo page keeps the URL of a regular line's slot it was attached to", async () => {
+    const regular = { id: "slot-reel-full", campaignId: "c1", format: "reel", cost: 20000, linkId: "l9" };
+    comboCampaign({
+      slots: [regular, { id: "slot-reel-combo", campaignId: "c1", format: "reel", cost: 17142.85, linkId: null }],
+      comboItems: [
+        { assetId: "asset-1", format: "reel", cost: 20000, postsPerProfile: 1 },
+        { assetId: "asset-1", format: "reel_story", cost: 30000, postsPerProfile: 1 },
+      ],
+    });
+    mockPrisma.campaignAssignment.findFirst = vi.fn(async () => regular);
+    mockPrisma.link.findUnique.mockResolvedValueOnce({ id: "l9", status: "SUBMITTED", campaignId: "c1", assetId: "asset-1", invoiceItem: null, payoutItem: null });
+    mockPrisma.campaignAssignment.updateMany = vi.fn(async () => ({ count: 1 }));
+    mockPrisma.link.delete.mockResolvedValue({ id: "l9" });
+    mockPrisma.$transaction = vi.fn(async (ops) => Promise.all(ops));
+
+    await deleteLink("l9");
+
+    expect(mockPrisma.campaignAssignment.updateMany).toHaveBeenCalledWith({ where: { linkId: "l9" }, data: { linkId: null } });
+  });
+
+  // Review fix (16 Oct): openComboSlots only offers combo slots.
+  it("a combo reel never claims a regular Reel line's full-price slot, even an older one on the picked row", async () => {
+    comboCampaign({
+      slots: [
+        { id: "slot-reel-full", campaignId: "c1", format: "reel", cost: 20000, linkId: null },
+        { id: "slot-reel-combo", campaignId: "c1-p2", format: "reel", cost: 17142.85, linkId: null },
+      ],
+      comboItems: [
+        { assetId: "asset-1", format: "reel", cost: 20000, postsPerProfile: 1 },
+        { assetId: "asset-1", format: "reel_story", cost: 30000, postsPerProfile: 2 },
+      ],
+    });
+    mockPrisma.campaign.findMany = vi.fn(async ({ select }) => (select?.postNumber ? [{ id: "c1", postNumber: 1 }, { id: "c1-p2", postNumber: 2 }] : [{ id: "c1" }, { id: "c1-p2" }]));
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/c", format: "reel" });
+
+    expect(link).toMatchObject({ id: "slot-link", cost: 17142.85 });
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "slot-reel-combo", linkId: null } }));
+  });
+
+  it("with the regular slot already taken and only it left, a combo reel is priced from the rate card (and never takes it)", async () => {
+    comboCampaign({
+      slots: [
+        { id: "slot-reel-full", campaignId: "c1", format: "reel", cost: 20000, linkId: null },
+        { id: "slot-reel-combo", campaignId: "c1", format: "reel", cost: 17142.85, linkId: "earlier" },
+      ],
+      comboItems: [
+        { assetId: "asset-1", format: "reel", cost: 20000, postsPerProfile: 1 },
+        { assetId: "asset-1", format: "reel_story", cost: 30000, postsPerProfile: 1 },
+      ],
+    });
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/reel/d", format: "reel" });
+
+    expect(link).toMatchObject({ id: "rate-card-link", cost: 20000 });
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("a story on a page with both combos takes the Reel + Story story slot before the Repost + Story one, even when that one is older", async () => {
+    comboCampaign({
+      slots: [
+        { id: "slot-story-repost", campaignId: "c1", format: "story", cost: 7500, linkId: null },
+        { id: "slot-story-reel", campaignId: "c1", format: "story", cost: 12857.15, linkId: null },
+      ],
+      comboItems: [
+        { assetId: "asset-1", format: "repost_story", cost: 10000, postsPerProfile: 1 },
+        { assetId: "asset-1", format: "reel_story", cost: 30000, postsPerProfile: 1 },
+      ],
+    });
+    mockPrisma.rateCard = { findMany: vi.fn(async () => [...page.rateCards, { format: "repost", amount: 5000 }]) };
+
+    const link = await createLink(creator, { campaignId: "c1", assetId: "asset-1", url: "https://ig/s/both", format: "story" });
+
+    expect(link).toMatchObject({ id: "slot-link", cost: 12857.15 });
+    expect(tx.campaignAssignment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "slot-story-reel", linkId: null } }));
   });
 });

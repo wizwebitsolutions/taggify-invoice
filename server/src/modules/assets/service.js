@@ -6,6 +6,26 @@ import { normalizeHandle, isValidHandle, parseImportSheet, ImportParseError } fr
 import { fetchSheetCsv } from "../campaigns/service.js";
 import { uploadProfilePic, isCloudinaryConfigured } from "../../lib/cloudinaryClient.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
+import { REQUIRED_RATE_FORMATS, formatLabel } from "../../lib/formats.js";
+
+/**
+ * Mandatory rates (16 Oct): a page can only be approved once it has Reel
+ * and Story rates (REQUIRED_RATE_FORMATS). Returns the required format keys
+ * missing from `rateCards` (positive amounts only), in the fixed order.
+ */
+export function missingRequiredRates(rateCards) {
+  const have = new Set(dedupeRateCards(rateCards).map((rc) => rc.format));
+  return REQUIRED_RATE_FORMATS.filter((f) => !have.has(f));
+}
+
+function listLabels(formats) {
+  const labels = formats.map(formatLabel);
+  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+function ratesRequiredError(missing) {
+  return new ApiError(400, "RATES_REQUIRED", `Add the ${listLabels(missing)} rate${missing.length > 1 ? "s" : ""}`);
+}
 
 /**
  * Creators see only their own assets; Plan Maker sees everything — it
@@ -34,11 +54,20 @@ export async function listAssets(user) {
     },
     orderBy: { createdAt: "desc" },
   });
+  // Who proposed each pending edit (16 Oct) — one lookup for the whole list.
+  const proposerIds = [...new Set(assets.map((a) => a.pendingEditById).filter(Boolean))];
+  const proposers = proposerIds.length ? await prisma.user.findMany({ where: { id: { in: proposerIds } }, select: { id: true, name: true, email: true } }) : [];
+  const proposerById = new Map(proposers.map((u) => [u.id, u]));
   return Promise.all(
     assets.map(async (asset) => {
       const { assignments, ...rest } = asset;
       const campaignsById = new Map((assignments ?? []).map((a) => [a.campaign.id, a.campaign]));
-      return { ...rest, campaigns: [...campaignsById.values()], engagement: await getAvgEngagement(asset.id, asset) };
+      return {
+        ...rest,
+        pendingEditBy: asset.pendingEditById ? proposerById.get(asset.pendingEditById) ?? null : null,
+        campaigns: [...campaignsById.values()],
+        engagement: await getAvgEngagement(asset.id, asset),
+      };
     })
   );
 }
@@ -113,7 +142,14 @@ function withManualOverrides(engagement, row) {
 // `followers` is only ever passed by the plan-sheet "Add to inventory" path
 // (plans/service.js addPendingPage) — a starting count from the sheet until
 // the background scrape below replaces it.
-export async function createAsset(user, { platform, handle, category, ownerId, rateCards, followers }) {
+//
+// `incompleteRates` (14 Oct) decides what happens when an ADMIN's page is
+// missing one of the required rates (Reel, Story — 16 Oct):
+// "reject" (default — the Create page form) is a 400 RATES_REQUIRED naming
+// them; "pending" (plans/service.js addPendingPage, which only knows the one
+// rate from the sheet) creates the page pending so the admin fills the rest
+// in before approving.
+export async function createAsset(user, { platform, handle, category, ownerId, rateCards, followers, grade, groupLink }, { incompleteRates = "reject" } = {}) {
   // Only an admin or plan maker may register a page on someone else's behalf
   // (the "create a user with their first page(s)" flow, and — 25 Sep — a
   // plan maker onboarding a vendor while building a plan); a CREATOR
@@ -163,6 +199,8 @@ export async function createAsset(user, { platform, handle, category, ownerId, r
   if (user.role !== "ADMIN" && rateCards?.length) {
     throw new ApiError(403, "FORBIDDEN", "Only an admin can set a page's rate card.");
   }
+  const missing = user.role === "ADMIN" ? missingRequiredRates(rates) : [];
+  if (missing.length > 0 && incompleteRates !== "pending") throw ratesRequiredError(missing);
   let asset;
   try {
     asset = await prisma.asset.create({
@@ -171,8 +209,11 @@ export async function createAsset(user, { platform, handle, category, ownerId, r
         platform,
         handle,
         category,
+        // Grade + group link (16 Oct) — optional, whoever adds the page may set them.
+        ...(grade !== undefined ? { grade } : {}),
+        ...(groupLink !== undefined ? { groupLink } : {}),
         ...(followers != null ? { followers } : {}),
-        approvalStatus: user.role === "ADMIN" ? "approved" : "pending",
+        approvalStatus: user.role === "ADMIN" && missing.length === 0 ? "approved" : "pending",
         ...(rates.length > 0 ? { rateCards: { create: rates } } : {}),
       },
       include: { rateCards: true },
@@ -216,6 +257,16 @@ export async function queueProfileRefresh(assetIds) {
 }
 
 export async function setApprovalStatus(assetId, approvalStatus) {
+  // Approving needs whatever REQUIRED_RATE_FORMATS lists — nothing, since 16 Oct
+  // (later): any page can be approved with any rates or none. A page that's
+  // already approved stays approvable (a repeat click changes nothing).
+  if (approvalStatus === "approved") {
+    const current = await prisma.asset.findUnique({ where: { id: assetId }, select: { approvalStatus: true, rateCards: { select: { format: true, amount: true } } } });
+    if (current && current.approvalStatus !== "approved") {
+      const missing = missingRequiredRates(current.rateCards.map((rc) => ({ format: rc.format, amount: Number(rc.amount) })));
+      if (missing.length > 0) throw new ApiError(400, "RATES_REQUIRED", `Set ${listLabels(REQUIRED_RATE_FORMATS)} rates before approving.`);
+    }
+  }
   const asset = await prisma.asset.update({ where: { id: assetId }, data: { approvalStatus } });
 
   // Second chance at a scrape right when a page goes live, rather than
@@ -402,6 +453,8 @@ export async function updateAssetDetails(assetId, fields) {
 
   const data = {};
   if ("category" in fields) data.category = fields.category;
+  if ("grade" in fields) data.grade = fields.grade;
+  if ("groupLink" in fields) data.groupLink = fields.groupLink;
   if ("avgViews" in fields) data.manualAvgViews = fields.avgViews;
   if ("avgLikes" in fields) data.manualAvgLikes = fields.avgLikes;
   if ("avgComments" in fields) data.manualAvgComments = fields.avgComments;
@@ -423,6 +476,133 @@ export async function updateRateCard(assetId, rateCards) {
       })
     )
   );
+}
+
+/* ── Planner edit proposals (16 Oct — "planner can add and edit inventory,
+ * but admin approves first") ───────────────────────────────────────────
+ * A plan maker can't change a live page directly (PUT /:id/details and
+ * /:id/rate-card are inventory.edit with no bare role). Instead their edit
+ * is parked on the row as `pendingEdit` and an admin applies or discards it.
+ * One proposal per page at a time: a newer one replaces the older.
+ */
+export async function proposeAssetEdit(user, assetId, fields) {
+  // An admin edits directly — a proposal from them would only wait on themselves.
+  if (user.role === "ADMIN") throw new ApiError(400, "USE_DIRECT_EDIT", "Admins edit pages directly.");
+  const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { id: true, ownerId: true } });
+  if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Page not found");
+  // Scope (review, 16 Oct): a plan maker may suggest an edit on any page (they
+  // price pages for clients); any other role that holds inventory.edit may only
+  // suggest changes to a page it owns — never park an edit on someone else's.
+  if (user.role !== "PLAN_MAKER" && asset.ownerId !== user.id) {
+    throw new ApiError(403, "FORBIDDEN", "You can only suggest changes to your own pages.");
+  }
+  const pendingEdit = {};
+  if ("category" in fields) pendingEdit.category = fields.category;
+  if ("grade" in fields) pendingEdit.grade = fields.grade;
+  if ("groupLink" in fields) pendingEdit.groupLink = fields.groupLink;
+  if (fields.rateCards) pendingEdit.rateCards = dedupeRateCards(fields.rateCards);
+  if (Object.keys(pendingEdit).length === 0) throw new ApiError(400, "NOTHING_TO_CHANGE", "Nothing to change.");
+  return prisma.asset.update({ where: { id: assetId }, data: { pendingEdit, pendingEditById: user.id, pendingEditAt: new Date() }, include: { rateCards: true } });
+}
+
+/** Admin applies ("approve") or discards ("reject") a page's pending edit. */
+export async function decideAssetEdit(assetId, decision) {
+  const asset = await prisma.asset.findUnique({ where: { id: assetId } });
+  if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Page not found");
+  const pending = asset.pendingEdit;
+  if (!pending || typeof pending !== "object") throw new ApiError(400, "NO_PENDING_EDIT", "This page has no edit waiting for approval.");
+  const clear = { pendingEdit: null, pendingEditById: null, pendingEditAt: null };
+  if (decision === "reject") return prisma.asset.update({ where: { id: assetId }, data: clear, include: { rateCards: true } });
+
+  const data = { ...clear };
+  if ("category" in pending) data.category = pending.category;
+  if ("grade" in pending) data.grade = pending.grade;
+  if ("groupLink" in pending) data.groupLink = pending.groupLink;
+  const rateCards = Array.isArray(pending.rateCards) ? dedupeRateCards(pending.rateCards) : [];
+  return prisma.$transaction(async (tx) => {
+    for (const entry of rateCards) {
+      await tx.rateCard.upsert({
+        where: { assetId_format: { assetId, format: entry.format } },
+        create: { assetId, format: entry.format, amount: entry.amount },
+        update: { amount: entry.amount, effectiveFrom: new Date() },
+      });
+    }
+    return tx.asset.update({ where: { id: assetId }, data, include: { rateCards: true } });
+  });
+}
+
+/* ── "Is this page still up?" (17 Oct — plan wizard) ─────────────────────
+ * Before a plan goes out, its pages are confirmed to exist on Instagram.
+ * Only pages not confirmed within the last 24h cost an Apify call; the rest
+ * answer from their last check. A page Instagram knows nothing about
+ * (deactivated, renamed, private) is marked `profileBroken` so the wizard
+ * can offer a replacement; one it finds has its numbers refreshed too.
+ */
+export const PROFILE_CHECK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+export async function checkProfiles(assetIds, { maxAgeMs = PROFILE_CHECK_MAX_AGE_MS, force = false } = {}) {
+  const assets = await prisma.asset.findMany({
+    where: { id: { in: [...new Set(assetIds)] } },
+    select: { id: true, handle: true, platform: true, profileCheckedAt: true, profileBroken: true, lastScrapeError: true },
+  });
+  const now = Date.now();
+  const stale = (a) => force || !a.profileCheckedAt || now - new Date(a.profileCheckedAt).getTime() > maxAgeMs;
+  const due = assets.filter((a) => a.platform === "instagram" && stale(a));
+  let results = {};
+  let error = null;
+  if (due.length > 0) {
+    try {
+      results = await ApifyInstagramProvider.getAccountMetricsBatch(due.map((a) => a.handle));
+    } catch (err) {
+      console.error("checkProfiles: Apify batch failed", err);
+      error = "Couldn't reach Instagram right now. Pages checked earlier show their last result.";
+    }
+  }
+  const out = [];
+  for (const a of assets) {
+    if (!due.includes(a)) {
+      out.push({ assetId: a.id, handle: a.handle, broken: a.profileBroken === true, checkedAt: a.profileCheckedAt, fresh: false, reason: a.profileBroken ? a.lastScrapeError : null });
+      continue;
+    }
+    const metrics = results[a.handle];
+    if (metrics === undefined) {
+      // Not answered (outage, timeout): say so rather than guess either way.
+      out.push({ assetId: a.id, handle: a.handle, broken: a.profileBroken === true, checkedAt: a.profileCheckedAt, fresh: false, unknown: true, reason: a.profileBroken ? a.lastScrapeError : null });
+      continue;
+    }
+    if (metrics === null) {
+      const reason = "Not found on Instagram — deactivated, renamed or private.";
+      await prisma.asset.update({ where: { id: a.id }, data: { profileBroken: true, profileCheckedAt: new Date(), lastScrapeError: reason } });
+      out.push({ assetId: a.id, handle: a.handle, broken: true, checkedAt: new Date(), fresh: true, reason });
+      continue;
+    }
+    try {
+      // Found: store the fresh numbers (applyProfileMetrics also clears broken + stamps the check).
+      await applyProfileMetrics(a.id, metrics);
+    } catch (err) {
+      console.error(`checkProfiles: couldn't store metrics for ${a.handle}`, err);
+      await prisma.asset.update({ where: { id: a.id }, data: { profileBroken: false, profileCheckedAt: new Date() } });
+    }
+    out.push({ assetId: a.id, handle: a.handle, broken: false, checkedAt: new Date(), fresh: true, reason: null });
+  }
+  return { results: out, checked: due.length, ...(error ? { error } : {}) };
+}
+
+/* ── Remove a page (16 Oct — "inventory remove option, admin only") ──────
+ * A page that has posted (links) or sits on an approved plan is history
+ * other records point at — it can be deactivated, not deleted. Anything
+ * else goes, along with its draft/rejected plan lines, rate cards and
+ * snapshots (the latter two cascade in the schema).
+ */
+export async function deleteAsset(assetId) {
+  const asset = await prisma.asset.findUnique({ where: { id: assetId }, select: { id: true, handle: true } });
+  if (!asset) throw new ApiError(404, "ASSET_NOT_FOUND", "Page not found");
+  const links = await prisma.link.count({ where: { assetId } });
+  if (links > 0) throw new ApiError(409, "ASSET_IN_USE", `@${asset.handle} has ${links} post${links === 1 ? "" : "s"} on record — deactivate it instead of deleting.`);
+  const approvedLines = await prisma.planItem.count({ where: { assetId, plan: { status: "APPROVED" } } });
+  if (approvedLines > 0) throw new ApiError(409, "ASSET_IN_USE", `@${asset.handle} is on an approved plan — deactivate it instead of deleting.`);
+  await prisma.$transaction([prisma.planItem.deleteMany({ where: { assetId } }), prisma.asset.delete({ where: { id: assetId } })]);
+  return { id: assetId };
 }
 
 /* ── Inventory "Create page" / "Import pages" (user request, 14 Sep) ─────
@@ -549,8 +729,28 @@ function vendorKey(vendor) {
  * (an ordinary Creator has no business seeing every other creator's name,
  * phone and email — this was a real leak before this role could reach here).
  */
+/**
+ * Import sheet's required cells (17 Oct — "mandatory fields are page name,
+ * page link, vendor and phone number, entertainment, reel, story cost"):
+ * Page Link is what the row is (an invalid one is "invalid"); the vendor is
+ * the account the row resolves to (missing → "owner-missing"/"owner-unknown",
+ * and a new vendor needs a contact to be created); this names the rest.
+ * Creators' own sheets carry no rates or vendor, so only Page Name applies.
+ */
+export const IMPORT_REQUIRED_RATES = ["entertainment", "reel", "story"];
+export function missingImportFields(row, { isCreator = false } = {}) {
+  const missing = [];
+  if (!row.pageName?.trim()) missing.push("Page Name");
+  if (!isCreator) {
+    const have = new Set(dedupeRateCards(row.rateCards).map((rc) => rc.format));
+    for (const f of IMPORT_REQUIRED_RATES) if (!have.has(f)) missing.push(`${formatLabel(f)} Rate`);
+  }
+  return missing;
+}
+
 export async function previewImport(parsed, user) {
   const isCreator = user?.role === "CREATOR";
+  const isAdmin = user?.role === "ADMIN";
   const owners = isCreator ? [] : await listPageOwners();
   const selfAsOwner = await selfAsOwnerFor(user);
   const handles = [...new Set(parsed.rows.map((r) => r.handle).filter(Boolean))];
@@ -571,13 +771,24 @@ export async function previewImport(parsed, user) {
   const rows = parsed.rows.map((row) => {
     // A creator's own sheet: vendor columns are ignored entirely.
     const vendor = isCreator ? null : vendorOf(row);
-    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, followers: row.followers, rateCards: row.rateCards, ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null };
+    // missingRates (16 Oct): an admin's row without a Reel or Story rate
+    // still imports, but lands pending until those rates are set.
+    // Empty for anyone else — their pages land pending, without rates, anyway.
+    const missingRates = isAdmin ? missingRequiredRates(row.rateCards) : [];
+    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, grade: row.grade ?? null, groupLink: row.groupLink ?? null, followers: row.followers, rateCards: row.rateCards, missingRates, missingFields: [], ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null };
     if (row.problem) return { ...base, status: "invalid", reason: row.problem };
     const key = row.handle.toLowerCase();
     if (seen.has(key)) return { ...base, status: "duplicate", reason: "Same handle appears earlier in this sheet." };
     seen.add(key);
 
     const matches = existingByHandle.get(key) ?? [];
+
+    // Required cells (17 Oct). A page already in Inventory is reported as such
+    // instead — nothing would be created from that row anyway.
+    const missingFields = missingImportFields(row, { isCreator });
+    if (missingFields.length > 0 && matches.length === 0) {
+      return { ...base, missingFields, status: "incomplete", reason: `Missing: ${missingFields.join(", ")}.` };
+    }
 
     // A creator's own sheet ignores whatever the owner column says — every
     // row is theirs, full stop — and a conflict never names whose account
@@ -808,10 +1019,14 @@ export async function importAssets(user, rows) {
           platform: "instagram",
           handle,
           category: input.category || null,
+          // Grade + group link (16 Oct), optional sheet columns.
+          grade: input.grade ?? null,
+          groupLink: input.groupLink ?? null,
           // The sheet's Page Name until Instagram gives its own (applyProfileMetrics below keeps it when Instagram has none).
           fullName: input.pageName?.trim() || null,
           followers: Math.min(metrics.followers ?? input.followers ?? 0, 2_147_483_647),
-          approvalStatus: isAdmin ? "approved" : "pending",
+          // An admin's row missing a required rate imports pending (14 Oct).
+          approvalStatus: isAdmin && missingRequiredRates(rateCards).length === 0 ? "approved" : "pending",
           ...(rateCards.length > 0 ? { rateCards: { create: rateCards.map((rc) => ({ format: rc.format, amount: rc.amount })) } } : {}),
         },
         select: { id: true, handle: true, ownerId: true, approvalStatus: true },

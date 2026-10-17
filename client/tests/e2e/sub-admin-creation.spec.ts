@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { signIn, mockApi, API_URL } from "./fixtures";
+import { signIn, mockApi, API_URL, addRate } from "./fixtures";
 
 /**
  * Access editor (newTask.md, 8 Sep — "Admin can create Sub-admins, each
@@ -162,6 +162,9 @@ test.describe("Add user — access editor per role", () => {
     await page.getByRole("combobox").selectOption("CREATOR");
     await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
     await page.getByPlaceholder("Instagram handle (without @)").fill("somepage");
+    await addRate(page, "reel", "20000");
+    await addRate(page, "story", "15000");
+    await addRate(page, "post", "9000");
     await page.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByText(/Account created for/)).toBeVisible();
@@ -185,6 +188,9 @@ test.describe("Add user — access editor per role", () => {
     await expect(page.getByTestId("access-summary-finance")).toHaveText("Off");
     await page.getByLabel("Email", { exact: true }).fill("new.user@gmail.com");
     await page.getByPlaceholder("Instagram handle (without @)").fill("somepage");
+    await addRate(page, "reel", "20000");
+    await addRate(page, "story", "15000");
+    await addRate(page, "post", "9000");
     await page.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByText(/Account created for/)).toBeVisible();

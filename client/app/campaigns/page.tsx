@@ -23,7 +23,8 @@ import { UploadLinksModal } from "@/components/links/upload-links-modal";
 import { PlusIcon, AlertIcon, SearchIcon, DownloadIcon, ArrowRightIcon, MoreIcon, CampaignIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
 import { campaigns as campaignsApi, assets as assetsApi, links as linksApi, ApiError, hasAccess, type Campaign, canUse } from "@/lib/api-client";
-import { parseAssignmentSheet, parseWorkImportSheet, type ParsedAssignmentRow, type ParsedWorkImportRow } from "@/lib/parseAssignmentSheet";
+import { parseAssignmentSheet, parseWorkImportSheet, SheetRowError, type ParsedAssignmentRow, type ParsedWorkImportRow } from "@/lib/parseAssignmentSheet";
+import { formatLabel } from "@/lib/formats";
 import { initialsOf, roleLabel, money, compactNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -370,8 +371,8 @@ function NewCampaignWizard({ token, onClose, onCreated }: { token: string; onClo
       const rows = await parseAssignmentSheet(file);
       if (rows.length === 0) setSheetError('No rows found — check the file has a header row (e.g. "handle", "phone").');
       setSheetRows(rows);
-    } catch {
-      setSheetError("Couldn't read that file — make sure it's a CSV export.");
+    } catch (err) {
+      setSheetError(err instanceof SheetRowError ? err.message : "Couldn't read that file — make sure it's a CSV export.");
       setSheetRows([]);
     }
   }
@@ -386,7 +387,10 @@ function NewCampaignWizard({ token, onClose, onCreated }: { token: string; onClo
       setSheetError(rows.length === 0 ? 'No rows found — check the sheet has a header row (e.g. "handle", "phone").' : "");
       setSheetRows(rows);
     },
-    onError: (err) => setSheetError(err instanceof ApiError ? err.message : "Couldn't fetch that sheet."),
+    onError: (err) => {
+      setSheetError(err instanceof ApiError || err instanceof SheetRowError ? err.message : "Couldn't fetch that sheet.");
+      if (err instanceof SheetRowError) setSheetRows([]);
+    },
   });
 
   const createMutation = useMutation({
@@ -487,7 +491,7 @@ function NewCampaignWizard({ token, onClose, onCreated }: { token: string; onClo
                         <TR key={i}>
                           <TD className="font-semibold">@{r.handle}</TD>
                           <TD className="text-text-muted">{r.phone || "—"}</TD>
-                          <TD className="text-text-muted">{r.format || "—"}</TD>
+                          <TD className="text-text-muted">{formatLabel(r.format) || "—"}</TD>
                           <TD right>{r.cost ? money(Number(r.cost)) : "—"}</TD>
                         </TR>
                       ))}
@@ -567,8 +571,8 @@ function BulkImportWorkModal({ token, onClose, onImported }: { token: string; on
     setParseError("");
     try {
       applyParsed(await parseWorkImportSheet(file));
-    } catch {
-      setParseError("Couldn't read that file — make sure it's a CSV export.");
+    } catch (err) {
+      setParseError(err instanceof SheetRowError ? err.message : "Couldn't read that file — make sure it's a CSV export.");
       setRows([]);
     }
   }
@@ -581,7 +585,10 @@ function BulkImportWorkModal({ token, onClose, onImported }: { token: string; on
       setFileName("");
       applyParsed(parsed);
     },
-    onError: (err) => setParseError(err instanceof ApiError ? err.message : "Couldn't fetch that sheet."),
+    onError: (err) => {
+      setParseError(err instanceof ApiError || err instanceof SheetRowError ? err.message : "Couldn't fetch that sheet.");
+      if (err instanceof SheetRowError) setRows([]);
+    },
   });
   const importMutation = useMutation({ mutationFn: () => linksApi.bulkImport(token, rows), onSuccess: onImported });
 

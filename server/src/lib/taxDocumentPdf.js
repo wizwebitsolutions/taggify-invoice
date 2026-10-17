@@ -18,7 +18,9 @@ import { amountInWords } from "./amountInWords.js";
  *    partyLabel, partyLines: [{ text, bold? }],
  *    detailRows: [[label, value]],
  *    rows: [{ description, quantity, rate, amount }],
- *    subtotal, gstAmount, total,
+ *    subtotal, discount?, taxable?, gstAmount, total,
+ *      (discount, 16 Oct: a flat amount off the subtotal before tax; taxable
+ *       = subtotal − discount is what the tax heads and HSN summary use)
  *    bankLabel, bankRows: [[label, value]] | null, bankMissingNote,
  *    leftSignatureLabel, remark?,
  *  }
@@ -221,6 +223,12 @@ function renderTaxDocument(doc, model) {
     });
   });
   drawRow([]);
+  const discount = Number(model.discount) || 0;
+  const taxable = model.taxable ?? Math.max(0, Number(model.subtotal) - discount);
+  if (discount > 0) {
+    drawRow(["", "", "", "", "", "", "Discount", `- ${num2(discount)}`]);
+    drawRow(["", "", "", "", "", "", "Taxable Value", num2(taxable)], { bold: true });
+  }
   const heads = isGst ? taxHeads(model) : [];
   for (const head of heads) drawRow(["", "", "", "", "", "", head.label, num2(head.amount)], { bold: true });
   drawRow(["", "", "", "", "", "", "Total", num2(model.total)], { bold: true, h: 17 });
@@ -251,8 +259,8 @@ function renderTaxDocument(doc, model) {
     doc.font("Helvetica-Bold").fontSize(8).fillColor(INK).text("HSN/SAC Summary", left, y + 3.5, { width: W, align: "center" });
     y += 14;
     srow(["HSN/SAC", "Taxable Value", ...heads.flatMap((h) => [`${h.label} Rate`, `${h.label} Amount`]), "Total Tax"], { bold: true, fill: BAND_BG });
-    srow([hsnSac, num2(model.subtotal), ...heads.flatMap((h) => [`${h.rate}%`, num2(h.amount)]), num2(model.gstAmount)]);
-    srow(["Total", num2(model.subtotal), ...heads.flatMap((h) => ["", num2(h.amount)]), num2(model.gstAmount)], { bold: true });
+    srow([hsnSac, num2(taxable), ...heads.flatMap((h) => [`${h.rate}%`, num2(h.amount)]), num2(model.gstAmount)]);
+    srow(["Total", num2(taxable), ...heads.flatMap((h) => ["", num2(h.amount)]), num2(model.gstAmount)], { bold: true });
   }
   doc.rect(left, y, W, 15).lineWidth(0.6).strokeColor(RULE).stroke();
   doc.font("Helvetica-BoldOblique").fontSize(8.5).fillColor(INK);

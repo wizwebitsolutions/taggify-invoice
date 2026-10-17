@@ -91,7 +91,7 @@ describe("financeGoogleSheetExportJob — newTask.md, 8 Sep", () => {
 
     const linkRows = mockWriteTab.mock.calls[1][0].rows;
     expect(linkRows[0]).toEqual(["Campaign", "Page", "Creator", "Format", "Cost", "Status", "Invoiced", "Posted At", "Created At"]);
-    expect(linkRows[1]).toEqual(["Launch Week", "@demo.page", "Demo Creator", "reel", 5000, "INVOICED", "Yes", "", "2026-08-18"]);
+    expect(linkRows[1]).toEqual(["Launch Week", "@demo.page", "Demo Creator", "Reel", 5000, "INVOICED", "Yes", "", "2026-08-18"]);
 
     const clientRows = mockWriteTab.mock.calls[2][0].rows;
     expect(clientRows[0]).toEqual(["Invoice #", "Client", "Plan", "Campaign", "Subtotal", "GST %", "GST Amount", "Total", "Status", "Issued At", "Paid At", "Paid Amount"]);

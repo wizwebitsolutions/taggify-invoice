@@ -64,6 +64,28 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
   `scrapeQueuedAt` is set while a scrape is queued/running (create, import,
   `POST /assets/refresh-profiles { assetIds }` — the bulk "Refresh from
   Instagram" for a selection, background, one page at a time).
+  16 Oct: `Asset.grade` (A/B/C, optional, set by hand) and `Asset.groupLink`
+  (optional URL) — accepted by `POST /assets`, `PUT /assets/:id/details`, the
+  import rows, and the template's Grade / Group Link columns.
+  `DELETE /assets/:id` (ADMIN role + inventory.edit) removes a page and its
+  draft-plan lines; 409 `ASSET_IN_USE` when the page has links or sits on an
+  APPROVED plan (deactivate instead). Planner edits: `PUT
+  /assets/:id/propose-edit` (PLAN_MAKER with its inventory.edit switch on;
+  `{ category?, grade?, groupLink?, rateCards? }`) parks the change on
+  `Asset.pendingEdit` (+ `pendingEditById/At`) without touching the live row;
+  `PUT /assets/:id/edit-decision { decision: "approve" | "reject" }`
+  (inventory.approve) applies or discards it. `GET /assets` adds
+  `pendingEditBy` for the row.
+  17 Oct: the import sheet's required cells are Page Name, Page Link, Vendor
+  Name, Vendor Contact (phone), Entertainment / Brand, Reel and Story rates
+  (`IMPORT_REQUIRED_HEADERS`, orange in the template); a staff/planner row
+  missing Page Name or one of the three rates previews as `incomplete`
+  (`missingFields`) and isn't imported. `checkProfiles(assetIds, { force })`
+  confirms pages on Instagram, asking Apify only for pages not checked in 24h
+  (`Asset.profileCheckedAt`); a page Instagram doesn't know gets
+  `profileBroken` + `lastScrapeError`, a found one has its numbers refreshed.
+  Exposed as `POST /plans/check-pages { assetIds, force? }` (plans.edit /
+  PLAN_MAKER) for the plan wizard, which offers a replacement page.
 - `campaigns` — brand campaigns. Phases (22 Sep): every child row hangs off
   the root (`parentCampaignId`). `postNumber` 1 = a real phase (added via
   `POST /campaigns/:id/phases` by Admin or the Plan Maker who owns it; starts
@@ -79,6 +101,7 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
 - `screenshots` — Cloudinary signed upload flow, mounted at `/links/:linkId/screenshot`
 - `invoices` — creator-raised invoices (`POST /invoices/bulk`, CREATOR only), Admin/Finance approve (`POST /invoices/:id/approve`), Finance manual mark-paid (APPROVED only), GST status. Also the receivables ledger of client invoices (`GET /invoices/client`, `POST /invoices/client/:id/mark-paid`, `/cancel`) — see `plans` below for where they are minted
 - `plans` also owns the Taggify → client invoice: `POST /plans/:id/client-invoice` (client details from the popup) and `GET /plans/:id/client-invoice.pdf`
+- `plans`, 16 Oct: (1) the budget is a target, not a cap — `PLAN_OVER_BUDGET` is gone; over budget shows as a negative `budgetVariance` and the pending "budget" sheet entry is no longer produced. (2) `Plan.discount` (flat rupees, before GST): `overview.discount`, `overview.taxable = max(0, subtotal − discount)`, GST on `taxable`, `total = taxable + gstAmount`; mirrored in `internal.computed*`, both sheet formats, the plan PDF, the client invoice PDF and `ClientInvoice.discount`. (3) `inactivePages` on every annotated plan: `[{ assetId, handle, reason: "inactive" | "rejected" | "broken" }]` for pages switched off / rejected / gone from Instagram (17 Oct) since the plan was built. (4) `POST /plans/:id/sheet` takes `{ sheetFormat? }` and saves it on the plan before writing. (5) The client sheet carries no Active/Not active mark (tab names end `· Plan A`; band and tab colour are internal-only); old client tabs titled `· Plan A · Active` are still found and renamed. (6) Generated sheets are shared for editing with the requester and the plan's creator.
 - `GET /plans/clients` — saved clients (21 Sep): there's no Client table, so this folds the caller's visible plans (ADMIN: all; otherwise own — same scope as `GET /plans`) into one entry per billing identity (client name + GSTIN, newest plan wins). Feeds the wizard's Client name suggestions and the invoice popup's Company name dropdown / auto-fill
 - `plans` also keeps an attached invoice PDF per plan (Admin / Plan Maker, 14 Sep): `POST /plans/:id/invoice-attachment/upload-url` → direct Cloudinary upload → `POST /plans/:id/invoice-attachment` (`{ publicId, fileName }`, `.pdf` names only) / `DELETE /plans/:id/invoice-attachment`; surfaced as `plan.invoiceAttachment`
 - `notifications` — in-app notification rows (polled, no pub/sub)

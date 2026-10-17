@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { signIn, mockApi, API_URL } from "./fixtures";
+import { signIn, mockApi, API_URL, addRate } from "./fixtures";
 
 /**
  * People → "Add a user" (24 Sep): email is required (it's the new account's
@@ -126,5 +126,44 @@ test.describe("Add user — email required, phone optional", () => {
 
     expect(assetCreatePosted, "no asset should be created for a page typed while a different role was selected").toBe(false);
     await expect(page.getByText(/page.*created\.$/)).toHaveCount(0);
+  });
+  test("admin adding a creator's page must give Reel and Story rates (the rest optional); they go in the page's create call (14 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    let signedUp = false;
+    await page.route(`${API_URL}/auth/signup`, (route) => {
+      signedUp = true;
+      return route.fulfill({ json: { user: { id: "new-c-9", phoneNumber: null, email: "c@gmail.com", name: null, role: "CREATOR" }, generatedPassword: "Abcdefg1!" } });
+    });
+    let assetBody: Record<string, unknown> | undefined;
+    await page.route(`${API_URL}/assets`, (route) => {
+      if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+      assetBody = route.request().postDataJSON();
+      return route.fulfill({ status: 201, json: { id: "asset-9", handle: "pricedpage", ownerId: "new-c-9", rateCards: [] } });
+    });
+
+    await page.goto("/users");
+    await page.getByRole("button", { name: "Add user" }).click();
+    await page.getByLabel("Email", { exact: true }).fill("c@gmail.com");
+    await page.getByPlaceholder("Instagram handle (without @)").fill("pricedpage");
+    // Rates are added one format at a time; none is mandatory (16 Oct).
+    await addRate(page, "reel", "20000");
+    await addRate(page, "story", "15000");
+    await addRate(page, "post", "9000");
+    await addRate(page, "political_reel", "25000");
+    await addRate(page, "repost_story", "11000");
+    await page.getByRole("button", { name: "Create user" }).click();
+    await expect(page.getByText(/Account created for/)).toBeVisible();
+    expect(assetBody).toMatchObject({
+      handle: "pricedpage",
+      ownerId: "new-c-9",
+      rateCards: [
+        { format: "reel", amount: 20000 },
+        { format: "political_reel", amount: 25000 },
+        { format: "post", amount: 9000 },
+        { format: "story", amount: 15000 },
+        { format: "repost_story", amount: 11000 },
+      ],
+    });
   });
 });

@@ -70,4 +70,35 @@ test.describe("Google Sheet link import", () => {
 
     await expect(page.getByText("1 row parsed.")).toBeVisible();
   });
+  test("formats are read through the shared aliases; a Reel + Story row is refused with the server's wording (14 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    let csv = "campaign,handle,url,format\nLaunch Week,bignpage,https://instagram.com/p/abc,Static\n";
+    await page.route(`${API_URL}/campaigns/import-sheet-url`, (route) => route.fulfill({ json: { csv } }));
+    let imported: unknown;
+    await page.route(`${API_URL}/links/import`, (route) => {
+      imported = route.request().postDataJSON();
+      return route.fulfill({ status: 201, json: { created: [], skipped: [] } });
+    });
+
+    await page.goto("/campaigns");
+    await page.getByRole("button", { name: "Import work" }).click();
+    await page.getByPlaceholder("Or paste a Google Sheet link…").fill("https://docs.google.com/spreadsheets/d/abc123/edit");
+    await page.getByRole("button", { name: "Fetch rows" }).click();
+    await expect(page.getByText("1 row parsed.")).toBeVisible();
+
+    csv = "campaign,handle,url,format\nLaunch Week,bignpage,https://instagram.com/p/abc,Reel + Story\n";
+    await page.getByRole("button", { name: "Fetch rows" }).click();
+    await expect(page.locator("p.text-rose")).toContainText("Row 2: Reel + Story is two posts: use one row per post (Reel and Story)");
+    await expect(page.getByText("1 row parsed.")).toHaveCount(0);
+    expect(imported).toBeUndefined();
+    // The new combo (14 Oct) is refused the same way; new aliases ("Brand reel", "Re-post") read fine.
+    csv = "campaign,handle,url,format\nLaunch Week,bignpage,https://instagram.com/p/abc,Repost + Story\n";
+    await page.getByRole("button", { name: "Fetch rows" }).click();
+    await expect(page.locator("p.text-rose")).toContainText("Row 2: Repost + Story is two posts: use one row per post (Repost and Story)");
+    csv = "campaign,handle,url,format\nLaunch Week,bignpage,https://instagram.com/p/abc,Brand reel\nLaunch Week,bignpage,https://instagram.com/p/def,Re-post\n";
+    await page.getByRole("button", { name: "Fetch rows" }).click();
+    await expect(page.getByText("2 rows parsed.")).toBeVisible();
+    expect(imported).toBeUndefined();
+  });
 });

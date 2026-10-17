@@ -5,6 +5,8 @@
  * auth-header/error-shape conventions.
  */
 
+import { BOOKABLE_FORMATS } from "./formats";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
 
 export class ApiError extends Error {
@@ -342,8 +344,19 @@ export const PAGE_CATEGORIES = ["Meme page", "News page", "Entertainment", "Life
 // card can carry a free-form custom format too), just the starting set
 // shown in pickers. Shared between assets/page.tsx and users/page.tsx's
 // multi-page "Add user" flow.
-/** reel/story only, app-wide (user request, 14 Sep — "no other format from entire app"). Mirrors server/src/lib/formats.js. */
-export const LINK_FORMATS = ["reel", "story"] as const;
+/** The formats a post (link) can be submitted as — the eight bookable formats (14 Oct; the two combos are plan-only). Mirrors server/src/lib/formats.js's BOOKABLE_FORMATS; see lib/formats.ts for labels and the full rate list. */
+export const LINK_FORMATS = BOOKABLE_FORMATS;
+
+export type Grade = "A" | "B" | "C";
+export const GRADES: Grade[] = ["A", "B", "C"];
+
+/** What a planner proposed for a page (PUT /assets/:id/propose-edit). Only the keys present change on approval. */
+export interface PendingAssetEdit {
+  category?: string | null;
+  grade?: Grade | null;
+  groupLink?: string | null;
+  rateCards?: { format: string; amount: number }[];
+}
 
 export interface Asset {
   id: string;
@@ -355,6 +368,17 @@ export interface Asset {
   profilePicUrl?: string | null;
   /** Free-form, e.g. "Meme page", "News page" — set at creation, editable from Inventory's Edit panel (28 Sep). */
   category?: string | null;
+  /** Page grade A / B / C (16 Oct) — set by hand, optional. */
+  grade?: Grade | null;
+  /** The page's WhatsApp/Telegram group link (16 Oct), optional. */
+  groupLink?: string | null;
+  /** A planner's proposed edit waiting for an admin (16 Oct) — the live fields above are unchanged until approved. */
+  pendingEdit?: PendingAssetEdit | null;
+  pendingEditBy?: { id: string; name: string | null; email?: string | null } | null;
+  pendingEditAt?: string | null;
+  /** Plan wizard's Instagram check (17 Oct): when the page was last confirmed to exist, and whether it came back missing. */
+  profileCheckedAt?: string | null;
+  profileBroken?: boolean;
   approvalStatus: string;
   /** Admin's Active / Inactive switch (8 Oct). An inactive page can't be added to new plans. */
   isActive?: boolean;
@@ -626,6 +650,8 @@ export interface PlanItem {
   /** How many posts on this page this line covers — cost/clientCost above are per-post. */
   postsPerProfile: number;
   asset?: { id: string; handle: string; category: string | null; followers: number };
+  /** A combo line's price per one combo, split between its two posts, keyed by the part formats — {reel, story} or {repost, story} (rupees; sums to the line's cost). */
+  comboSplit?: Record<string, number> | null;
 }
 
 export interface Plan {
@@ -648,6 +674,10 @@ export interface Plan {
   /** Free-form brief/note, rendered as an extra bullet on the PDF's NOTES block. */
   notes: string | null;
   budget: string | null;
+  /** Flat discount in rupees off the client subtotal, before GST (16 Oct). 0 = none. */
+  discount: number;
+  /** Pages on the plan switched off, rejected, or gone from Instagram since it was built (16–17 Oct) — the UI flags them. */
+  inactivePages?: { assetId: string; handle: string; reason: "inactive" | "rejected" | "broken" }[];
   /** Whether the PDF/overview adds a GST line on top of the client subtotal — derived from gstPercent. */
   isGstPlan: boolean;
   /** The GST % applied to this plan's overview/invoice, editable at plan creation. Null = no GST line. */
@@ -674,6 +704,9 @@ export interface Plan {
     /** Estimated from avg. views per post — there's no real impressions metric captured anywhere. */
     expectedImpressions: number;
     subtotal: number;
+    /** subtotal − discount (floored at 0) — what GST is charged on (16 Oct). */
+    discount: number;
+    taxable: number;
     gstAmount: number;
     total: number;
   };
@@ -683,6 +716,8 @@ export interface Plan {
     computedPosts: number;
     computedImpressions: number;
     computedSubtotal: number;
+    computedDiscount: number;
+    computedTaxable: number;
     computedGstAmount: number;
     computedTotal: number;
   };
@@ -813,14 +848,19 @@ export const billing = {
 // ── Assets ──────────────────────────────────────────────────────────
 export const assets = {
   list: (token: string) => request<Asset[]>("/assets", { token }),
-  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string; rateCards?: { format: string; amount: number }[] } = {}) =>
+  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string; rateCards?: { format: string; amount: number }[]; grade?: Grade | null; groupLink?: string | null } = {}) =>
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
+  // Remove a page (16 Oct) — ADMIN role + inventory.edit. 409 for a page with posts or on an approved plan.
+  remove: (token: string, assetId: string) => request<{ id: string }>(`/assets/${assetId}`, { method: "DELETE", token }),
+  // A planner's proposed edit (16 Oct): parked on the row until an admin decides. Only the keys sent are proposed.
+  proposeEdit: (token: string, assetId: string, body: PendingAssetEdit) => request<Asset>(`/assets/${assetId}/propose-edit`, { method: "PUT", token, body }),
+  decideEdit: (token: string, assetId: string, decision: "approve" | "reject") => request<Asset>(`/assets/${assetId}/edit-decision`, { method: "PUT", token, body: { decision } }),
   updateRateCard: (token: string, assetId: string, rateCards: { format: string; amount: number }[]) =>
     request<RateCard[]>(`/assets/${assetId}/rate-card`, { method: "PUT", token, body: { rateCards } }),
   // Category + manual engagement from Inventory's Edit panel (28 Sep). Only the
   // keys sent are touched; null clears one (no category, or that figure back to
   // whatever the scrape says).
-  updateDetails: (token: string, assetId: string, body: { category?: string | null; avgViews?: number | null; avgLikes?: number | null; avgComments?: number | null }) =>
+  updateDetails: (token: string, assetId: string, body: { category?: string | null; grade?: Grade | null; groupLink?: string | null; avgViews?: number | null; avgLikes?: number | null; avgComments?: number | null }) =>
     request<Asset>(`/assets/${assetId}/details`, { method: "PUT", token, body }),
   setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
     request<Asset>(`/assets/${assetId}/approval`, { method: "PUT", token, body: { approvalStatus } }),
@@ -868,7 +908,7 @@ export interface PageOwner {
   email?: string | null;
 }
 
-export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "conflict" | "owner-missing" | "owner-unknown";
+export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "conflict" | "owner-missing" | "owner-unknown" | "incomplete";
 
 export interface ImportPreviewRow {
   rowNumber: number;
@@ -877,6 +917,9 @@ export interface ImportPreviewRow {
   /** The sheet's "Page Name" column — saved as the page's display name. */
   pageName?: string | null;
   category: string | null;
+  /** Grade (A/B/C) and Group Link columns (16 Oct), when the sheet has them. */
+  grade?: Grade | null;
+  groupLink?: string | null;
   followers: number | null;
   rateCards: { format: string; amount: number }[];
   /** What the sheet's owner cell said, verbatim. */
@@ -888,6 +931,10 @@ export interface ImportPreviewRow {
   reason: string | null;
   /** What the sheet's Vendor Name / Vendor Contact columns said (14 Oct). */
   vendor?: ImportVendorContact | null;
+  /** Always [] since 16 Oct (no rate is mandatory); kept for older servers. */
+  missingRates?: string[];
+  /** Required sheet cells the row lacks (17 Oct: Page Name, Entertainment / Reel / Story rates) — status "incomplete". */
+  missingFields?: string[];
 }
 
 export interface ImportVendorContact {
@@ -924,6 +971,8 @@ export interface ImportAssetRow {
   handle: string;
   ownerId: string;
   category?: string | null;
+  grade?: Grade | null;
+  groupLink?: string | null;
   pageName?: string | null;
   followers?: number | null;
   rateCards?: { format: string; amount: number }[];
@@ -1403,6 +1452,18 @@ export interface PlanItemInput {
 // shape (see the Plans list's completeness indicator).
 export type SheetFormat = "breakdown" | "summary";
 
+export interface PageCheckResult {
+  assetId: string;
+  handle: string;
+  broken: boolean;
+  checkedAt: string | null;
+  /** True when Instagram was asked just now; false when the answer is the last check's. */
+  fresh: boolean;
+  /** Instagram didn't answer for this page (outage / timeout) — nothing changed. */
+  unknown?: boolean;
+  reason?: string | null;
+}
+
 export interface PlanFields {
   sheetFormat?: SheetFormat;
   name: string;
@@ -1413,6 +1474,8 @@ export interface PlanFields {
   clientAddress?: string;
   notes?: string;
   budget?: number;
+  /** Flat discount before GST (16 Oct). null clears it. */
+  discount?: number | null;
   gstPercent?: number | null;
   items?: PlanItemInput[];
   overrideFollowers?: number | null;
@@ -1426,6 +1489,8 @@ export interface SheetImportResult {
   createdCount: number;
   addedCount: number;
   failures: { handle: string; reason: string }[];
+  /** Rows with no cost in the sheet and no rate on the page (16 Oct): not stored yet — the wizard adds them as lines whose cost is typed later. */
+  needsCost?: { assetId: string; handle: string; format: string; postsPerProfile: number }[];
   plan: Plan;
 }
 
@@ -1574,8 +1639,13 @@ export const plans = {
   // The plan's deliverable (user request, 10 Sep — "plan will be of google
   // sheet, not in pdf, it'll generate google sheet and will provide link"),
   // superseding the PDF downloads below as the primary Build-step action.
-  generateSheet: (token: string, id: string, variant?: "client" | "internal") =>
-    request<{ spreadsheetUrl: string; sharedWith?: string; shareError?: string }>(`/plans/${id}/sheet${variant === "internal" ? "?variant=internal" : ""}`, { method: "POST", token }),
+  // "Are these pages still up?" (17 Oct): confirms the picked pages on Instagram. Only pages not checked in the
+  // last 24h cost an Apify call; `force` re-checks all. A broken page is flagged on the asset (profileBroken).
+  checkPages: (token: string, assetIds: string[], force = false) =>
+    request<{ results: PageCheckResult[]; checked: number; error?: string }>("/plans/check-pages", { method: "POST", token, body: { assetIds, ...(force ? { force: true } : {}) } }),
+  // `sheetFormat` (16 Oct) is picked in the popup that opens on "Client sheet"; the server saves it on the plan first.
+  generateSheet: (token: string, id: string, variant?: "client" | "internal", sheetFormat?: SheetFormat) =>
+    request<{ spreadsheetUrl: string; sharedWith?: string; shareError?: string }>(`/plans/${id}/sheet${variant === "internal" ? "?variant=internal" : ""}`, { method: "POST", token, body: sheetFormat ? { sheetFormat } : {} }),
   // The downloadable sample (user request, 10 Sep — "give downloadable
   // sample template for google sheet so they'll know how their execution
   // should look like") — one fixed document, not scoped to any plan.

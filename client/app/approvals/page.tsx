@@ -13,25 +13,31 @@ import { Chip, Chips, Segmented } from "@/components/ui/chips";
 import { Card, Table, THead, TH, TR, TD, Cell2 } from "@/components/ui/data-table";
 import { Tag, type TagTone } from "@/components/ui/tag";
 import { Sheet } from "@/components/ui/sheet";
-import { TableSkeleton, EmptyState } from "@/components/ui/table-parts";
+import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
 import { LinkDetailPanel } from "@/components/dashboard/link-detail-panel";
 import { ChevronRightIcon, CheckIcon, ArrowRightIcon } from "@/components/icons";
 import { useAuth } from "@/lib/auth-context";
-import { links as linksApi, assets as assetsApi, billing as billingApi, plans as plansApi, campaigns as campaignsApi, hasAccess, type Link as LinkRow, type Plan, type Asset, type BillingProfile, type Campaign } from "@/lib/api-client";
+import { FORMATS, formatLabel, joinLabels } from "@/lib/formats";
+import { RateFields, missingRequiredRates, rateCardsFrom, type RateDraft } from "@/components/inventory/rate-fields";
+import { FieldError } from "@/components/ui/form-field";
+import { ComboInput } from "@/components/ui/combo-input";
+import { links as linksApi, assets as assetsApi, billing as billingApi, plans as plansApi, campaigns as campaignsApi, hasAccess, ApiError, type Link as LinkRow, type Plan, type Asset, type BillingProfile, type Campaign } from "@/lib/api-client";
 import { money, initialsOf, roleLabel, personLabel, followersLabel } from "@/lib/format";
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / DAY));
 const waitTag = (days: number): TagTone => (days >= 3 ? "bad" : days >= 1 ? "wait" : "neutral");
 
-type Kind = "screenshot" | "insights" | "plan" | "people" | "page" | "billing";
-const KIND_LABEL: Record<Kind, string> = { screenshot: "Screenshot", insights: "Insights", plan: "Plan", people: "New people", page: "New page", billing: "Billing profile" };
+type Kind = "screenshot" | "insights" | "plan" | "people" | "page" | "page-edit" | "billing";
+const KIND_LABEL: Record<Kind, string> = { screenshot: "Screenshot", insights: "Insights", plan: "Plan", people: "New people", page: "New page", "page-edit": "Page edit", billing: "Billing profile" };
 
 type Item =
   | { kind: "screenshot" | "insights"; id: string; title: string; campaign: string; since: string; link: LinkRow }
   | { kind: "plan"; id: string; title: string; campaign: string; since: string; plan: Plan }
   | { kind: "people"; id: string; title: string; campaign: string; since: string; campaignRow: Campaign }
   | { kind: "page"; id: string; title: string; campaign: string; since: string; asset: Asset }
+  // A planner's suggested edit to an existing page (16 Oct) — apply or discard.
+  | { kind: "page-edit"; id: string; title: string; campaign: string; since: string; asset: Asset }
   | { kind: "billing"; id: string; title: string; campaign: string; since: string; profile: BillingProfile };
 
 export default function ApprovalsPage() {
@@ -64,6 +70,8 @@ function ApprovalsContent() {
   const canApprovePlans = hasAccess(user, "plans.approve");
   const canApprovePages = hasAccess(user, "inventory.approve");
   const canApproveBilling = hasAccess(user, "finance.pay");
+  // Fixing a page's rates / category is Inventory's edit grant (PUT /assets/:id/rate-card, /details).
+  const canEditPages = hasAccess(user, "inventory.edit");
 
   const [filter, setFilter] = useState<"all" | Kind>(() => {
     // The admin home's pipeline chart links here with the link status.
@@ -83,7 +91,7 @@ function ApprovalsContent() {
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     for (const l of linksQuery.data?.items ?? []) {
-      out.push({ kind: l.status === "PENDING_SCREENSHOT_REVIEW" ? "screenshot" : "insights", id: l.id, title: `@${l.asset?.handle ?? "—"} · ${l.format}`, campaign: l.campaign?.title ?? "—", since: l.createdAt, link: l });
+      out.push({ kind: l.status === "PENDING_SCREENSHOT_REVIEW" ? "screenshot" : "insights", id: l.id, title: `@${l.asset?.handle ?? "—"} · ${formatLabel(l.format)}`, campaign: l.campaign?.title ?? "—", since: l.createdAt, link: l });
     }
     for (const p of (plansQuery.data ?? []).filter((p) => p.status === "PENDING_APPROVAL")) {
       out.push({ kind: "plan", id: p.id, title: p.name, campaign: p.clientName, since: p.updatedAt, plan: p });
@@ -94,14 +102,19 @@ function ApprovalsContent() {
     for (const a of (assetsQuery.data ?? []).filter((a) => a.approvalStatus === "pending")) {
       out.push({ kind: "page", id: a.id, title: `@${a.handle}`, campaign: a.category ?? "—", since: a.createdAt, asset: a });
     }
+    for (const a of (assetsQuery.data ?? []).filter((a) => a.pendingEdit && typeof a.pendingEdit === "object")) {
+      out.push({ kind: "page-edit", id: `edit-${a.id}`, title: `@${a.handle} · suggested edit`, campaign: a.pendingEditBy?.name ?? a.pendingEditBy?.email ?? "Planner", since: a.pendingEditAt ?? a.createdAt, asset: a });
+    }
     for (const b of (billingQuery.data ?? []).filter((b) => b.approvalStatus === "pending")) {
       out.push({ kind: "billing", id: b.id, title: b.name, campaign: b.user?.name ?? "—", since: b.createdAt ?? new Date().toISOString(), profile: b });
     }
     return out;
   }, [linksQuery.data, plansQuery.data, campaignsQuery.data, assetsQuery.data, billingQuery.data]);
 
+  const pageCategories = useMemo(() => [...new Set((assetsQuery.data ?? []).map((a) => a.category?.trim()).filter((c): c is string => !!c))].sort((x, y) => x.localeCompare(y)), [assetsQuery.data]);
+
   const counts = useMemo(() => {
-    const c: Record<Kind, number> = { screenshot: 0, insights: 0, plan: 0, people: 0, page: 0, billing: 0 };
+    const c: Record<Kind, number> = { screenshot: 0, insights: 0, plan: 0, people: 0, page: 0, "page-edit": 0, billing: 0 };
     for (const i of items) c[i.kind] += 1;
     return c;
   }, [items]);
@@ -132,6 +145,7 @@ function ApprovalsContent() {
 
   const planDecision = useMutation({ mutationFn: ({ id, approve }: { id: string; approve: boolean }) => (approve ? plansApi.approve(token, id) : plansApi.reject(token, id)), onSuccess: refresh });
   const assetDecision = useMutation({ mutationFn: ({ id, approve }: { id: string; approve: boolean }) => assetsApi.setApproval(token, id, approve ? "approved" : "rejected"), onSuccess: refresh });
+  const editDecision = useMutation({ mutationFn: ({ id, approve }: { id: string; approve: boolean }) => assetsApi.decideEdit(token, id, approve ? "approve" : "reject"), onSuccess: refresh });
   const billingDecision = useMutation({ mutationFn: ({ id, approve }: { id: string; approve: boolean }) => billingApi.setApproval(token, id, approve ? "approved" : "rejected"), onSuccess: refresh });
 
   const loading = linksQuery.isLoading || assetsQuery.isLoading || campaignsQuery.isLoading;
@@ -142,11 +156,12 @@ function ApprovalsContent() {
     { key: "plan", label: "Plans", count: counts.plan },
     { key: "people", label: "New people", count: counts.people },
     { key: "page", label: "New pages", count: counts.page },
+    { key: "page-edit", label: "Page edits", count: counts["page-edit"] },
     { key: "billing", label: "Billing", count: counts.billing },
   ];
 
   const canDecide =
-    selected?.kind === "plan" ? canApprovePlans : selected?.kind === "page" ? canApprovePages : selected?.kind === "billing" ? canApproveBilling : false;
+    selected?.kind === "plan" ? canApprovePlans : selected?.kind === "page" || selected?.kind === "page-edit" ? canApprovePages : selected?.kind === "billing" ? canApproveBilling : false;
 
   const detail = selected && (
     <DetailPanel
@@ -158,10 +173,21 @@ function ApprovalsContent() {
       onDecide={(approve) => {
         if (selected.kind === "plan") planDecision.mutate({ id: selected.id, approve });
         else if (selected.kind === "page") assetDecision.mutate({ id: selected.id, approve });
+        else if (selected.kind === "page-edit") editDecision.mutate({ id: selected.asset.id, approve });
         else if (selected.kind === "billing") billingDecision.mutate({ id: selected.id, approve });
       }}
-      pending={planDecision.isPending || assetDecision.isPending || billingDecision.isPending}
+      pending={planDecision.isPending || assetDecision.isPending || editDecision.isPending || billingDecision.isPending}
+      // A refused decision (e.g. RATES_REQUIRED — a page can't be approved
+      // without its Reel and Story rates) is shown on the
+      // item it was about, in the server's own words.
+      error={(selected.kind === "page-edit" ? [editDecision] : [planDecision, assetDecision, billingDecision])
+        .filter((m) => m.isError && m.variables?.id === (selected.kind === "page-edit" ? selected.asset.id : selected.id))
+        .map((m) => (m.error instanceof ApiError ? m.error.message : "Couldn't save that decision."))[0] ?? null}
       onOpenCampaign={(id) => router.push(`/campaigns/view?id=${id}`)}
+      canEditPage={canEditPages}
+      categories={pageCategories}
+      // A fresh panel per item, so an open editor doesn't carry over to the next page.
+      key={selected.id}
     />
   );
 
@@ -265,19 +291,28 @@ function DetailPanel({
   onChanged,
   onDecide,
   pending,
+  error,
   onOpenCampaign,
+  canEditPage,
+  categories,
 }: {
   item: Item;
   token: string;
   canReviewLinks: boolean;
+  /** Can fix a pending page's rates and category in place (inventory.edit — same as Inventory's Edit). */
+  canEditPage: boolean;
+  /** Categories already used on pages, suggested in the category box. */
+  categories: string[];
   /** Reject/Approve footer for plan/page/billing kinds — the one action that item's own permission key allows. */
   canDecide: boolean;
   onChanged: () => void;
   onDecide: (approve: boolean) => void;
   pending: boolean;
+  error: string | null;
   onOpenCampaign: (id: string) => void;
 }) {
   const days = daysSince(item.since);
+  const [editingPage, setEditingPage] = useState(false);
   const header = (title: string, sub: string) => (
     <div className="flex items-start gap-3 border-b border-border px-[18px] py-[13px]">
       <div className="min-w-0">
@@ -290,14 +325,17 @@ function DetailPanel({
     </div>
   );
   const footer = canDecide ? (
-    <div className="mt-auto flex items-center gap-2 border-t border-border px-[18px] py-3.5">
-      <Button variant="danger" onClick={() => onDecide(false)} disabled={pending}>
-        Reject
-      </Button>
-      <Button className="ml-auto" onClick={() => onDecide(true)} disabled={pending} data-testid="approve-next">
-        <CheckIcon className="h-4 w-4" />
-        Approve &amp; next
-      </Button>
+    <div className="mt-auto flex flex-col gap-2.5 border-t border-border px-[18px] py-3.5">
+      {error && <ErrorNotice message={error} />}
+      <div className="flex items-center gap-2">
+        <Button variant="danger" onClick={() => onDecide(false)} disabled={pending}>
+          Reject
+        </Button>
+        <Button className="ml-auto" onClick={() => onDecide(true)} disabled={pending} data-testid="approve-next">
+          <CheckIcon className="h-4 w-4" />
+          Approve &amp; next
+        </Button>
+      </div>
     </div>
   ) : (
     <p className="border-t border-border px-[18px] py-3.5 text-[0.78rem] text-text-muted">You can see this, but approving it needs a different access grant.</p>
@@ -329,7 +367,7 @@ function DetailPanel({
               <div key={it.id} className="flex items-center justify-between text-[0.8125rem]">
                 <span className="font-medium">@{it.asset?.handle ?? "—"}</span>
                 <span className="tabular-nums text-text-muted">
-                  {it.format} · {money(Number(it.clientCost ?? it.cost))}
+                  {formatLabel(it.format)} · {money(Number(it.clientCost ?? it.cost))}
                 </span>
               </div>
             ))}
@@ -343,15 +381,90 @@ function DetailPanel({
       </Card>
     );
   }
+  if (item.kind === "page-edit") {
+    const a = item.asset;
+    const e = item.asset.pendingEdit ?? {};
+    const rows: [string, string, string][] = [];
+    if ("category" in e) rows.push(["Category", a.category ?? "—", e.category ?? "—"]);
+    if ("grade" in e) rows.push(["Grade", a.grade ?? "—", e.grade ?? "—"]);
+    if ("groupLink" in e) rows.push(["Group link", a.groupLink ?? "—", e.groupLink ?? "—"]);
+    for (const rc of e.rateCards ?? []) {
+      const current = a.rateCards.find((r) => r.format === rc.format);
+      rows.push([`${formatLabel(rc.format)} rate`, current ? money(Number(current.amount)) : "—", money(rc.amount)]);
+    }
+    return (
+      <Card className="flex flex-col" data-testid="approval-detail">
+        {header(`@${a.handle}`, `Suggested by ${a.pendingEditBy?.name ?? a.pendingEditBy?.email ?? "a planner"} · ${a.category ?? "uncategorised"}`)}
+        <div className="flex flex-col gap-3 p-[18px]">
+          <p className="text-[0.8125rem] text-text-muted">Approve applies these changes to the page; reject discards them and leaves the page as it is.</p>
+          <table className="w-full text-[0.8125rem]" data-testid="approval-edit-diff">
+            <thead>
+              <tr className="text-left text-[0.7rem] uppercase tracking-wide text-text-faint">
+                <th className="py-1 pr-3 font-medium">Field</th>
+                <th className="py-1 pr-3 font-medium">Now</th>
+                <th className="py-1 font-medium">Suggested</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {rows.map(([label, from, to]) => (
+                <tr key={label}>
+                  <td className="py-1.5 pr-3 text-text-muted">{label}</td>
+                  <td className="py-1.5 pr-3 text-text-faint line-through">{from}</td>
+                  <td className="py-1.5 font-semibold">{to}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {footer}
+      </Card>
+    );
+  }
   if (item.kind === "page") {
     const a = item.asset;
+    // What's still blank on the page: the category. No rate is mandatory (16 Oct, later).
+    const missing = a.category ? [] : ["category"];
     return (
       <Card className="flex flex-col" data-testid="approval-detail">
         {header(`@${a.handle}`, `${a.owner?.name ?? "—"} · ${a.category ?? "uncategorised"}`)}
-        <div className="grid grid-cols-3 gap-2 p-[18px]">
-          <Stat label="Followers" value={followersLabel(a.followers)} />
-          <Stat label="Reel rate" value={a.rateCards.find((r) => r.format === "reel") ? money(Number(a.rateCards.find((r) => r.format === "reel")!.amount)) : "—"} />
-          <Stat label="Added" value={new Date(a.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })} />
+        <div className="flex flex-col gap-3 p-[18px]">
+          <div className="grid grid-cols-2 gap-2">
+            <Stat label="Followers" value={followersLabel(a.followers)} />
+            <Stat label="Added" value={new Date(a.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })} />
+          </div>
+          {editingPage ? (
+            <PageDetailsEditor key={a.id} asset={a} token={token} categories={categories} onDone={() => setEditingPage(false)} />
+          ) : (
+            <>
+              {/* The page's priced formats (14 Oct; all optional since 16 Oct). */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5" data-testid="approval-page-rates">
+                {FORMATS.filter((f) => a.rateCards.some((r) => r.format === f && Number(r.amount) > 0)).map((f) => {
+                  const rc = a.rateCards.find((r) => r.format === f);
+                  return <Stat key={f} label={`${formatLabel(f)} rate`} value={rc ? money(Number(rc.amount)) : "—"} />;
+                })}
+                {!a.rateCards.some((r) => Number(r.amount) > 0) && <p className="col-span-full text-[0.78rem] text-text-faint">No rates yet.</p>}
+              </div>
+              {missing.length > 0 && (
+                <div className="flex flex-col gap-2 rounded-md border border-dashed border-border-strong px-3 py-2.5" data-testid="approval-rates-needed">
+                  <p className="text-[0.78rem] text-text">
+                    <span className="font-semibold">Missing:</span> {missing.length > 1 ? `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}` : missing[0]}.
+                  </p>
+                  {canEditPage ? (
+                    <Button size="sm" variant="secondary" className="self-start" onClick={() => setEditingPage(true)} data-testid="approval-edit-page">
+                      Fill in missing details
+                    </Button>
+                  ) : (
+                    <p className="text-[0.72rem] text-text-muted">Someone who can edit pages in Inventory needs to fill these in.</p>
+                  )}
+                </div>
+              )}
+              {missing.length === 0 && canEditPage && (
+                <button type="button" onClick={() => setEditingPage(true)} className="self-start text-[0.78rem] font-medium text-blue hover:text-text" data-testid="approval-edit-page">
+                  Edit rates or category
+                </button>
+              )}
+            </>
+          )}
         </div>
         {footer}
       </Card>
@@ -382,6 +495,68 @@ function DetailPanel({
         </Button>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Approvals → New page → "Fill in missing details" (16 Oct): the page's five
+ * rates and its category, edited in place so a page with blanks can be
+ * finished and approved without leaving the queue. Saves the same way as
+ * Inventory's row editor (rate card, then details). A rate that's already set
+ * can be changed but not cleared — the server keeps rate cards.
+ */
+function PageDetailsEditor({ asset, token, categories, onDone }: { asset: Asset; token: string; categories: string[]; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [rates, setRates] = useState<RateDraft>(() => Object.fromEntries(FORMATS.flatMap((f) => { const rc = asset.rateCards.find((r) => r.format === f); return rc && Number(rc.amount) > 0 ? [[f, String(rc.amount)]] : []; })));
+  const savedFormats = FORMATS.filter((f) => asset.rateCards.some((rc) => rc.format === f && Number(rc.amount) > 0));
+  const [category, setCategory] = useState(asset.category ?? "");
+  const [tried, setTried] = useState(false);
+  const missing = missingRequiredRates(rates);
+  const cleared = FORMATS.filter((f) => asset.rateCards.some((rc) => rc.format === f) && !(Number(rates[f]) > 0));
+
+  const save = useMutation({
+    mutationFn: async () => {
+      // Only rates that changed; the endpoint needs at least one entry.
+      const changed = rateCardsFrom(rates).filter((rc) => Number(asset.rateCards.find((r) => r.format === rc.format)?.amount ?? 0) !== rc.amount);
+      if (changed.length > 0) await assetsApi.updateRateCard(token, asset.id, changed);
+      const nextCategory = category.trim() === "" ? null : category.trim();
+      if (nextCategory !== (asset.category ?? null)) await assetsApi.updateDetails(token, asset.id, { category: nextCategory });
+    },
+    onSuccess: () => {
+      // Refresh only the page list, so the queue stays on this page with its new details, ready to approve.
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+      onDone();
+    },
+  });
+
+  return (
+    <form
+      className="flex flex-col gap-3 rounded-md border border-border bg-surface-2 p-3"
+      data-testid="approval-page-editor"
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        setTried(true);
+        if (missing.length > 0 || cleared.length > 0 || save.isPending) return;
+        save.mutate();
+      }}
+    >
+      <RateFields rates={rates} onChange={setRates} required={false} showErrors={tried} compact idPrefix={`@${asset.handle} `} fixed={savedFormats} />
+      {tried && cleared.length > 0 && <FieldError message={`A rate that's set can't be removed: put back the ${joinLabels(cleared)} rate.`} />}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[0.72rem] font-medium text-text-muted">Category</span>
+        <ComboInput aria-label={`@${asset.handle} category`} value={category} onChange={setCategory} suggestions={categories.map((c) => ({ key: c, label: c }))} placeholder="Search or type a new category…" />
+      </div>
+      {save.isError && <ErrorNotice message={save.error instanceof ApiError ? save.error.message : "Couldn't save these details."} />}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onDone} disabled={save.isPending}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={save.isPending} data-testid="approval-page-save">
+          {save.isPending ? "Saving…" : "Save details"}
+        </Button>
+      </div>
+    </form>
   );
 }
 

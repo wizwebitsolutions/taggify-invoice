@@ -172,6 +172,42 @@ test.describe("Campaign phases (22 Sep)", () => {
     await expect(cards.first().locator("td").nth(1)).toHaveText("Phase 1");
   });
 
+  test("creator: Upload links offers the eight bookable formats by label — never a combo — with '(no rate set)' where unpriced (14 Oct)", async ({ page }) => {
+    await signIn(page, "CREATOR");
+    await mockApi(page);
+    const entry = { ...campaign({ phases: undefined }), creatorPhaseNumber: 1, phaseCount: 1 };
+    // A combo-priced page: the combo is never posted as one link, so it's never the default either.
+    const priced = { ...asset, rateCards: [{ format: "reel_story" }, { format: "story" }, { format: "post" }] };
+    await page.route(`${API_URL}/campaigns`, (route) => route.fulfill({ json: [entry] }));
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [priced] }));
+    let posted: Record<string, unknown> | undefined;
+    await page.route(`${API_URL}/links/bulk`, (route) => {
+      posted = route.request().postDataJSON();
+      return route.fulfill({ status: 201, json: { created: [], skipped: [] } });
+    });
+    await page.goto("/dashboard");
+
+    await page.getByRole("button", { name: /Upload links/i }).first().click();
+    const modal = page.locator("form").filter({ has: page.getByRole("heading", { name: "Upload links" }) });
+    const formatSelect = modal.locator("select").last();
+    // The eight bookable formats (14 Oct) — never a combo.
+    await expect(formatSelect.locator("option")).toHaveText([
+      "Reel (no rate set)",
+      "Entertainment / Brand (no rate set)",
+      "PR (no rate set)",
+      "Political (no rate set)",
+      "Static & Carousel",
+      "Repost (no rate set)",
+      "Story",
+      "Political Story (no rate set)",
+    ]);
+    await expect(formatSelect).toHaveValue("post");
+    await formatSelect.selectOption("story");
+    await modal.locator("textarea").fill("https://instagram.com/p/abc");
+    await modal.getByRole("button", { name: /Submit/ }).click();
+    await expect.poll(() => posted).toMatchObject({ format: "story", urls: ["https://instagram.com/p/abc"] });
+  });
+
   // Booked campaigns only (24 Sep): each entry carries the creator's pages
   // booked on that exact row; the picker offers only those.
   test("creator: Upload links offers only rows a page is booked on, and only those pages", async ({ page }) => {

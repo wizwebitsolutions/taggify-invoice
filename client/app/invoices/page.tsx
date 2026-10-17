@@ -37,6 +37,7 @@ import {
 } from "@/lib/api-client";
 import { money, initialsOf, roleLabel, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { formatLabel } from "@/lib/formats";
 
 /** Posts on an invoice beyond their campaign booking (29 Sep) — non-zero blocks Approve and Pay until it's rejected and re-raised. */
 const overQuotaOf = (inv: Invoice) => inv.overQuotaCount ?? 0;
@@ -1041,7 +1042,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
               {pickedLinks.slice(0, 6).map((l) => (
                 <tr key={l.id} className="border-b border-border last:border-b-0">
                   <td className="py-1.5">
-                    <span className="capitalize">{l.format}</span> · <span className="text-text-muted">@{l.asset?.handle ?? "—"}</span>
+                    <span>{formatLabel(l.format)}</span> · <span className="text-text-muted">@{l.asset?.handle ?? "—"}</span>
                     {(l.status === "INSIGHTS_PENDING" || l.status === "SCREENSHOT_APPROVED") && (
                       <Tag tone="wait" dot={false} className="ml-1.5 h-[18px] text-[0.62rem]">
                         insights pending
@@ -1111,7 +1112,7 @@ function NewInvoiceModal({ token, onClose, onRaised }: { token: string; onClose:
                 <label key={link.id} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[0.8125rem] hover:bg-surface-2">
                   <input type="checkbox" checked={selected.has(link.id)} onChange={() => toggleOne(link.id)} className="h-4 w-4 rounded accent-[var(--ink)]" />
                   <span className="truncate text-text-2">
-                    @{link.asset?.handle ?? "—"} · {link.format}
+                    @{link.asset?.handle ?? "—"} · {formatLabel(link.format)}
                   </span>
                   <span className="ml-auto shrink-0 font-semibold tabular-nums">{money(link.cost)}</span>
                 </label>

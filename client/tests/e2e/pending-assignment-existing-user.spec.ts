@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-import { signIn, mockApi, API_URL } from "./fixtures";
+import { signIn, mockApi, API_URL, addRate } from "./fixtures";
 
 /**
  * User request, 12 Sep — "option of creating account under user": a page
@@ -73,6 +73,9 @@ test.describe("Resolve pending pages — attach to an existing user", () => {
     await expect(picker.getByRole("radio", { name: /Priya Creator/ })).toHaveCount(0);
     await picker.getByRole("radio", { name: /Rahul Creator/ }).click();
     await expect(attach).toBeEnabled();
+    await addRate(page, "reel", "20000");
+    await addRate(page, "story", "15000");
+    await addRate(page, "post", "9000");
     await attach.click();
 
     await expect(page.getByText("@newpage attached to Rahul Creator.")).toBeVisible();

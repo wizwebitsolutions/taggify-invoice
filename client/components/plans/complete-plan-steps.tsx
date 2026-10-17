@@ -12,6 +12,7 @@ import { plans as plansApi, assets as assetsApi, ApiError, type Plan } from "@/l
 import { planMissing, type MissingStepKey } from "@/lib/plan-missing";
 import { money, followersLabel } from "@/lib/format";
 import { useAuth } from "@/lib/auth-context";
+import { formatLabel } from "@/lib/formats";
 
 /**
  * "Complete details" for a plan uploaded from a sheet (user request, 22 Sep
@@ -42,15 +43,16 @@ export function CompletePlanSteps({ token, plan, onClose }: { token: string; pla
   const [budget, setBudget] = useState(plan.budget != null ? String(Math.round(Number(plan.budget))) : missing.pendingBudget ? String(Math.round(missing.pendingBudget.sheetBudget)) : "");
   const [touched, setTouched] = useState(false);
 
-  // The pages on the plan plus every pending page the next step will add —
-  // otherwise a budget that passes here fails the moment those are added
-  // (the server checks PLAN_OVER_BUDGET on Add to inventory too).
-  const budgetFloor = (plan.internal?.computedSubtotal ?? 0) + missing.pendingPages.reduce((s, p) => s + (p.clientCost ?? p.cost ?? 0) * p.postsPerProfile, 0);
+  // What the pages (plus every pending page the next step will add) come to —
+  // shown as a hint. Since 16 Oct a budget below it is allowed (over budget
+  // is a warning, not a block), so it no longer fails the step.
+  const pagesTotal = (plan.internal?.computedSubtotal ?? 0) + missing.pendingPages.reduce((s, p) => s + (p.clientCost ?? p.cost ?? 0) * p.postsPerProfile, 0);
   const errors: Partial<Record<MissingStepKey, string | null>> = {
     notes: notes.trim() ? null : "A brief is required.",
     clientContact: contact.trim() ? null : "Who's the contact at the client?",
-    budget: !budget ? "Enter the budget." : Number(budget) < budgetFloor ? `The pages (including the ones still to add) come to ${money(budgetFloor)} — the budget can't be below that.` : null,
+    budget: !budget ? "Enter the budget." : null,
   };
+  const budgetWarning = budget && Number(budget) < pagesTotal ? `The pages (including the ones still to add) come to ${money(pagesTotal)} — this budget would be over by ${money(pagesTotal - Number(budget))}. You can still save it.` : null;
 
   const saveMutation = useMutation({
     mutationFn: (body: Parameters<typeof plansApi.update>[2]) => plansApi.update(token, plan.id, body),
@@ -146,7 +148,7 @@ export function CompletePlanSteps({ token, plan, onClose }: { token: string; pla
                       )}
                     </p>
                     <p className="truncate text-[0.72rem] text-text-faint">
-                      {[p.category, p.followers != null ? `${followersLabel(p.followers)} followers` : null, p.format, `${money(p.cost ?? 0)} × ${p.postsPerProfile}`].filter(Boolean).join(" · ")}
+                      {[p.category, p.followers != null ? `${followersLabel(p.followers)} followers` : null, p.format ? formatLabel(p.format) : null, `${money(p.cost ?? 0)} × ${p.postsPerProfile}`].filter(Boolean).join(" · ")}
                     </p>
                   </div>
                   <Button size="sm" onClick={() => addMutation.mutate(p.handle)} disabled={addMutation.isPending}>
@@ -196,6 +198,7 @@ export function CompletePlanSteps({ token, plan, onClose }: { token: string; pla
                 <MoneyField value={budget} onChange={setBudget} name="budget" autoFocus aria-invalid={touched && Boolean(errors.budget)} />
                 {missing.pendingBudget && <p className="text-[0.72rem] text-text-faint">{missing.pendingBudget.reason}</p>}
                 {touched && <FieldError message={errors.budget} />}
+                {budgetWarning && <p className="text-[0.75rem] text-amber-800" data-testid="complete-budget-warning">{budgetWarning}</p>}
               </Field>
             )}
             {saveMutation.isError && <ErrorNotice message={saveMutation.error instanceof ApiError ? saveMutation.error.message : "Couldn't save that."} />}

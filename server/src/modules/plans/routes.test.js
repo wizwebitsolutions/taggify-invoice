@@ -24,6 +24,8 @@ const refreshGeneratedSheets = vi.fn(async () => {});
 const approvePlan = vi.fn(async (id) => ({ id, status: "APPROVED" }));
 const rejectPlan = vi.fn(async (id) => ({ id, status: "REJECTED" }));
 vi.mock("./service.js", () => ({ updatePlan, syncPlanFromSheet, addPendingPage, importPlanSheetPages, refreshGeneratedSheets, approvePlan, rejectPlan }));
+const checkProfiles = vi.fn(async (ids) => ({ results: ids.map((assetId) => ({ assetId, broken: false, fresh: true })), checked: ids.length }));
+vi.mock("../assets/service.js", () => ({ checkProfiles: (...a) => checkProfiles(...a) }));
 vi.mock("../campaigns/service.js", () => ({ fetchSheetCsv: vi.fn(), fetchSheetTabs: vi.fn() }));
 vi.mock("../../lib/planPdf.js", () => ({ buildPlanPdf: vi.fn(), buildPlanGroupPdf: vi.fn() }));
 vi.mock("../../lib/clientInvoicePdf.js", () => ({ buildClientInvoicePdf: vi.fn() }));
@@ -95,5 +97,34 @@ describe("approving or rejecting a plan refreshes its sheet (Active / Not active
     const res = await send("POST", "/plan-1/reject", {});
     expect(res.status).toBe(200);
     expect(refreshGeneratedSheets).toHaveBeenCalledWith("plan-1", currentUser);
+  });
+});
+
+describe("POST /plans/check-pages — 'are these pages still up?' (17 Oct)", () => {
+  it("an admin or plan maker can run it; the ids and force flag reach the service", async () => {
+    currentUser = { id: "admin-1", role: "ADMIN" };
+    const res = await send("POST", "/check-pages", { assetIds: ["a1", "a2"], force: true });
+    expect(res.status).toBe(200);
+    expect(checkProfiles).toHaveBeenCalledWith(["a1", "a2"], { force: true });
+    expect((await res.json()).checked).toBe(2);
+
+    currentUser = { id: "pm-1", role: "PLAN_MAKER" };
+    expect((await send("POST", "/check-pages", { assetIds: ["a1"] })).status).toBe(200);
+    expect(checkProfiles).toHaveBeenLastCalledWith(["a1"], { force: false });
+  });
+
+  for (const role of ["CREATOR", "TEAM_MEMBER", "FINANCE"]) {
+    it(`${role} is refused`, async () => {
+      currentUser = { id: `${role.toLowerCase()}-1`, role };
+      expect((await send("POST", "/check-pages", { assetIds: ["a1"] })).status).toBe(403);
+      expect(checkProfiles).not.toHaveBeenCalled();
+    });
+  }
+
+  it("an empty or oversized id list is a 400", async () => {
+    currentUser = { id: "admin-1", role: "ADMIN" };
+    expect((await send("POST", "/check-pages", { assetIds: [] })).status).toBe(400);
+    expect((await send("POST", "/check-pages", { assetIds: Array.from({ length: 201 }, (_, i) => `a${i}`) })).status).toBe(400);
+    expect(checkProfiles).not.toHaveBeenCalled();
   });
 });

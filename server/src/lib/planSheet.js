@@ -1,4 +1,5 @@
 import { compactFollowers } from "./followers.js";
+import { formatLabel, postsPerUnit } from "./formats.js";
 /**
  * Builds a Plan's Google Sheet deliverable: the row values (for
  * writeSheetTab) AND the cell formatting (for batchUpdateSpreadsheet) that
@@ -52,6 +53,10 @@ const STYLES = {
  * draft, one awaiting approval, or a rejected one is "Not active" (user
  * request, 29 Sep — "only plan a is approved it would show active ... and
  * unapproved will show not active").
+ *
+ * 16 Oct: the status is INTERNAL only. The client sheet carries no
+ * Active/Not active mark anywhere — not in tab names, not as a band, not as
+ * a tab colour ("in client sheet it should not show active mark").
  */
 export function isActivePlan(plan) {
   return plan.status === "APPROVED";
@@ -59,7 +64,8 @@ export function isActivePlan(plan) {
 function statusLabel(plan) {
   return isActivePlan(plan) ? "Active" : "Not active";
 }
-function statusBand(s, plan) {
+function statusBand(s, plan, internal) {
+  if (!internal) return;
   s.band([isActivePlan(plan) ? "● ACTIVE — approved plan" : "● NOT ACTIVE — not approved"], isActivePlan(plan) ? "statusActive" : "statusInactive");
 }
 
@@ -92,9 +98,14 @@ const variantOf = (plan) => plan.variantLabel ?? "Plan A";
  * random code has no business in a tab name the client reads. The internal
  * file keeps the id suffix it has always had.
  */
+/** `· Plan X[ · status · id6]` — status and id only on the internal file (16 Oct). */
+function titleTail(plan, internal) {
+  return internal ? ` · ${variantOf(plan)} · ${statusLabel(plan)} · ${plan.id?.slice(-6) ?? ""}` : ` · ${variantOf(plan)}`;
+}
+
 export function planSheetTabTitles(plan, { internal = false } = {}) {
   const prefix = internal ? INTERNAL_PREFIX : "";
-  const tail = ` · ${variantOf(plan)} · ${statusLabel(plan)}${internal ? ` · ${plan.id?.slice(-6) ?? ""}` : ""}`;
+  const tail = titleTail(plan, internal);
   const name = truncate(plan.name ?? "", 100 - prefix.length - OVERVIEW_PREFIX.length - tail.length);
   return { overviewTitle: `${prefix}${OVERVIEW_PREFIX}${name}${tail}`, pagesTitle: `${prefix}${name}${tail}` };
 }
@@ -108,7 +119,7 @@ const CATEGORY_SEP = " — ";
  */
 export function pageTabTitle(plan, label, { internal = false } = {}) {
   const prefix = internal ? INTERNAL_PREFIX : "";
-  const tail = ` · ${variantOf(plan)} · ${statusLabel(plan)}${internal ? ` · ${plan.id?.slice(-6) ?? ""}` : ""}`;
+  const tail = titleTail(plan, internal);
   const head = `${prefix}${truncate(label, 40)}${CATEGORY_SEP}`;
   return `${head}${truncate(plan.name ?? "", 100 - head.length - tail.length)}${tail}`;
 }
@@ -122,13 +133,14 @@ function categoryKeyOf(title, internal) {
 
 /**
  * Whether an existing tab belongs to `plan`, whatever name or status it was
- * written under. Internal: its id suffix. Client: its variant label followed by
- * a status, or by the bare " · " every client tab ended with before 29 Sep.
+ * written under. Internal: its id suffix. Client: its variant label — bare
+ * (16 Oct onwards), followed by a status (29 Sep – 16 Oct), or by the bare
+ * " · " every client tab ended with before 29 Sep.
  */
 function planTabOwnedBy(title, plan, internal) {
   if (internal) return title.endsWith(` · ${plan.id?.slice(-6)}`);
   const v = ` · ${variantOf(plan)} · `;
-  return title.endsWith(`${v}Active`) || title.endsWith(`${v}Not active`) || title.endsWith(v);
+  return title.endsWith(` · ${variantOf(plan)}`) || title.endsWith(`${v}Active`) || title.endsWith(`${v}Not active`) || title.endsWith(v);
 }
 
 /**
@@ -182,8 +194,9 @@ export function reconcilePlanTabRequests(existing, sheets, { internal = false } 
   return requests;
 }
 
-/** The tab itself coloured by status, so Active/Not active shows in the tab strip, not just on the page. */
-export function tabStatusRequests(sheetId, plan) {
+/** Internal file only (16 Oct): the tab itself coloured by status, so Active/Not active shows in the tab strip. The client file gets no status colour. */
+export function tabStatusRequests(sheetId, plan, { internal = false } = {}) {
+  if (!internal) return [];
   return [
     {
       updateSheetProperties: {
@@ -379,7 +392,8 @@ function distinctPages(items) {
   });
 }
 
-const posts = (items) => items.reduce((sum, i) => sum + (i.postsPerProfile ?? 1), 0);
+// A Reel + Story combo line is two posts per unit (14 Oct).
+const posts = (items) => items.reduce((sum, i) => sum + (i.postsPerProfile ?? 1) * postsPerUnit(i.format), 0);
 const lineCost = (i, internal) => (internal ? Number(i.cost) : Number(i.displayCost)) * (i.postsPerProfile ?? 1);
 
 /**
@@ -398,7 +412,7 @@ export function splitByWeight(total, weights) {
 }
 
 function heading(s, plan, internal) {
-  statusBand(s, plan);
+  statusBand(s, plan, internal);
   s.band([internal ? `${plan.clientName} <> Taggify — INTERNAL, NOT FOR CLIENT` : `${plan.clientName} <> Taggify`], "navyBand");
   s.plain([`${plan.name} · ${variantOf(plan)} · ${dateStr(plan.createdAt)}`]);
   if (plan.clientContact) s.plain([plan.clientContact]);
@@ -406,6 +420,15 @@ function heading(s, plan, internal) {
   const clientDetails = [plan.clientCompany, plan.clientGstNumber && `GSTIN: ${plan.clientGstNumber}`, plan.clientAddress].filter(Boolean);
   if (clientDetails.length > 0) s.plain([clientDetails.join(" · ")]);
   s.spacer();
+}
+
+/** A plan with a flat discount (16 Oct) — annotatePlan puts it on overview.discount. */
+function hasDiscount(plan) {
+  return Number(plan.overview?.discount) > 0;
+}
+/** What the client pays before GST: the quoted subtotal less any discount (overview.taxable), or the subtotal on older shapes. */
+function clientPays(plan) {
+  return Number(plan.overview?.taxable ?? plan.overview?.subtotal ?? 0);
 }
 
 /** Internal sheet only: how the pages' cost sits against the plan's budget. */
@@ -440,7 +463,7 @@ function buildBreakdownOverview(plan, internal, groups) {
     const counts = pages.map((i) => i.asset?.followers ?? 0);
     const followers = counts.reduce((a, b) => a + b, 0);
     followersTotal += followers;
-    const formats = [...new Set(g.items.map((i) => (i.format === "story" ? "Story" : "Reel")))].join("/");
+    const formats = [...new Set(g.items.map((i) => formatLabel(i.format)))].join("/");
     const range = counts.length ? `${compactFollowers(Math.min(...counts))}-${compactFollowers(Math.max(...counts))}` : "—";
     s.row([g.label, `Instagram ${formats}`, inMillions(followers), range, posts(g.items), rupees(costs[n]), inMillions(reach[n])], ["label", "data", "data", "data", "data", "data", "data"]);
   });
@@ -448,14 +471,24 @@ function buildBreakdownOverview(plan, internal, groups) {
 
   const allItems = groups.flatMap((g) => g.items);
   s.row(["Total", "", inMillions(followersTotal), "", posts(allItems), rupees(subtotal), inMillions(views)], header.map(() => "label"));
+  const kv = (label, value) => s.row(["", "", "", "", label, value, ""], [null, null, null, null, "label", "value", null]);
   if (internal) {
-    s.row(["", "", "", "", "Quoted to client", rupees(plan.overview.subtotal), ""], [null, null, null, null, "label", "value", null]);
-    s.row(["", "", "", "", "Margin", rupees(plan.overview.subtotal - subtotal), ""], [null, null, null, null, "label", "value", null]);
+    kv("Quoted to client", rupees(plan.overview.subtotal));
+    if (hasDiscount(plan)) kv("Discount", `- ${rupees(plan.overview.discount)}`);
+    // Margin = what the client actually pays (after any discount) − our cost.
+    kv("Margin", rupees(clientPays(plan) - subtotal));
     const budget = budgetRow(plan);
-    if (budget) s.row(["", "", "", "", ...budget, ""], [null, null, null, null, "label", "value", null]);
-  } else if (plan.isGstPlan) {
-    s.row(["", "", "", "", `GST (${plan.gstPercent}%)`, rupees(plan.overview.gstAmount), ""], [null, null, null, null, "label", "value", null]);
-    s.row(["", "", "", "", "Total", rupees(plan.overview.total), ""], [null, null, null, null, "label", "value", null]);
+    if (budget) kv(...budget);
+  } else {
+    // Discount (16 Oct) comes off before GST; the rows only appear when there is one.
+    if (hasDiscount(plan)) {
+      kv("Discount", `- ${rupees(plan.overview.discount)}`);
+      kv("After Discount", rupees(plan.overview.taxable));
+    }
+    if (plan.isGstPlan) {
+      kv(`GST (${plan.gstPercent}%)`, rupees(plan.overview.gstAmount));
+      kv("Total", rupees(plan.overview.total));
+    }
   }
   notes(s, plan, BREAKDOWN_NOTES);
   return { rows: s.rows, rowSpecs: s.rowSpecs, numCols };
@@ -476,10 +509,16 @@ function buildSummaryOverview(plan, internal) {
   s.row(["Total Deliverables", deliverables], ["label", "value"]);
   s.row(["Expected Impressions/Views", roughly(views)], ["label", "value"]);
   s.row([internal ? "Internal Cost" : "Cost", rupees(cost)], ["label", "value"]);
+  // Discount (16 Oct), client side: what's taken off and what's left, before GST.
+  if (!internal && hasDiscount(plan)) {
+    s.row(["Discount", `- ${rupees(plan.overview.discount)}`], ["label", "value"]);
+    s.row(["Cost After Discount", rupees(plan.overview.taxable)], ["label", "value"]);
+  }
   s.row(["CPV", views > 0 ? (cost / views).toFixed(2) : "—"], ["label", "value"]);
   if (internal) {
     s.row(["Quoted to client", rupees(plan.overview.subtotal)], ["label", "value"]);
-    s.row(["Margin", rupees(plan.overview.subtotal - cost)], ["label", "value"]);
+    if (hasDiscount(plan)) s.row(["Discount", `- ${rupees(plan.overview.discount)}`], ["label", "value"]);
+    s.row(["Margin", rupees(clientPays(plan) - cost)], ["label", "value"]);
     const budget = budgetRow(plan);
     if (budget) s.row(budget, ["label", "value"]);
   }
@@ -493,7 +532,7 @@ const PAGE_HEADER = ["S No", "Page Name", "Page Link", "Followers", "Format", "P
 function buildPagesSection(plan, internal, items) {
   const s = makeSection();
   const header = [...PAGE_HEADER, ...(internal ? ["Cost/Post"] : [])];
-  statusBand(s, plan);
+  statusBand(s, plan, internal);
   s.row(header, header.map(() => "tableHeader"));
 
   items.forEach((item, i) => {
@@ -501,7 +540,7 @@ function buildPagesSection(plan, internal, items) {
     // Bare handle and the profile URL as its own visible text (22 Sep), with
     // the cell itself linked — not a =HYPERLINK() formula: the sheet is written RAW.
     const pageUrl = `https://instagram.com/${handle}`;
-    const row = [i + 1, handle, pageUrl, compactFollowers(item.asset?.followers ?? 0), item.format, item.postsPerProfile];
+    const row = [i + 1, handle, pageUrl, compactFollowers(item.asset?.followers ?? 0), formatLabel(item.format), item.postsPerProfile];
     if (internal) row.push(money(item.cost));
     s.row(row, header.map(() => "data"), item.asset?.handle ? { links: { 2: pageUrl } } : {});
   });

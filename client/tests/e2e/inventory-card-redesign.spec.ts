@@ -76,10 +76,10 @@ test.describe("Inventory page cards — Reel-only rate summary and Campaigns", (
     await expect(card.getByText("₹3,000")).not.toBeAttached();
   });
 
-  // reel/story only since 14 Sep ("no other format from entire app"): the
-  // editor lists exactly those two; a legacy carousel rate card is neither
-  // shown nor offered for editing (it stays stored server-side).
-  test("clicking Edit exposes reel and story, and no legacy format", async ({ page }) => {
+  // Ten page prices since 14 Oct: the editor lists all ten by label; a
+  // legacy carousel rate card is neither shown nor re-saved (it stays stored
+  // server-side), so the Static & Carousel box starts empty.
+  test("clicking Edit exposes all ten rates by label, and no legacy format", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: testAssets() }));
@@ -87,11 +87,34 @@ test.describe("Inventory page cards — Reel-only rate summary and Campaigns", (
     await page.goto("/inventory");
     const card = page.getByTestId("asset-card").filter({ hasText: "@multi.format.page" });
     await card.getByRole("button", { name: "Edit" }).click();
+    // Edit opens a drawer on the right (17 Oct) rather than expanding the row.
+    const sheet = page.getByTestId("asset-edit-sheet");
+    await expect(sheet).toContainText("@multi.format.page");
 
-    await expect(card.getByText("reel", { exact: true })).toBeVisible();
-    await expect(card.getByText("story", { exact: true })).toBeVisible();
-    await expect(card.getByText("carousel", { exact: true })).toHaveCount(0);
-    await expect(card.getByPlaceholder("Add custom format (e.g. VOXPOP)")).toHaveCount(0);
+    // One line per priced format (16 Oct); unpriced ones are offered in the "Add a rate for…" select, not shown as empty boxes.
+    await expect(sheet.getByLabel("@multi.format.page Reel rate", { exact: true })).toHaveValue("12,000");
+    await expect(sheet.getByLabel("@multi.format.page Static & Carousel rate", { exact: true })).toHaveCount(0);
+    await expect(sheet.getByLabel("@multi.format.page Add a rate for", { exact: true }).locator("option", { hasText: "Static & Carousel" })).toHaveCount(1);
+    await expect(sheet.getByText("carousel", { exact: true })).toHaveCount(0);
+    await expect(sheet.getByPlaceholder("Add custom format (e.g. VOXPOP)")).toHaveCount(0);
+  });
+
+  test("a pending page with only one rate (or none) shows no 'needs rates' note and can be approved — nothing is mandatory (16 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await mockApi(page);
+    const pending = { ...testAssets()[1], id: "asset-p", handle: "pending.page", approvalStatus: "pending", rateCards: [{ id: "rc-9", format: "reel", amount: "4000" }] };
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [pending] }));
+    let approved = false;
+    await page.route(`${API_URL}/assets/asset-p/approval`, (route) => {
+      approved = route.request().postDataJSON()?.approvalStatus === "approved";
+      return route.fulfill({ json: { ...pending, approvalStatus: "approved" } });
+    });
+
+    await page.goto("/inventory");
+    const card = page.getByTestId("asset-card").filter({ hasText: "@pending.page" });
+    await expect(card.getByTestId("rates-missing")).toHaveCount(0);
+    await card.getByRole("button", { name: "Approve @pending.page" }).click();
+    await expect.poll(() => approved).toBe(true);
   });
 
   test("Campaigns section lists every campaign the page has been assigned to", async ({ page }) => {
@@ -123,8 +146,9 @@ test.describe("Inventory page cards — Reel-only rate summary and Campaigns", (
     // The hidden column cell is still in the DOM (display: none) — only the Edit panel's copy is visible.
     await expect(card.getByText("Q1 Push")).not.toBeVisible();
     await card.getByRole("button", { name: "Edit" }).click();
-    await expect(card.getByText("Q1 Push").last()).toBeVisible();
-    await expect(card.getByText("Diwali Drop").last()).toBeVisible();
+    const sheet = page.getByTestId("asset-edit-sheet");
+    await expect(sheet.getByText("Q1 Push")).toBeVisible();
+    await expect(sheet.getByText("Diwali Drop")).toBeVisible();
   });
 });
 

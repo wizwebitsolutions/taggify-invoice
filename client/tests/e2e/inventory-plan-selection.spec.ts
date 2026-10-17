@@ -130,9 +130,9 @@ test.describe("Inventory — select pages, then create a plan from the selection
     // rate cards (15000 + 8000).
     await expect(page.getByRole("checkbox", { name: /daily\.news\.test/ })).toBeChecked();
     await expect(page.getByRole("checkbox", { name: /meme\.central\.test/ })).toBeChecked();
-    // Formats are toggles since 8 Oct (a page can have both); each page starts with its one priced format on.
-    const formatValues = await page.locator('[role="group"][aria-label^="Formats for"] button[aria-pressed="true"]').allTextContents();
-    expect(formatValues.sort()).toEqual(["reel", "story"]);
+    // Formats are a dropdown per page since 14 Oct (a page can have several); each page starts with its one priced format.
+    const formatValues = await page.getByRole("button", { name: /^Formats for/ }).allTextContents();
+    expect(formatValues.sort()).toEqual(["Reel", "Story"]);
     await expect(page.getByText("₹23,000").first()).toBeVisible();
   });
 

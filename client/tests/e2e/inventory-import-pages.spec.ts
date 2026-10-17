@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { signIn, mockApi, userFor, API_URL } from "./fixtures";
+import { signIn, mockApi, userFor, API_URL, addRate } from "./fixtures";
 
 /**
  * Inventory → "Create page" / "Import pages" (user request, 14 Sep): an
@@ -95,12 +95,23 @@ test.describe("Inventory — Create page / Import pages (admin)", () => {
     await expect(picker).toHaveValue("Rahul Creator");
     await expect(form.getByText("Pick the creator account this page belongs to.")).toHaveCount(0);
 
-    // Optional starting rate card.
-    await form.getByLabel("Reel rate").fill("12000");
+    // Rates go in the same create call, in the app's format order (14 Oct); added one format at a time (16 Oct).
+    await addRate(form, "reel", "12000");
+    await addRate(form, "story", "5000");
+    await addRate(form, "post", "7000");
     await form.getByRole("button", { name: "Create page" }).click();
 
     await expect(form).toHaveCount(0);
-    expect(createBody).toMatchObject({ handle: "Demo.Page", platform: "instagram", ownerId: "creator-2", rateCards: [{ format: "reel", amount: 12000 }] });
+    expect(createBody).toMatchObject({
+      handle: "Demo.Page",
+      platform: "instagram",
+      ownerId: "creator-2",
+      rateCards: [
+        { format: "reel", amount: 12000 },
+        { format: "post", amount: 7000 },
+        { format: "story", amount: 5000 },
+      ],
+    });
   });
 
   test("a just-created page shows 'Fetching from Instagram…' and polls until the scrape lands", async ({ page }) => {
@@ -384,7 +395,7 @@ test.describe("Inventory — Import pages: Creator and Plan Maker (25 Sep)", () 
     await expect(page.getByTestId("import-preview-row")).toHaveCount(1);
     // Never an account picker, never a rate-card column — a creator's sheet is always their own pages.
     await expect(page.getByTestId("import-account-picker")).toHaveCount(0);
-    await expect(page.getByTestId("import-preview-table").getByText("Reel rate")).toHaveCount(0);
+    await expect(page.getByTestId("import-preview-table").getByText("Rates", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel(/^Account for /)).toHaveCount(0);
 
     await page.getByTestId("import-confirm").click();
@@ -458,7 +469,7 @@ test.describe("Inventory — Import pages: Creator and Plan Maker (25 Sep)", () 
     await expect(page.getByTestId("import-account-picker")).toBeVisible();
     await expect(page.getByLabel("Account for @big.page")).toBeVisible();
     // Reel rate stays hidden — a Plan Maker's import lands pending too, no rate card.
-    await expect(page.getByTestId("import-preview-table").getByText("Reel rate")).toHaveCount(0);
+    await expect(page.getByTestId("import-preview-table").getByText("Rates", { exact: true })).toHaveCount(0);
     await expect(page.getByTestId("import-new-user")).toBeVisible();
 
     await page.getByLabel("Account for all pages").selectOption("creator-1");
@@ -491,7 +502,7 @@ test.describe("Inventory — Import pages: Creator and Plan Maker (25 Sep)", () 
     await page.getByTestId("import-pages-button").click();
     await page.getByLabel("Pages sheet (.xlsx or .csv)").setInputFiles(csvFile);
     // ...but never the admin-only extras the server won't actually give it.
-    await expect(page.getByTestId("import-preview-table").getByText("Reel rate")).toHaveCount(0);
+    await expect(page.getByTestId("import-preview-table").getByText("Rates", { exact: true })).toHaveCount(0);
 
     await page.getByRole("row", { name: /big\.page/ }).getByLabel("Account for @big.page").selectOption("creator-1");
     await page.getByTestId("import-confirm").click();

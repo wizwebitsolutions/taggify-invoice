@@ -88,6 +88,14 @@ const mockPrisma = {
   },
   asset: table("assets"),
   user: table("users"),
+  // The campaign's plan (14 Oct, lib/comboSlots.js): only its Reel + Story combo lines are read.
+  plan: {
+    findUnique: vi.fn(async ({ where, select }) => {
+      const plan = (db.plans ?? []).find((p) => p.campaignId === where.campaignId);
+      if (!plan) return null;
+      return { items: plan.items.filter((i) => matches(i, select?.items?.where)) };
+    }),
+  },
   $transaction: vi.fn(async (arg) => (Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma))),
   // createPhase/deletePhase lock the campaign's root row first (SELECT … FOR UPDATE).
   $queryRaw: vi.fn(async () => []),
@@ -300,6 +308,59 @@ describe("createPhase — a real phase, starting with Phase 1's pages", () => {
     await expect(createPhase("root", {}, planMaker)).resolves.toMatchObject({ phaseNumber: 3 });
     canPlanMakerAccessCampaign.mockResolvedValueOnce(false);
     await expect(createPhase("root", {}, planMaker)).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("createPhase — a Reel + Story combo page copies both halves (14 Oct)", () => {
+  it("de-duplicates a combo page by page and format, other pages still by page", async () => {
+    db.plans = [{ campaignId: "root", items: [{ assetId: "asset-a", format: "reel_story" }] }];
+    db.campaignAssignments.push({ id: "as-story", campaignId: "root", assetId: "asset-a", pageHandle: "page.a", format: "story", cost: 1000, status: "matched", creatorPhone: null });
+    db.campaignAssignments.push({ id: "as-b-story", campaignId: "root", assetId: "asset-b", pageHandle: "page.b", format: "story", cost: 900, status: "matched", creatorPhone: null });
+
+    const phase = await createPhase("root", {}, admin);
+
+    const copied = db.campaignAssignments.filter((a) => a.campaignId === phase.id).map((a) => `${a.assetId}:${a.format}:${a.cost}`).sort();
+    expect(copied).toEqual(["asset-a:reel:5000", "asset-a:story:1000", "asset-b:reel:4000"]);
+  });
+
+  it("a Repost + Story combo page (16 Oct) copies its repost and story slots too", async () => {
+    db.plans = [{ campaignId: "root", items: [{ assetId: "asset-a", format: "repost_story" }] }];
+    // asset-a's existing root slot (reel 5000) stays; add the combo's two parts.
+    db.campaignAssignments.push({ id: "as-repost", campaignId: "root", assetId: "asset-a", pageHandle: "page.a", format: "repost", cost: 4285.71, status: "matched", creatorPhone: null });
+    db.campaignAssignments.push({ id: "as-rs-story", campaignId: "root", assetId: "asset-a", pageHandle: "page.a", format: "story", cost: 5714.29, status: "matched", creatorPhone: null });
+
+    const phase = await createPhase("root", {}, admin);
+
+    const copied = db.campaignAssignments.filter((a) => a.campaignId === phase.id).map((a) => `${a.assetId}:${a.format}:${a.cost}`).sort();
+    expect(copied).toEqual(["asset-a:reel:5000", "asset-a:repost:4285.71", "asset-a:story:5714.29", "asset-b:reel:4000"]);
+  });
+
+  // Review fix (14 Oct): a page with a regular reel line AND a combo line has
+  // two reel slots on Phase 1 (full price + the combo's split share).
+  it("a page with a regular reel line and a combo line copies every slot: the full-price reel and both combo halves", async () => {
+    db.plans = [{ campaignId: "root", items: [{ assetId: "asset-a", format: "reel" }, { assetId: "asset-a", format: "reel_story" }] }];
+    // asset-a's existing root slot is the regular reel at 5000; add the combo halves.
+    db.campaignAssignments.push({ id: "as-combo-reel", campaignId: "root", assetId: "asset-a", pageHandle: "page.a", format: "reel", cost: 17142.85, status: "matched", creatorPhone: null });
+    db.campaignAssignments.push({ id: "as-combo-story", campaignId: "root", assetId: "asset-a", pageHandle: "page.a", format: "story", cost: 12857.15, status: "matched", creatorPhone: null });
+
+    const phase = await createPhase("root", {}, admin);
+
+    const copied = db.campaignAssignments.filter((a) => a.campaignId === phase.id && a.assetId === "asset-a").map((a) => `${a.format}:${a.cost}`).sort();
+    expect(copied).toEqual(["reel:17142.85", "reel:5000", "story:12857.15"]);
+  });
+
+  // Review fix (16 Oct): a plan books one slot per regular line, so a page
+  // booked Reel + Static & Carousel has two Phase 1 slots — both copied, in
+  // Phase 1's order. A page not on the plan still gets one.
+  it("a plan page with several regular lines copies every regular slot, in order; a page off the plan still once", async () => {
+    db.plans = [{ campaignId: "root", items: [{ assetId: "asset-a", format: "reel" }, { assetId: "asset-a", format: "post" }] }];
+    db.campaignAssignments.push({ id: "as-static", campaignId: "root", assetId: "asset-a", pageHandle: "page.a", format: "post", cost: 2500, status: "matched", creatorPhone: null });
+    db.campaignAssignments.push({ id: "as-b-dup", campaignId: "root", assetId: "asset-b", pageHandle: "page.b", format: "story", cost: 900, status: "matched", creatorPhone: null });
+
+    const phase = await createPhase("root", {}, admin);
+
+    const copied = db.campaignAssignments.filter((a) => a.campaignId === phase.id).map((a) => `${a.assetId}:${a.format}:${a.cost}`);
+    expect(copied).toEqual(["asset-a:reel:5000", "asset-b:reel:4000", "asset-a:post:2500"]);
   });
 });
 

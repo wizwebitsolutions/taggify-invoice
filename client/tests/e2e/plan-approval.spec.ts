@@ -163,21 +163,28 @@ test.describe("Plan approval workflow", () => {
     await expect.poll(() => approved).toBe(true);
   });
 
-  test("the card shows the plan's sheet format, and its owner can change it (8 Oct)", async ({ page }) => {
+  // 8 Oct the card had a format <select>; 16 Oct the pick moved into the popup "Client sheet" opens.
+  test("the card shows the plan's sheet format; 'Client sheet' asks which format to use and sends the pick with the generate call (16 Oct)", async ({ page }) => {
     await signIn(page, "ADMIN");
     await mockApi(page);
     await page.route(`${API_URL}/plans`, (route) => route.fulfill({ json: [draftPlan({ createdBy: { id: "some-plan-maker", name: "Planner" } })] }));
     let body: Record<string, unknown> | null = null;
-    await page.route(`${API_URL}/plans/*`, (route) => {
-      if (route.request().method() !== "PUT") return route.fallback();
+    await page.route(`${API_URL}/plans/*/sheet`, (route) => {
       body = route.request().postDataJSON();
-      return route.fulfill({ json: draftPlan({ sheetFormat: "summary" }) });
+      return route.fulfill({ json: { spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit?gid=1#gid=1" } });
     });
 
     await openPlansTab(page);
-    const select = page.getByRole("combobox", { name: /Sheet format for/ });
-    await expect(select).toHaveValue("breakdown");
-    await select.selectOption("summary");
+    // The card carries no format text any more; the choice lives in the popup "Client sheet" opens.
+    await expect(page.getByText("Sheet format")).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: /Sheet format/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Client sheet" }).click();
+    const picker = page.getByRole("radiogroup", { name: "Google Sheet format" });
+    await expect(picker.getByRole("radio", { name: /Category breakdown/ })).toHaveAttribute("aria-checked", "true");
+    await picker.getByRole("radio", { name: /Campaign summary/ }).click();
+    // Generating opens a blank tab first (popup-blocker-safe), then fills in the sheet link.
+    const [tab] = await Promise.all([page.waitForEvent("popup"), page.getByTestId("sheet-format-confirm").click()]);
+    await tab.close();
     await expect.poll(() => body).toEqual({ sheetFormat: "summary" });
   });
 });

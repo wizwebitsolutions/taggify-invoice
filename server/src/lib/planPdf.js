@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import { compactFollowers } from "./followers.js";
+import { formatLabel } from "./formats.js";
 
 /**
  * Renders a Plan to a PDF buffer — the client-facing pitch document
@@ -111,12 +112,19 @@ function renderPlan(doc, plan, { internal = false } = {}) {
   const subtotal = internal ? plan.internal.computedSubtotal : plan.overview.subtotal;
   const gstAmount = internal ? plan.internal.computedGstAmount : plan.overview.gstAmount;
   const total = internal ? plan.internal.computedTotal : plan.overview.total;
+  // Flat discount (16 Oct), off the cost before GST — rows only when there is one.
+  const discount = Number(internal ? plan.internal.computedDiscount : plan.overview.discount) || 0;
+  const taxable = internal ? plan.internal.computedTaxable : plan.overview.taxable;
   const overviewRows = [
     ["Total Followers Targeted Overall", compactFollowers(internal ? o.computedFollowers : o.totalFollowers)],
     ["Total Posts", num(internal ? o.computedPosts : o.totalPosts)],
     ["Expected Impressions", `${num(internal ? o.computedImpressions : o.expectedImpressions)} (est.)`],
     [internal ? "Internal Cost" : "Cost", money(subtotal)],
   ];
+  if (discount > 0) {
+    overviewRows.push(["Discount", `- ${money(discount)}`]);
+    overviewRows.push(["After Discount", money(taxable ?? Math.max(0, subtotal - discount))]);
+  }
   if (plan.isGstPlan) overviewRows.push([`GST (${num(plan.gstPercent)}%)`, money(gstAmount)]);
   overviewRows.push([plan.isGstPlan ? "Total Cost" : "Total Cost (excl. GST)", money(total)]);
   if (internal && plan.budgetVariance != null) {
@@ -172,7 +180,7 @@ function renderPlan(doc, plan, { internal = false } = {}) {
         sno: String(i + 1),
         page: asset.handle ?? "—",
         followers: compactFollowers(asset.followers ?? 0),
-        format: cap(item.format),
+        format: formatLabel(item.format),
         posts: num(item.postsPerProfile),
         // Real per-post cost — only ever drawn when `internal` is true (see
         // `cols` above, which doesn't even define this column otherwise).
@@ -230,8 +238,4 @@ function drawTableHeader(doc, left, y, cols) {
     .lineWidth(1)
     .stroke();
   return y + 8;
-}
-
-function cap(s) {
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }

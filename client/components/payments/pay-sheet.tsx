@@ -10,6 +10,7 @@ import { CheckCircleIcon, CloseIcon, UploadIcon } from "@/components/icons";
 import { payments as paymentsApi, ApiError, type Invoice, type PageOwner, type PaymentInvoice, type Payout, type PayoutItemLink, type PendingLink } from "@/lib/api-client";
 import { money, initialsOf, personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { formatLabel } from "@/lib/formats";
 
 // Mirrors server/src/modules/payments/service.js's computePayoutTotals — the
 // live preview has to match what the server actually adds/withholds.
@@ -420,7 +421,7 @@ function LinksByPage({ links, onRemove, showEmpty = true }: { links: PendingLink
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate font-medium">{l.campaign?.title ?? "—"}</span>
                 <span className="text-[0.72rem] capitalize text-text-faint">
-                  {l.format} · {l.postedAt ? `posted ${shortDate(l.postedAt)}` : `submitted ${shortDate(l.createdAt)}`}
+                  {formatLabel(l.format)} · {l.postedAt ? `posted ${shortDate(l.postedAt)}` : `submitted ${shortDate(l.createdAt)}`}
                 </span>
               </div>
               <span className="font-semibold tabular-nums">{money(l.cost)}</span>
@@ -449,7 +450,7 @@ function DraftLinks({ payout }: { payout: Payout }) {
             <span className="font-medium">{item.link.campaign?.title ?? "—"}</span>
             <span className="capitalize text-text-faint">
               {" "}
-              · @{item.link.asset?.handle ?? "—"} · {item.link.format}
+              · @{item.link.asset?.handle ?? "—"} · {formatLabel(item.link.format)}
             </span>
           </span>
           <span className="font-semibold tabular-nums">{money(item.amount)}</span>

@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { formatSchema } from "../../lib/formats.js";
+import { comboParts, formatLabel, formatSchema, isCombo } from "../../lib/formats.js";
+
+// Message for a campaign-sheet row booked as a combo (Reel + Story 14 Oct,
+// Repost + Story 16 Oct): rows are posts, and a combo is two of them.
+export function comboRowMessage(format) {
+  const [first, second] = comboParts(format).map(formatLabel);
+  return `${formatLabel(format)} is two posts: use one row per post (${first} and ${second})`;
+}
+export const COMBO_ROW_MESSAGE = comboRowMessage("reel_story");
 
 // One row from the attached sheet (newTask.md #8) — an admin's page/creator
 // list for who this campaign should be visible to. postUrl/format/cost
@@ -14,7 +22,12 @@ export const campaignAssignmentRowSchema = z
     handle: z.string().min(1).max(60),
     phone: z.string().min(1).max(20).optional(),
     postUrl: z.string().url().max(500).optional(),
-    format: formatSchema.optional(),
+    // Bookable formats only — the combo gets its own clear message.
+    format: formatSchema
+      .superRefine((f, ctx) => {
+        if (isCombo(f)) ctx.addIssue({ code: "custom", message: comboRowMessage(f) });
+      })
+      .optional(),
     cost: z.number().min(0).optional(),
   })
   // A cost/format with no URL has nothing to attach to; requiring both
