@@ -1,0 +1,321 @@
+/*
+ * Taggify — tokens sampled from the approved reference
+ * ux/design-ref/Taggify Vendor Payout - FINAL.png (see ux/design-ref-analysis.md
+ * and ux/mockups/vendor-payout-final.html). Light is the Phase 1 theme.
+ *
+ * Semantic colours are RGB channels ("109 93 251") so Tailwind can add opacity
+ * (`bg-primary/90`). tailwind.config.ts wraps each one in rgb(var(--x) / <alpha>).
+ * Names follow shadcn/ui (background, foreground, card, primary, muted, border,
+ * input, ring, destructive …) so shadcn components work unchanged, plus Taggify
+ * extras (status, sidebar, divider, label …).
+ *
+ * Light = :root and [data-theme="light"]; dark = [data-theme="dark"] (sampled
+ * from the approved dark reference, 12 Oct). Themes may be nested: /tokens shows both
+ * side by side. Components never use hex values or `dark:` classes, only these tokens.
+ */
+
+/* ── Primitives (reference only; the /tokens swatches read these) ── */
+:root {
+  /* Taggify orange, sampled from ux/design-ref/Taggify Vendor Payout - FINAL.png */
+  --brand-50: #fff6f2;
+  --brand-100: #fdebe2;
+  --brand-200: #fbd5c4;
+  --brand-300: #f8b59a;
+  --brand-400: #f6845e;
+  --brand-500: #f4511e;
+  --brand-600: #e2440f;
+  --brand-700: #bb350b;
+  --brand-800: #932b0d;
+  --brand-900: #6e220e;
+
+  /* Warm neutrals (the reference's canvas, lines and greys) */
+  --neutral-0: #ffffff;
+  --neutral-25: #fdfcfb;
+  --neutral-50: #fbf9f7;
+  --neutral-100: #f5f3f0;
+  --neutral-200: #f0ece8;
+  --neutral-300: #e6e1db;
+  --neutral-400: #bdb7b0;
+  --neutral-500: #8e8e8e;
+  --neutral-600: #5c5c5c;
+  --neutral-700: #333333;
+  --neutral-800: #222222;
+  --neutral-900: #121212;
+
+  /* Theme-independent scales */
+  --radius: 10px; /* shadcn base radius = buttons, inputs, filter chips */
+  --radius-xs: 5px; /* checkboxes */
+  --radius-sm: 7px; /* status pills */
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-card: 16px; /* cards, tiles, page cards, table card */
+  --radius-xl: 18px;
+  --radius-modal: 20px; /* payout rail panel */
+  --radius-2xl: 24px;
+  --radius-pill: 999px; /* category chips */
+
+  --duration-hover: 120ms;
+  --duration-micro: 160ms;
+  --duration-page: 180ms;
+  --duration-drawer: 220ms;
+  --duration-ambient: 8s;
+  --duration-ambient-delay-1: -2.67s;
+  --duration-ambient-delay-2: -5.33s;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --auth-hero-stage-height: 24rem;
+  --auth-pattern-size: 24px;
+  --auth-pattern-dot: 1px;
+  --auth-pattern-opacity: 0.28;
+  --auth-pulse-line-width: 3;
+  --auth-card-float: -4px;
+  --auth-illustration-float: -8px;
+
+  --sidebar-width: 240px;
+  --sidebar-width-compact: 220px;
+  --sidebar-rail: 72px;
+  --topbar-height: 70px;
+  --rail-width: 330px; /* right-hand payout/context rail */
+  --content-max: 1560px;
+}
+
+/* ── Light (approved reference) ──────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Restated so a light section nested in a dark page undoes dark's overrides. */
+  --brand-50: #fff6f2;
+  --brand-100: #fdebe2;
+  --brand-200: #fbd5c4;
+  --brand-300: #f8b59a;
+
+  --background: 251 249 247; /* canvas #FBF9F7 */
+  --foreground: 20 20 20; /* #141414 */
+  --card: 255 255 255;
+  --card-foreground: 20 20 20;
+  --popover: 255 255 255;
+  --popover-foreground: 20 20 20;
+  --elevated: 255 255 255;
+
+  --primary: 18 18 18; /* black CTA: "Process Payout", "Continue to …" */
+  --primary-hover: 44 44 44;
+  --primary-foreground: 255 255 255;
+  --brand: 244 81 30; /* Taggify orange #F4511E: active tab, checkbox, current step */
+  --brand-hover: 226 68 15; /* #E2440F */
+  --brand-foreground: 255 255 255;
+  --brand-soft: 253 235 226; /* #FDEBE2: active nav, sample pill */
+  --brand-ink: 226 68 15; /* orange text on soft backgrounds */
+  --brand-line: 253 235 226; /* active nav edge: same as brand-soft, so invisible in light */
+  --peach: 253 240 233; /* #FDF0E9: payout rail panel */
+  --chip: 253 235 223; /* #FDEBDF: category chips */
+  --chip-foreground: 138 74 43; /* #8A4A2B */
+  --media: 42 37 32; /* #2A2520 dark tile behind post thumbnails */
+  --kbd: 233 230 226; /* #E9E6E2 shortcut hint */
+  --dropzone: 255 252 250; /* #FFFCFA upload area */
+  --dropzone-line: 224 215 207; /* #E0D7CF dashed edge */
+  --control-line: 212 208 203; /* #D4D0CB checkbox edge */
+  --step-fg: 122 112 104; /* rail step label */
+  --step-line: 226 212 201; /* dashed connector */
+  --step-ring: 230 220 212; /* idle step circle */
+  --step-done: 255 227 214; /* done step circle */
+  --step-num: 107 97 89; /* idle step number */
+  --secondary: 255 255 255; /* outline button: white + border */
+  --secondary-foreground: 20 20 20;
+  --muted: 245 243 240; /* #F5F3F0: search field, soft tags */
+  --muted-foreground: 92 92 92; /* #5C5C5C */
+  --accent: 253 252 251; /* row hover #FDFCFB */
+  --accent-foreground: 20 20 20;
+  --destructive: 220 38 38;
+  --destructive-hover: 185 28 28;
+  --destructive-foreground: 255 255 255;
+
+  --border: 240 236 232; /* #F0ECE8 card edges */
+  --input: 230 225 219; /* #E6E1DB controls */
+  --divider: 243 240 236; /* #F3F0EC table rows */
+  --ring: 244 81 30; /* focus = brand */
+  --ring-soft: 253 228 216; /* focus halo */
+
+  --fg-strong: 34 34 34; /* #222 nav text */
+  --fg-faint: 142 142 142; /* #8E8E8E handles, meta */
+  --placeholder: 142 142 142;
+  --link: 226 68 15;
+  --link-hover: 187 53 11;
+
+  --success: 22 163 74; /* #16A34A */
+  --success-soft: 231 247 237; /* #E7F7ED "Verified", "Billing approved" */
+  --success-fg: 21 128 61; /* #15803D */
+  --success-strong: 12 168 112; /* #0CA870 "Submit Payout" */
+  --success-row: 232 247 239; /* total payable row */
+  --warning: 232 161 58;
+  --warning-soft: 255 243 220; /* #FFF3DC "Pending" */
+  --warning-fg: 194 120 3; /* #C27803 */
+  --danger: 229 56 27;
+  --danger-soft: 254 234 229; /* #FEEAE5 "Due" */
+  --danger-fg: 196 43 18;
+  --danger-helper: 196 43 43;
+  --info: 59 111 246;
+  --info-soft: 232 238 254;
+  --info-fg: 37 78 196;
+  --neutral-dot: 142 142 142;
+  --neutral-soft: 245 243 240;
+  --neutral-fg: 92 92 92;
+
+  /* Metric tiles: tinted card + tinted icon square (Total Dues / This Month / Paid) */
+  --tile-coral: 255 246 243;
+  --tile-coral-icon: 253 228 220;
+  --tile-coral-fg: 232 85 58;
+  --tile-amber: 255 250 241;
+  --tile-amber-icon: 253 239 214;
+  --tile-amber-fg: 232 161 58;
+  --tile-mint: 242 251 246;
+  --tile-mint-icon: 221 245 231;
+  --tile-mint-fg: 22 163 74;
+
+  --sidebar: 255 255 255; /* light sidebar */
+  --sidebar-foreground: 34 34 34;
+  --sidebar-label: 142 142 142;
+  --sidebar-badge: 244 81 30;
+
+  --avatar: 18 18 18; /* account initial circle */
+  --avatar-foreground: 255 255 255;
+
+  --chart-primary: 244 81 30;
+  --chart-muted: 251 213 196;
+  --chart-grid: 243 240 236;
+  --chart-axis: 142 142 142;
+
+  --overlay: 20 20 20;
+  /* Canvas gradient (13 Oct): warm peach edges, a near-white light that follows the cursor (components/layout/canvas-glow.tsx). */
+  --canvas-tint-1: 252 216 196; /* peach, brand-100/200 family */
+  --canvas-tint-2: 254 230 212; /* softer warm */
+  --canvas-light: 255 255 255; /* the moving light in the middle */
+
+  --shadow-1: 0 1px 2px rgba(20, 20, 20, 0.04);
+  --shadow-2: 0 1px 2px rgba(20, 20, 20, 0.04), 0 4px 14px -8px rgba(20, 20, 20, 0.08); /* cards */
+  --shadow-3: 0 12px 32px rgba(20, 20, 20, 0.1);
+  --shadow-modal: 0 24px 64px rgba(20, 20, 20, 0.16);
+  --shadow-premium: 0 8px 30px rgba(20, 20, 20, 0.05);
+}
+
+/* ── Dark (sampled from the approved dark reference, 12 Oct: deep teal-navy
+   canvas, near-black sidebar, mint CTA + active states) ─────────────────── */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Components use a few brand primitives directly (selected rows, soft
+     highlights); in dark they become teal tints so nothing glares orange. */
+  --brand-50: #0e2a2b;
+  --brand-100: #123537;
+  --brand-200: #164e48;
+  --brand-300: #1f6b62;
+
+  --background: 14 26 35; /* #0E1A23 canvas */
+  --foreground: 236 241 245; /* #ECF1F5 */
+  --card: 17 28 36; /* #111C24 */
+  --card-foreground: 236 241 245;
+  --popover: 21 33 42; /* #15212A */
+  --popover-foreground: 236 241 245;
+  --elevated: 21 33 42;
+
+  --primary: 100 235 214; /* #64EBD6 mint CTA: "Add phase" */
+  --primary-hover: 79 217 196; /* #4FD9C4 */
+  --primary-foreground: 6 32 28; /* #06201C dark ink on mint */
+  --brand: 100 235 214; /* current / selected: active tab underline, chips */
+  --brand-hover: 79 217 196;
+  --brand-foreground: 6 32 28;
+  --brand-soft: 14 42 43; /* #0E2A2B active nav */
+  --brand-line: 22 78 72; /* #164E48 active nav edge */
+  --brand-ink: 100 235 214;
+  --peach: 15 36 39; /* payout rail panel */
+  --chip: 18 53 55; /* #123537 "All 6" chip */
+  --chip-foreground: 140 240 224;
+  --media: 9 13 16; /* #090D10 */
+  --kbd: 16 28 37;
+  --dropzone: 17 28 36;
+  --dropzone-line: 40 56 68;
+  --control-line: 52 68 80;
+  --step-fg: 138 152 165;
+  --step-line: 40 56 68;
+  --step-ring: 36 50 62;
+  --step-done: 14 42 43;
+  --step-num: 138 152 165;
+  --secondary: 17 28 36; /* outline button: "Edit details" */
+  --secondary-foreground: 236 241 245;
+  --muted: 22 36 48; /* #162430 search field, soft tags */
+  --muted-foreground: 138 152 165; /* #8A98A5 */
+  --accent: 20 33 43; /* row hover */
+  --accent-foreground: 236 241 245;
+  --destructive: 239 68 68;
+  --destructive-hover: 220 38 38;
+  --destructive-foreground: 255 255 255;
+
+  --border: 30 44 55; /* #1E2C37 card edges */
+  --input: 38 54 67; /* #263643 controls */
+  --divider: 26 39 49; /* #1A2731 table rows */
+  --ring: 100 235 214;
+  --ring-soft: 20 70 66; /* #144642 */
+
+  --fg-strong: 214 222 229;
+  --fg-faint: 110 125 138; /* #6E7D8A */
+  --placeholder: 110 125 138;
+  --link: 100 235 214;
+  --link-hover: 150 243 228;
+
+  /* Status tints pre-blended over the dark card so they stay opaque tokens. */
+  --success: 34 197 94;
+  --success-soft: 16 52 44;
+  --success-fg: 94 230 184; /* #5EE6B8 */
+  --success-strong: 18 185 129;
+  --success-row: 16 52 44;
+  --warning: 245 158 11;
+  --warning-soft: 52 44 30;
+  --warning-fg: 251 191 36;
+  --danger: 239 68 68;
+  --danger-soft: 56 30 34;
+  --danger-fg: 248 113 113;
+  --danger-helper: 248 113 113;
+  --info: 59 130 246;
+  --info-soft: 22 42 66;
+  --info-fg: 125 190 235;
+  --neutral-dot: 138 152 165;
+  --neutral-soft: 22 36 48;
+  --neutral-fg: 138 152 165;
+
+  /* Metric tiles: plain card, tinted icon square (blue / blue / green). */
+  --tile-coral: 17 28 36;
+  --tile-coral-icon: 28 59 80; /* #1C3B50 */
+  --tile-coral-fg: 125 190 235;
+  --tile-amber: 17 28 36;
+  --tile-amber-icon: 29 67 94; /* #1D435E */
+  --tile-amber-fg: 125 190 235;
+  --tile-mint: 17 28 36;
+  --tile-mint-icon: 15 64 55; /* #0F4037 */
+  --tile-mint-fg: 94 230 184;
+
+  --sidebar: 10 15 18; /* #0A0F12 */
+  --sidebar-foreground: 199 208 216;
+  --sidebar-label: 110 125 138;
+  --sidebar-badge: 100 235 214;
+
+  --avatar: 17 28 36;
+  --avatar-foreground: 236 241 245;
+
+  --chart-primary: 100 235 214;
+  --chart-muted: 20 70 66;
+  --chart-grid: 26 39 49;
+  --chart-axis: 110 125 138;
+
+  --overlay: 0 0 0;
+
+  /* Soft teal tints on the canvas, a slightly lighter navy light following the cursor. */
+  --canvas-tint-1: 24 52 68;
+  --canvas-tint-2: 18 42 54;
+  --canvas-light: 28 50 64;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.25), 0 4px 14px -8px rgba(0, 0, 0, 0.4);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --shadow-premium: 0 8px 30px rgba(0, 0, 0, 0.35);
+}

@@ -1,0 +1,154 @@
+@import "../styles/tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-body text-foreground;
+  }
+
+  a {
+    @apply text-link hover:text-link-hover;
+  }
+
+  /* Visible focus for keyboard users everywhere; inputs use the canvas ring instead. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 2px;
+  }
+
+  ::placeholder {
+    color: rgb(var(--placeholder));
+  }
+}
+
+@layer components {
+  .auth-hero {
+    background: rgb(var(--peach));
+  }
+
+  .auth-hero::before {
+    position: absolute;
+    inset: 0;
+    content: "";
+    opacity: var(--auth-pattern-opacity);
+    background-image: radial-gradient(rgb(var(--brand) / var(--auth-pattern-opacity)) var(--auth-pattern-dot), transparent var(--auth-pattern-dot));
+    background-size: var(--auth-pattern-size) var(--auth-pattern-size);
+    mask-image: linear-gradient(to bottom, black, transparent 72%);
+  }
+
+  .auth-pulse-path {
+    stroke: rgb(var(--brand) / 0.28);
+    stroke-width: var(--auth-pulse-line-width);
+    stroke-linecap: round;
+    stroke-dasharray: 1;
+    animation: auth-path-draw var(--duration-ambient) var(--ease-out) infinite;
+  }
+
+  .auth-pulse-dot {
+    fill: rgb(var(--brand));
+    stroke: rgb(var(--card));
+    stroke-width: 4;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: auth-dot-pulse var(--duration-ambient) var(--ease-out) infinite;
+  }
+
+  .auth-pulse-dot-two { animation-delay: var(--duration-ambient-delay-1); }
+  .auth-pulse-dot-three { animation-delay: var(--duration-ambient-delay-2); }
+  .auth-pulse-card { animation: auth-card-float var(--duration-ambient) var(--ease-out) infinite; }
+  .auth-pulse-card:nth-child(2) { animation-delay: var(--duration-ambient-delay-1); }
+  .auth-pulse-card:nth-child(3) { animation-delay: var(--duration-ambient-delay-2); }
+  .auth-hero-illustration { animation: auth-illustration-breathe var(--duration-ambient) var(--ease-out) infinite; }
+
+  @keyframes auth-path-draw {
+    0%, 12% { stroke-dashoffset: 1; opacity: 0.35; }
+    42%, 88% { stroke-dashoffset: 0; opacity: 1; }
+    100% { stroke-dashoffset: 0; opacity: 0.35; }
+  }
+
+  @keyframes auth-dot-pulse {
+    0%, 100% { transform: scale(0.85); opacity: 0.55; }
+    45% { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes auth-card-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(var(--auth-card-float)); }
+  }
+
+  @keyframes auth-illustration-breathe {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(var(--auth-illustration-float)); }
+  }
+
+  /* The page's last layer (components/layout/canvas-glow.tsx): tinted corners and a light
+     spot at --glow-x/--glow-y, which the component moves after the cursor. Colours are the
+     --canvas-* tokens; the variables live on this element so moving them restyles only it. */
+  .canvas-glow {
+    --glow-x: 50%;
+    --glow-y: 40%;
+    background:
+      radial-gradient(36rem circle at var(--glow-x) var(--glow-y), rgb(var(--canvas-light) / 0.95), rgb(var(--canvas-light) / 0) 70%),
+      radial-gradient(55% 50% at 25% 0%, rgb(var(--canvas-tint-1)), rgb(var(--canvas-tint-1) / 0) 70%),
+      radial-gradient(45% 50% at 100% 15%, rgb(var(--canvas-tint-2)), rgb(var(--canvas-tint-2) / 0) 70%),
+      radial-gradient(60% 60% at 100% 100%, rgb(var(--canvas-tint-1)), rgb(var(--canvas-tint-1) / 0) 70%),
+      radial-gradient(50% 55% at 20% 100%, rgb(var(--canvas-tint-2)), rgb(var(--canvas-tint-2) / 0) 70%),
+      rgb(var(--background));
+  }
+}
+
+@layer utilities {
+  /* Money and counts use tabular numerals so columns line up. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Thin scrollbar with no arrow buttons; the thumb only shows while the area is hovered or focused.
+     Chromium ignores ::-webkit-scrollbar (and keeps its arrow buttons) once scrollbar-width is set,
+     so the standard properties are only for browsers without the webkit pseudo-elements (Firefox). */
+  @supports not selector(::-webkit-scrollbar) {
+    .thin-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    .thin-scroll:hover,
+    .thin-scroll:focus-within {
+      scrollbar-color: rgb(var(--input)) transparent;
+    }
+  }
+  .thin-scroll::-webkit-scrollbar {
+    width: theme("spacing[1.5]");
+  }
+  .thin-scroll::-webkit-scrollbar-button {
+    display: none;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: transparent;
+  }
+  .thin-scroll:hover::-webkit-scrollbar-thumb,
+  .thin-scroll:focus-within::-webkit-scrollbar-thumb {
+    background: rgb(var(--input));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
