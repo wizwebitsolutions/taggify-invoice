@@ -25,7 +25,12 @@ vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
 const mockGetAvgEngagement = vi.fn();
 const mockCreateAsset = vi.fn();
-vi.mock("../assets/service.js", () => ({ getAvgEngagement: (...args) => mockGetAvgEngagement(...args), createAsset: (...args) => mockCreateAsset(...args) }));
+vi.mock("../assets/service.js", () => ({
+  getAvgEngagement: (...args) => mockGetAvgEngagement(...args),
+  // The batched form annotatePlan uses (22 Oct) — one mockGetAvgEngagement call per page, so the per-asset expectations below still hold.
+  getAvgEngagementForAssets: async (assets) => new Map(await Promise.all(assets.map(async (a) => [a.id, await mockGetAvgEngagement(a.id)]))),
+  createAsset: (...args) => mockCreateAsset(...args),
+}));
 // Execution sheet sync (23 Sep): the sheet fetch and the link creation are
 // other modules' jobs — mocked so this file tests only the row → slot logic.
 const mockFetchSheetCsv = vi.fn();

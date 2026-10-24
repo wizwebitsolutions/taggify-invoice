@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 
-import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, parseGroupLink, ImportParseError, MAX_IMPORT_ROWS, rateFormatFromHeader } from "./importParser.js";
+import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, parseGroupLink, ImportParseError, MAX_IMPORT_ROWS, rateFormatFromHeader, parseCategory } from "./importParser.js";
 import { FORMATS } from "../../lib/formats.js";
 
 /**
@@ -165,6 +165,13 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
     expect(parsed.rows[0]).toMatchObject({ handle: "some.page", pageName: null, ownerRef: "+919000000001" });
   });
 
+  it("reads the Category column, saving standard categories in their standard spelling (24 Oct)", async () => {
+    const csv = ["Page Link,Category", "https://instagram.com/a.page/,meme page", "https://instagram.com/b.page/,  NEWS   PAGE ", "https://instagram.com/c.page/,Cricket", "https://instagram.com/d.page/,"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+    expect(parsed.rows.map((r) => r.category)).toEqual(["Meme page", "News page", "Cricket", null]);
+    expect(parseCategory("x".repeat(60))).toHaveLength(40);
+  });
+
   it("the downloadable template itself parses back to its two example pages", async () => {
     const { buildImportPagesTemplate, IMPORT_TEMPLATE_HEADERS } = await import("../../lib/importPagesTemplate.js");
     const parsed = await parseImportSheet(await buildImportPagesTemplate(), "import-pages-template.xlsx");
@@ -174,6 +181,7 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       "Vendor Name",
       "Vendor Contact",
       "Followers",
+      "Category",
       "Grade",
       "Group Link",
       "Reel Rate",
@@ -188,8 +196,10 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       "Repost + Story Rate",
     ]);
     // One rate column per format, in FORMATS order.
-    expect(IMPORT_TEMPLATE_HEADERS.slice(7).map(rateFormatFromHeader)).toEqual(FORMATS);
+    expect(IMPORT_TEMPLATE_HEADERS.slice(8).map(rateFormatFromHeader)).toEqual(FORMATS);
     // Grade + Group Link (16 Oct) come through, and neither is mistaken for a rate column.
+    // Category (24 Oct) is read from the sheet too.
+    expect(parsed.rows.map((r) => r.category)).toEqual(["Meme page", "News page"]);
     expect(parsed.rows.map((r) => [r.grade, r.groupLink])).toEqual([
       ["A", "https://chat.whatsapp.com/replace-me"],
       ["B", null],

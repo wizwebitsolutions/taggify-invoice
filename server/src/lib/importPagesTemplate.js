@@ -24,8 +24,8 @@ export const IMPORT_TEMPLATE_RATE_HEADERS = [
   "Reel + Story Rate",
   "Repost + Story Rate",
 ];
-// Grade (A/B/C) and Group Link (16 Oct) are optional columns before the rates.
-export const IMPORT_TEMPLATE_HEADERS = ["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Followers", "Grade", "Group Link", ...IMPORT_TEMPLATE_RATE_HEADERS];
+// Category (24 Oct), Grade (A/B/C) and Group Link (16 Oct) are optional columns before the rates.
+export const IMPORT_TEMPLATE_HEADERS = ["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Followers", "Category", "Grade", "Group Link", ...IMPORT_TEMPLATE_RATE_HEADERS];
 // Required cells (17 Oct): the page, who it belongs to and how to reach them, and the three core rates.
 export const IMPORT_REQUIRED_HEADERS = ["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Entertainment / Brand Rate", "Reel Rate", "Story Rate"];
 const FIRST_RATE_COLUMN = IMPORT_TEMPLATE_HEADERS.indexOf(IMPORT_TEMPLATE_RATE_HEADERS[0]) + 1;
@@ -35,8 +35,8 @@ const FIRST_RATE_COLUMN = IMPORT_TEMPLATE_HEADERS.indexOf(IMPORT_TEMPLATE_RATE_H
 // someone's real page under the chosen account.
 const EXAMPLE_ROWS = [
   // Reel, Ent./Brand, PR, Political, Static & Carousel, Repost, Story, Political Story, Reel + Story, Repost + Story
-  ["Example Page One", "https://www.instagram.com/example.page.one.replace.me/", "Example Vendor", "+91 90000 00000", 450000, "A", "https://chat.whatsapp.com/replace-me", 18000, 20000, 25000, 22000, 9000, 5000, 6000, 8000, 21000, 9500],
-  ["Example Page Two", "https://www.instagram.com/example.page.two.replace.me/", "Example Vendor", "vendor@example.com", 120000, "B", "", 9000, "", "", "", 4500, "", 3000, "", "", ""],
+  ["Example Page One", "https://www.instagram.com/example.page.one.replace.me/", "Example Vendor", "+91 90000 00000", 450000, "Meme page", "A", "https://chat.whatsapp.com/replace-me", 18000, 20000, 25000, 22000, 9000, 5000, 6000, 8000, 21000, 9500],
+  ["Example Page Two", "https://www.instagram.com/example.page.two.replace.me/", "Example Vendor", "vendor@example.com", 120000, "News page", "B", "", 9000, "", "", "", 4500, "", 3000, "", "", ""],
 ];
 
 export async function buildImportPagesTemplate() {
@@ -57,7 +57,7 @@ export async function buildImportPagesTemplate() {
     cell.note = "Required — a row without this is not imported.";
   });
   // Rate columns are sized to their header (min 12).
-  ws.columns = [{ width: 24 }, { width: 46 }, { width: 24 }, { width: 28 }, { width: 14 }, { width: 10 }, { width: 40 }, ...IMPORT_TEMPLATE_RATE_HEADERS.map((h) => ({ width: Math.max(12, h.length + 4) }))];
+  ws.columns = [{ width: 24 }, { width: 46 }, { width: 24 }, { width: 28 }, { width: 14 }, { width: 18 }, { width: 10 }, { width: 40 }, ...IMPORT_TEMPLATE_RATE_HEADERS.map((h) => ({ width: Math.max(12, h.length + 4) }))];
   // Vendor Contact is text, so a phone number isn't turned into 9.19E+11 or lose its "+91".
   ws.getColumn(4).numFmt = "@";
   // Followers and the ten rate columns.
@@ -75,6 +75,7 @@ export async function buildImportPagesTemplate() {
     ["A vendor already in Taggify is matched by phone, then email, then name."],
     ["A new vendor is shown in the import popup for you to approve and create — an email is needed to create their login."],
     ["Followers: optional starting count — the live count from Instagram is used when it's available."],
+    ["Category: optional, e.g. Meme page, News page, Entertainment, Lifestyle, Fashion, Fitness, Food (any other name is kept as written). It can be changed per page in the import popup."],
     ["Grade: A, B or C — optional, set by hand. Group Link: the page's WhatsApp/Telegram group link, optional."],
     [`Rates, in rupees (numbers only, or ₹12,000): ${IMPORT_TEMPLATE_RATE_HEADERS.join(", ")}.`],
     ["Entertainment / Brand, Reel and Story rates are required. The other seven are optional — leave a column blank if the page doesn't offer that format. Political / Political Story: a reel / story whose content is political. Static & Carousel: an image or carousel post."],

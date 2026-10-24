@@ -63,9 +63,10 @@ Don't report a task as done until all of these are true:
    (`client/tests/e2e/`) for the changed behaviour. Run only the targeted files while
    working, then run the full suite once at the end. For a bug fix, add a regression
    test that fails without the fix.
-2. **Try it for real.** For UI or flow changes, run the flow with Playwright or
-   the browser (claude-in-chrome if connected, otherwise Playwright), logged in as
-   each role it applies to. "Looks right" or "type-checks" is not tested.
+2. **Browser testing is done manually by the USER.** NEVER run browser testing
+   (Playwright, Puppeteer, headless browser, or browser automation) on your own
+   without explicit instruction from the user. The user tests UI, layouts, and
+   flows manually. Only run browser tests if the user explicitly asks for them in their prompt.
 3. **Check every reference.** When you add, rename or move a route, component, nav
    entry or export, search for every place that uses it:
    `rg "<name>" client server -g '!node_modules' -g '!.next'`.
@@ -95,6 +96,8 @@ unrelated failures silently, and never delete or weaken tests to get a pass.
 - Edit migrations that have already run, or run `prisma migrate reset` on anything
   except a throwaway local DB.
 - Commit or push unless asked.
+- Run browser testing, Playwright tests, or browser automation on your own without
+  explicit instruction from the user. The user will do all browser testing manually.
 
 
 

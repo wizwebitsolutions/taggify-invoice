@@ -5,7 +5,7 @@ import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
 import { prisma } from "../../lib/prisma.js";
 import { getEffectivePermissions, getOwnCapabilities, isFullAdmin } from "../../lib/permissions.js";
-import { updatePermissionsSchema, updateUserEmailSchema, updateUserDetailsSchema } from "./schemas.js";
+import { updatePermissionsSchema, updateUserEmailSchema, updateUserDetailsSchema, setUserActiveSchema } from "./schemas.js";
 import { createBillingProfileSchema } from "../billing/schemas.js";
 import { invoiceNumberingSchema } from "../plans/schemas.js";
 import { getNumbering, setNumbering } from "../../lib/clientInvoiceNumbering.js";
@@ -49,7 +49,7 @@ router.get("/users", requireAccess("users.view"), async (req, res, next) => {
     const details = isFullAdmin(actor) ? { secondaryPhone: true, addressLine1: true, addressLine2: true, state: true, pincode: true } : {};
     const users = await prisma.user.findMany({
       select: {
-        id: true, phoneNumber: true, email: true, emailVerifiedAt: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true,
+        id: true, phoneNumber: true, email: true, emailVerifiedAt: true, name: true, role: true, whatsappVerified: true, permissions: true, createdByAdminId: true, createdAt: true, deactivatedAt: true,
         ...details,
       },
       orderBy: { createdAt: "desc" },
@@ -112,6 +112,15 @@ router.put("/users/:id/details", requireAccess("users.edit"), validateBody(updat
 router.post("/users/:id/billing-profiles", requireAccess("users.edit"), validateBody(createBillingProfileSchema), async (req, res, next) => {
   try {
     res.status(201).json(await adminService.createBillingProfileFor(req.user.id, req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Deactivate / reactivate an account (21 Oct) — full admins only, never yourself; see adminService.setUserActive.
+router.put("/users/:id/active", requireAccess("users.edit"), validateBody(setUserActiveSchema), async (req, res, next) => {
+  try {
+    res.json(await adminService.setUserActive(req.user.id, req.params.id, req.body.active));
   } catch (err) {
     next(err);
   }

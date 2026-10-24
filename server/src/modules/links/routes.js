@@ -14,8 +14,29 @@ import {
   markInvalidSchema,
 } from "./schemas.js";
 import * as linksService from "./service.js";
+import { getPostThumbnailSource } from "./thumbnail.js";
 
 const router = Router();
+
+// Public (registered before requireAuth, so it's exempt) — an <img> tag can't
+// send our Authorization header, and a post's cover is already public on
+// Instagram; the link id alone is enough to serve it. Mirrors
+// GET /assets/:id/profile-pic, including the Cross-Origin-Resource-Policy
+// override (helmet's same-origin default silently blocks cross-origin <img>).
+router.get("/:id/thumbnail", async (req, res, next) => {
+  try {
+    const source = await getPostThumbnailSource(req.params.id);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    if (source.redirect) return res.redirect(302, source.redirect);
+    res.setHeader("Content-Type", source.contentType);
+    res.send(source.buffer);
+  } catch (err) {
+    if (err?.statusCode === 404) res.setHeader("Cache-Control", "public, max-age=600");
+    next(err);
+  }
+});
+
 router.use(requireAuth);
 
 router.post("/", requireOwnAccess("links.edit"), requireRole("CREATOR", "TEAM_MEMBER"), validateBody(createLinkSchema), async (req, res, next) => {

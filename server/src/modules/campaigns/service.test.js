@@ -69,6 +69,7 @@ describe("listCampaigns — card preview (newTask.md #1: thumbnail, caption, tot
         postSnapshots: [{ thumbnailUrl: "old.jpg", caption: "old caption", likeCount: 10 }],
       },
       {
+        id: "l-new",
         campaignId: "c1",
         cost: 2000,
         status: "SCREENSHOT_APPROVED",
@@ -80,7 +81,8 @@ describe("listCampaigns — card preview (newTask.md #1: thumbnail, caption, tot
 
     const [campaign] = await listCampaigns();
 
-    expect(campaign.representativePost).toEqual({ thumbnailUrl: "new.jpg", caption: "new caption" });
+    // linkId is what the card hotlinks (GET /links/:id/thumbnail, 22 Oct), not the expiring Instagram URL.
+    expect(campaign.representativePost).toEqual({ linkId: "l-new", thumbnailUrl: "new.jpg", caption: "new caption" });
     expect(campaign.totalLikes).toBe(30);
     expect(campaign.postCount).toBe(2);
   });

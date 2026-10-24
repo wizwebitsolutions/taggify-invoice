@@ -95,6 +95,24 @@ export function uploadProfilePic(assetId, buffer) {
   });
 }
 
+/**
+ * A submitted post's cover image (22 Oct — reel thumbnails came back broken
+ * in the browser: Apify hands us a signed cdninstagram.com link that expires
+ * in about a week, and some networks block that host outright). Same shape
+ * as uploadProfilePic: one fixed public_id per link, overwritten on every
+ * re-scrape. Returns the delivery URL.
+ */
+export function uploadPostThumbnail(linkId, buffer) {
+  if (!process.env.CLOUDINARY_CLOUD_NAME) return Promise.reject(new Error("Cloudinary isn't configured"));
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { public_id: `post-thumbnails/${linkId}`, overwrite: true, resource_type: "image" },
+      (err, result) => (err ? reject(err) : resolve(result.secure_url))
+    );
+    stream.end(buffer);
+  });
+}
+
 export function isCloudinaryConfigured() {
   return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
 }

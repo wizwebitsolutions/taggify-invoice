@@ -17,7 +17,8 @@ vi.mock("../../middleware/requireAuth.js", () => ({
 
 const updateUserDetails = vi.fn(async () => ({ id: "cr-1" }));
 const createBillingProfileFor = vi.fn(async () => ({ id: "bp-1" }));
-vi.mock("./service.js", () => ({ updateUserDetails: (...a) => updateUserDetails(...a), createBillingProfileFor: (...a) => createBillingProfileFor(...a) }));
+const setUserActive = vi.fn(async () => ({ id: "cr-1", deactivatedAt: null }));
+vi.mock("./service.js", () => ({ updateUserDetails: (...a) => updateUserDetails(...a), createBillingProfileFor: (...a) => createBillingProfileFor(...a), setUserActive: (...a) => setUserActive(...a) }));
 vi.mock("../jobs/financeExport.js", () => ({ financeExportJob: vi.fn() }));
 vi.mock("../jobs/financeGoogleSheetExport.js", () => ({ financeGoogleSheetExportJob: vi.fn() }));
 
@@ -70,5 +71,21 @@ describe("PUT /admin/users/:id/details and POST /admin/users/:id/billing-profile
     expect((await call(ADMIN, "PUT", "/users/cr-1/details", { email: "x@y.z" })).status).toBe(400);
     expect((await call(ADMIN, "PUT", "/users/cr-1/details", {})).status).toBe(400);
     expect(updateUserDetails).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /admin/users/:id/active (21 Oct, deactivate / reactivate)", () => {
+  it("a CREATOR or FINANCE account (no users.edit) is rejected before the service runs", async () => {
+    expect((await call({ id: "cr-9", role: "CREATOR" }, "PUT", "/users/cr-1/active", { active: false })).status).toBe(403);
+    expect((await call({ id: "fin-1", role: "FINANCE" }, "PUT", "/users/cr-1/active", { active: false })).status).toBe(403);
+    expect(setUserActive).not.toHaveBeenCalled();
+  });
+
+  it("an ADMIN reaches the service; the body must be { active: boolean }", async () => {
+    expect((await call(ADMIN, "PUT", "/users/cr-1/active", { active: false })).status).toBe(200);
+    expect(setUserActive).toHaveBeenCalledWith("adm-1", "cr-1", false);
+    expect((await call(ADMIN, "PUT", "/users/cr-1/active", { active: "no" })).status).toBe(400);
+    expect((await call(ADMIN, "PUT", "/users/cr-1/active", {})).status).toBe(400);
+    expect(setUserActive).toHaveBeenCalledTimes(1);
   });
 });

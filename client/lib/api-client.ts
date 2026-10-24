@@ -852,6 +852,9 @@ export const assets = {
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
   // Remove a page (16 Oct) — ADMIN role + inventory.edit. 409 for a page with posts or on an approved plan.
   remove: (token: string, assetId: string) => request<{ id: string }>(`/assets/${assetId}`, { method: "DELETE", token }),
+  // Bulk delete (19 Oct): pages with posts or on an approved plan come back in `skipped` with the reason.
+  removeMany: (token: string, assetIds: string[]) =>
+    request<{ deleted: string[]; skipped: { id: string; reason: string }[] }>("/assets/bulk-delete", { method: "POST", token, body: { assetIds } }),
   // A planner's proposed edit (16 Oct): parked on the row until an admin decides. Only the keys sent are proposed.
   proposeEdit: (token: string, assetId: string, body: PendingAssetEdit) => request<Asset>(`/assets/${assetId}/propose-edit`, { method: "PUT", token, body }),
   decideEdit: (token: string, assetId: string, decision: "approve" | "reject") => request<Asset>(`/assets/${assetId}/edit-decision`, { method: "PUT", token, body: { decision } }),

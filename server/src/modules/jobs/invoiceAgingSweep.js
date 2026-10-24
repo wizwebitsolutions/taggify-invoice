@@ -23,7 +23,7 @@ export async function invoiceAgingSweepJob() {
 
   if (overdue.length === 0) return;
 
-  const candidates = await prisma.user.findMany({ select: { id: true, role: true, permissions: true } });
+  const candidates = await prisma.user.findMany({ where: { deactivatedAt: null }, select: { id: true, role: true, permissions: true } });
   const financeUserIds = candidates.filter((u) => getEffectivePermissions(u)["finance.view"]).map((u) => u.id);
 
   for (const invoice of overdue) {

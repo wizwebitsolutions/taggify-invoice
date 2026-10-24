@@ -1,4 +1,4 @@
-import { prisma } from "./prisma.js";
+import { loadUserAccess } from "./requestUser.js";
 import { getEffectivePermissions, getOwnCapabilities } from "./permissions.js";
 
 /**
@@ -15,14 +15,16 @@ import { getEffectivePermissions, getOwnCapabilities } from "./permissions.js";
  * Kept out of lib/permissions.js on purpose — that module stays a pure,
  * DB-free set of functions so permissions.test.js can exercise it without
  * mocking Prisma.
+ *
+ * "Fresh" means fresh per request: inside a request the row is read once and
+ * shared with the auth/access middleware (lib/requestUser.js), not re-read
+ * by every layer.
  */
 export async function loadEffectivePermissions(userId) {
-  const user = userId ? await prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } }) : null;
-  return getEffectivePermissions(user);
+  return getEffectivePermissions(await loadUserAccess(userId));
 }
 
 /** Fresh-from-DB own-content switches (24 Sep) — for CREATOR/TEAM_MEMBER/PLAN_MAKER; all-false for staff. */
 export async function loadOwnCapabilities(userId) {
-  const user = userId ? await prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } }) : null;
-  return getOwnCapabilities(user);
+  return getOwnCapabilities(await loadUserAccess(userId));
 }

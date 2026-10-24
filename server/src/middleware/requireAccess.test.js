@@ -116,7 +116,7 @@ describe("requireAccess — section guard grantable to any role (15 Sep)", () =>
 
     await requireAccess("finance.pay", "ADMIN")(req, res, next);
 
-    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { id: "fin-1" }, select: { role: true, permissions: true } });
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { id: "fin-1" }, select: { role: true, permissions: true, deactivatedAt: true } });
     expect(next).toHaveBeenCalledWith();
   });
 

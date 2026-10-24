@@ -16,7 +16,7 @@ vi.mock("../scraping/service.js", () => ({ refreshAssetMetrics: vi.fn(async () =
 const getAccountMetricsBatch = vi.fn(async () => ({}));
 vi.mock("../../lib/apifyClient.js", () => ({ ApifyInstagramProvider: { getAccountMetricsBatch: (...a) => getAccountMetricsBatch(...a), getAccountMetrics: vi.fn() } }));
 
-const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails, setApprovalStatus, missingRequiredRates, proposeAssetEdit, decideAssetEdit, deleteAsset, checkProfiles } = await import("./service.js");
+const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails, setApprovalStatus, missingRequiredRates, proposeAssetEdit, decideAssetEdit, deleteAsset, deleteAssets, checkProfiles } = await import("./service.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
 // listAssets (23 Sep, Step 3) reads the *caller's* effective permissions
@@ -357,6 +357,26 @@ describe("deleteAsset (16 Oct — 'inventory remove option, admin only')", () =>
   it("404s on a page that doesn't exist", async () => {
     mockPrisma.asset.findUnique.mockResolvedValueOnce(null);
     await expect(deleteAsset("nope")).rejects.toMatchObject({ code: "ASSET_NOT_FOUND" });
+  });
+});
+
+describe("deleteAssets (19 Oct — Inventory bulk delete)", () => {
+  it("deletes the free pages and skips in-use ones with the reason", async () => {
+    mockPrisma.asset.findUnique.mockImplementation(async ({ where }) => ({ id: where.id, handle: where.id }));
+    mockPrisma.link.count.mockImplementation(async ({ where }) => (where.assetId === "busy" ? 2 : 0));
+    mockPrisma.planItem.count.mockResolvedValue(0);
+    const result = await deleteAssets(["free-1", "busy", "free-2", "free-1"]);
+    expect(result.deleted).toEqual(["free-1", "free-2"]);
+    expect(result.skipped).toEqual([{ id: "busy", reason: expect.stringContaining("deactivate it instead") }]);
+    expect(mockPrisma.asset.delete).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips a page that no longer exists instead of failing the batch", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ id: "ok", handle: "ok" });
+    mockPrisma.link.count.mockResolvedValue(0);
+    mockPrisma.planItem.count.mockResolvedValue(0);
+    const result = await deleteAssets(["gone", "ok"]);
+    expect(result).toEqual({ deleted: ["ok"], skipped: [{ id: "gone", reason: "Page not found" }] });
   });
 });
 

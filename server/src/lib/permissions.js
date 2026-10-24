@@ -44,6 +44,9 @@ export const SECTIONS = {
   // affiliate-creator-tool). One key: "may use the tool" — rows are always
   // scoped to the user's own batches unless they are a full admin.
   bulkTrack: ["view"],
+  // 24 Oct: Post Tracker (paste a public reel/post link, see Instagram's own
+  // embed of it). Same shape as bulkTrack: one opt-in "may use the tool" key.
+  postTracker: ["view"],
 };
 
 /**
@@ -54,7 +57,7 @@ export const SECTIONS = {
  * own rows — so a CREATOR can hold one without breaking the own-scope rule.
  * Stored on the overlay as `true` when granted (absence = off).
  */
-export const OPT_IN_KEYS = ["bulkTrack.view"];
+export const OPT_IN_KEYS = ["bulkTrack.view", "postTracker.view"];
 
 export const PERMISSION_KEYS = Object.entries(SECTIONS).flatMap(([section, actions]) => actions.map((a) => `${section}.${a}`));
 

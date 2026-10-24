@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, proposeEditSchema, decideEditSchema } from "./schemas.js";
+import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, bulkDeleteSchema, proposeEditSchema, decideEditSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import { requireRole } from "../../middleware/requireRole.js";
@@ -93,6 +93,16 @@ router.put("/:id/active", requireRole("ADMIN"), requireAccess("inventory.edit"),
 
 // Remove a page (16 Oct) — admins only, same gate as Active/Inactive. Refused
 // (409) for a page with posts or on an approved plan: deactivate those instead.
+// Bulk delete (19 Oct) — same admin-only gate as a single delete. Pages that
+// can't go (posts / approved plan) come back in `skipped` with the reason.
+router.post("/bulk-delete", requireRole("ADMIN"), requireAccess("inventory.edit"), validateBody(bulkDeleteSchema), async (req, res, next) => {
+  try {
+    res.json(await assetsService.deleteAssets(req.body.assetIds));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.delete("/:id", requireRole("ADMIN"), requireAccess("inventory.edit"), async (req, res, next) => {
   try {
     res.json(await assetsService.deleteAsset(req.params.id));

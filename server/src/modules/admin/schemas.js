@@ -15,6 +15,11 @@ export const updateUserEmailSchema = z.object({
   email: z.string().trim().email("Enter a valid email address").max(254),
 });
 
+// Admin deactivates (false) or reactivates (true) an account (21 Oct).
+export const setUserActiveSchema = z.object({
+  active: z.boolean(),
+});
+
 // Admin edits another account's contact + address (12 Oct, People → Edit
 // details). Every field optional — only what changed is sent; a blank
 // string clears it. Email is NOT here: changing someone's login stays on

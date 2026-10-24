@@ -23,8 +23,8 @@ import { ApiError } from "../middleware/errorHandler.js";
 
 describe("key model (23 Sep — per-action keys)", () => {
   it("has one key per section × action, every one shaped <section>.<action>", () => {
-    // 17 section keys + bulkTrack.view (12 Oct).
-    expect(PERMISSION_KEYS).toHaveLength(18);
+    // 17 section keys + bulkTrack.view (12 Oct) + postTracker.view (24 Oct).
+    expect(PERMISSION_KEYS).toHaveLength(19);
     for (const key of PERMISSION_KEYS) {
       const [section, action] = key.split(".");
       expect(SECTIONS[section]).toContain(action);
@@ -314,6 +314,14 @@ describe("opt-in keys (12 Oct — bulkTrack.view, grantable to any role)", () =>
   it("can be granted to a staff role and taken away from an admin", () => {
     expect(hasPermission({ role: "FINANCE", permissions: { "bulkTrack.view": true } }, "bulkTrack.view")).toBe(true);
     expect(hasPermission({ role: "ADMIN", permissions: { "bulkTrack.view": false } }, "bulkTrack.view")).toBe(false);
+  });
+
+  it("postTracker.view (24 Oct) is opt-in the same way: Admin by default, others only when granted, independent of bulkTrack.view", () => {
+    expect(getEffectivePermissions({ role: "ADMIN", permissions: null })["postTracker.view"]).toBe(true);
+    for (const role of ["FINANCE", "CREATOR", "TEAM_MEMBER", "PLAN_MAKER"]) expect(hasPermission({ role, permissions: null }, "postTracker.view")).toBe(false);
+    expect(hasPermission({ role: "CREATOR", permissions: { "bulkTrack.view": true } }, "postTracker.view")).toBe(false);
+    expect(ownOverlayFor("CREATOR", { "postTracker.view": true })).toEqual({ "postTracker.view": true });
+    expect(isFullAdmin({ role: "ADMIN", permissions: { "postTracker.view": false } })).toBe(true);
   });
 
   it("can be granted to an own-scope role without opening any global key", () => {

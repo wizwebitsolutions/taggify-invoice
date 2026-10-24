@@ -1,5 +1,10 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // relationJoins (22 Oct): an `include` is fetched with one SQL statement
+  // (LATERAL joins) instead of one extra query per relation. Against the
+  // hosted DB each extra query cost a ~50 ms round trip, so a links list
+  // with six includes was seven trips before any permission read.
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {
@@ -116,6 +121,9 @@ model User {
   // visibility into Y). Null for every account not created via the
   // sub-admin flow (including the very first admin).
   createdByAdminId     String?
+  // 21 Oct: admin "Deactivate" — set = can't sign in or use a session; every
+  // record they're on (pages, posts, invoices, payouts, plans) stays. Null = active.
+  deactivatedAt        DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -142,6 +150,7 @@ model User {
   createdPayouts            Payout[]                @relation("PayoutCreatedBy")
   bulkTrackedProfiles       BulkTrackedProfile[]
   bulkTrackedPosts          BulkTrackedPost[]
+  trackedPosts              TrackedPost[]
   bulkImportBatches         BulkImportBatch[]
   bulkImportSheetSources    BulkImportSheetSource[]
   markedPaidPayouts         Payout[]                @relation("PayoutMarkedPaidBy")
@@ -525,6 +534,7 @@ model PostSnapshot {
   shares         Int
   reposts        Int
   thumbnailUrl   String? // post's display image/cover, from Apify — powers the campaign card's post preview
+  thumbnailStoredUrl String? // our Cloudinary copy of thumbnailUrl (22 Oct) — Instagram's link is signed and expires in days
   caption        String? // post caption text, from Apify — same card
   source         String   @default("apify")
   capturedAt     DateTime @default(now())
@@ -1025,4 +1035,28 @@ model BulkTrackedPostSnapshot {
   capturedAt DateTime @default(now())
 
   post BulkTrackedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+}
+
+// Post Tracker (24 Oct): a pasted public Instagram reel/post link, shown as
+// Instagram's own embed in the viewer's browser. Nothing is scraped or
+// stored beyond the link itself — separate from Link/PostSnapshot (campaign
+// work) and from the Bulk Tracker. The embed URL is always rebuilt from
+// `shortcode`, never from what the user typed (postTracker/url.js).
+model TrackedPost {
+  id           String    @id @default(cuid())
+  createdById  String
+  inputUrl     String // exactly what was pasted, for reference only
+  canonicalUrl String // https://www.instagram.com/{reel|p}/<shortcode>/
+  shortcode    String
+  kind         String // reel | post
+  note         String?
+  broken       Boolean   @default(false) // set by hand when Instagram's embed shows "unavailable"
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@unique([createdById, shortcode])
+  @@index([createdById, createdAt])
 }

@@ -34,7 +34,7 @@ describe("requireOwnAccess — own-content switches for creators, team members a
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.objectContaining({ code: "ACCESS_REMOVED" }) }));
-    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { id: "c-1" }, select: { role: true, permissions: true } });
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { id: "c-1" }, select: { role: true, permissions: true, deactivatedAt: true } });
   });
 
   it("a key outside the role's own list is always refused (a team member can't raise invoices)", async () => {

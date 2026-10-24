@@ -21,6 +21,7 @@ const MAX_SHEET_BYTES = 5 * 1024 * 1024; // 5MB — plenty for a pages/work list
  * there's nothing to keep in sync.
  */
 const LINK_SELECT_FOR_CAMPAIGN = {
+  id: true, // representativePost.linkId → GET /links/:id/thumbnail
   campaignId: true,
   // assetId: which page the post is on — the creator's booked-vs-submitted count (29 Sep).
   assetId: true,
@@ -92,7 +93,7 @@ function annotateCampaign(campaign, campaignLinks, pendingAssignmentCount) {
     // Posts beyond the booking don't count (29 Sep — "everywhere it'll show 2 of 2").
     postCount: campaignLinks.filter((l) => !l.overQuota).length,
     representativePost: representativeSnapshot
-      ? { thumbnailUrl: representativeSnapshot.thumbnailUrl, caption: representativeSnapshot.caption }
+      ? { linkId: representative.id, thumbnailUrl: representativeSnapshot.thumbnailUrl, caption: representativeSnapshot.caption }
       : null,
     totalLikes,
     spent,

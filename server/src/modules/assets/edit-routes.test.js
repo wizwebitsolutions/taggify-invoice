@@ -23,7 +23,8 @@ vi.mock("../../middleware/requireAuth.js", () => ({
 const deleteAsset = vi.fn(async (id) => ({ id }));
 const proposeAssetEdit = vi.fn(async (_user, id, fields) => ({ id, pendingEdit: fields }));
 const decideAssetEdit = vi.fn(async (id, decision) => ({ id, decision }));
-vi.mock("./service.js", () => ({ deleteAsset, proposeAssetEdit, decideAssetEdit }));
+const deleteAssets = vi.fn(async (ids) => ({ deleted: ids, skipped: [] }));
+vi.mock("./service.js", () => ({ deleteAsset, deleteAssets, proposeAssetEdit, decideAssetEdit }));
 vi.mock("../../lib/importPagesTemplate.js", () => ({ buildImportPagesTemplate: vi.fn() }));
 
 const { default: router } = await import("./routes.js");
@@ -68,6 +69,38 @@ describe("DELETE /assets/:id", () => {
     storedPermissions = { "inventory.edit": false };
     expect((await del()).status).toBe(403);
     expect(deleteAsset).not.toHaveBeenCalled();
+  });
+});
+
+const bulkDel = (body) => fetch(`${base}/assets/bulk-delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+describe("POST /assets/bulk-delete (19 Oct)", () => {
+  it("an admin can delete several pages at once", async () => {
+    currentUser = { id: "admin-1", role: "ADMIN" };
+    const res = await bulkDel({ assetIds: ["a1", "a2"] });
+    expect(res.status).toBe(200);
+    expect(deleteAssets).toHaveBeenCalledWith(["a1", "a2"]);
+  });
+
+  for (const role of ["CREATOR", "TEAM_MEMBER", "FINANCE", "PLAN_MAKER"]) {
+    it(`${role} is refused`, async () => {
+      currentUser = { id: `${role.toLowerCase()}-1`, role };
+      expect((await bulkDel({ assetIds: ["a1"] })).status).toBe(403);
+      expect(deleteAssets).not.toHaveBeenCalled();
+    });
+  }
+
+  it("a restricted admin without Inventory edit access is refused", async () => {
+    currentUser = { id: "admin-2", role: "ADMIN" };
+    storedPermissions = { "inventory.edit": false };
+    expect((await bulkDel({ assetIds: ["a1"] })).status).toBe(403);
+    expect(deleteAssets).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty list", async () => {
+    currentUser = { id: "admin-1", role: "ADMIN" };
+    expect((await bulkDel({ assetIds: [] })).status).toBe(400);
+    expect(deleteAssets).not.toHaveBeenCalled();
   });
 });
 

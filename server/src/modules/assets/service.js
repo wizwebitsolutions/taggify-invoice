@@ -5,6 +5,7 @@ import { ApifyInstagramProvider } from "../../lib/apifyClient.js";
 import { normalizeHandle, isValidHandle, parseImportSheet, ImportParseError } from "./importParser.js";
 import { fetchSheetCsv } from "../campaigns/service.js";
 import { uploadProfilePic, isCloudinaryConfigured } from "../../lib/cloudinaryClient.js";
+import { downloadImage } from "../../lib/downloadImage.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import { REQUIRED_RATE_FORMATS, formatLabel } from "../../lib/formats.js";
 
@@ -56,20 +57,38 @@ export async function listAssets(user) {
   });
   // Who proposed each pending edit (16 Oct) — one lookup for the whole list.
   const proposerIds = [...new Set(assets.map((a) => a.pendingEditById).filter(Boolean))];
-  const proposers = proposerIds.length ? await prisma.user.findMany({ where: { id: { in: proposerIds } }, select: { id: true, name: true, email: true } }) : [];
+  const [proposers, engagementByAsset] = await Promise.all([
+    proposerIds.length ? prisma.user.findMany({ where: { id: { in: proposerIds } }, select: { id: true, name: true, email: true } }) : [],
+    getAvgEngagementForAssets(assets),
+  ]);
   const proposerById = new Map(proposers.map((u) => [u.id, u]));
-  return Promise.all(
-    assets.map(async (asset) => {
-      const { assignments, ...rest } = asset;
-      const campaignsById = new Map((assignments ?? []).map((a) => [a.campaign.id, a.campaign]));
-      return {
-        ...rest,
-        pendingEditBy: asset.pendingEditById ? proposerById.get(asset.pendingEditById) ?? null : null,
-        campaigns: [...campaignsById.values()],
-        engagement: await getAvgEngagement(asset.id, asset),
-      };
-    })
-  );
+  return assets.map((asset) => {
+    const { assignments, ...rest } = asset;
+    const campaignsById = new Map((assignments ?? []).map((a) => [a.campaign.id, a.campaign]));
+    return {
+      ...rest,
+      pendingEditBy: asset.pendingEditById ? proposerById.get(asset.pendingEditById) ?? null : null,
+      campaigns: [...campaignsById.values()],
+      engagement: engagementByAsset.get(asset.id),
+    };
+  });
+}
+
+/**
+ * getAvgEngagement for a whole list at once (22 Oct — Inventory and every
+ * plan used to run one links query per page, ~50 ms each against the hosted
+ * DB). `assets` are rows carrying `id` plus the ENGAGEMENT_ASSET_SELECT
+ * fields (a full Asset row does). Returns Map<assetId, engagement>.
+ */
+export async function getAvgEngagementForAssets(assets) {
+  const byId = new Map(assets.map((a) => [a.id, a]));
+  const ids = [...byId.keys()];
+  const links = ids.length
+    ? await prisma.link.findMany({ where: { assetId: { in: ids } }, select: { assetId: true, postSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 } } })
+    : [];
+  const linksByAsset = new Map(ids.map((id) => [id, []]));
+  for (const link of links) linksByAsset.get(link.assetId)?.push(link);
+  return new Map(ids.map((id) => [id, withManualOverrides(automaticEngagement(linksByAsset.get(id), byId.get(id)), byId.get(id))]));
 }
 
 /** Everything getAvgEngagement needs off the Asset row when the caller didn't already load it. */
@@ -391,22 +410,6 @@ async function fetchProfilePicUncached(assetId) {
   }
 }
 
-/** GETs an image with a short backoff between attempts (see fetchProfilePic's note on Instagram's flaky CDN). */
-async function downloadImage(url, attempts, sourceLabel) {
-  let lastError;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      const upstream = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-      if (upstream.ok) return { buffer: Buffer.from(await upstream.arrayBuffer()), contentType: upstream.headers.get("content-type") ?? "image/jpeg" };
-      lastError = new Error(`${sourceLabel} returned ${upstream.status}`);
-    } catch (err) {
-      lastError = err;
-    }
-    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * 300));
-  }
-  throw lastError;
-}
-
 /**
  * Stores a page's profile picture in Cloudinary (user request, 22 Sep —
  * "pages profile pic should be stored in database") right after a scrape
@@ -605,6 +608,26 @@ export async function deleteAsset(assetId) {
   return { id: assetId };
 }
 
+/**
+ * Bulk delete (19 Oct — Inventory selection bar). Runs deleteAsset on each
+ * page so the same rules apply: a page with posts or on an approved plan is
+ * skipped with its reason, not deleted, and the rest still go through.
+ */
+export async function deleteAssets(assetIds) {
+  const deleted = [];
+  const skipped = [];
+  for (const id of new Set(assetIds)) {
+    try {
+      await deleteAsset(id);
+      deleted.push(id);
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.statusCode >= 500) throw err;
+      skipped.push({ id, reason: err.message });
+    }
+  }
+  return { deleted, skipped };
+}
+
 /* ── Inventory "Create page" / "Import pages" (user request, 14 Sep) ─────
  * Admin registers pages under a chosen creator account, one at a time
  * (createAsset above with ownerId) or in bulk from an .xlsx/.csv. The
@@ -615,10 +638,12 @@ export async function deleteAsset(assetId) {
  */
 
 /** Creator accounts a page can be registered under — the only role that owns pages (see system design.md). */
-export async function listPageOwners() {
+export async function listPageOwners({ includeDeactivated = false } = {}) {
   return prisma.user.findMany({
-    where: { role: "CREATOR" },
-    select: { id: true, name: true, phoneNumber: true, email: true },
+    // A deactivated vendor (21 Oct) isn't offered for new pages. The import preview still
+    // matches against them, so a sheet naming one says so instead of offering a "new" vendor.
+    where: { role: "CREATOR", ...(includeDeactivated ? {} : { deactivatedAt: null }) },
+    select: { id: true, name: true, phoneNumber: true, email: true, ...(includeDeactivated ? { deactivatedAt: true } : {}) },
     orderBy: [{ name: "asc" }, { createdAt: "asc" }],
   });
 }
@@ -751,7 +776,8 @@ export function missingImportFields(row, { isCreator = false } = {}) {
 export async function previewImport(parsed, user) {
   const isCreator = user?.role === "CREATOR";
   const isAdmin = user?.role === "ADMIN";
-  const owners = isCreator ? [] : await listPageOwners();
+  const everyOwner = isCreator ? [] : await listPageOwners({ includeDeactivated: true });
+  const owners = everyOwner.filter((o) => !o.deactivatedAt).map(({ deactivatedAt: _d, ...o }) => o);
   const selfAsOwner = await selfAsOwnerFor(user);
   const handles = [...new Set(parsed.rows.map((r) => r.handle).filter(Boolean))];
   const existing = handles.length
@@ -804,7 +830,10 @@ export async function previewImport(parsed, user) {
     }
 
     // Vendor columns, when the row has them, decide the owner; otherwise the legacy owner cell does.
-    const { owner, reason, isNew } = vendor ? resolveVendor(vendor, owners) : resolveOwnerRef(row.ownerRef, owners);
+    const { owner, reason, isNew } = vendor ? resolveVendor(vendor, everyOwner) : resolveOwnerRef(row.ownerRef, everyOwner);
+    if (owner?.deactivatedAt) {
+      return { ...base, status: "owner-unknown", reason: `${ownerLabel(owner)} is deactivated. Reactivate them in Settings → People first, or pick another vendor.` };
+    }
     if (owner) {
       const same = matches.find((a) => a.ownerId === owner.id);
       if (same) return { ...base, owner, ownerId: owner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(owner)}.` };

@@ -11,7 +11,7 @@ const mockPrisma = {
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
-const { resetUserPassword, updateUserPermissions, updateUserRole, updateUserEmail, updateUserDetails, createBillingProfileFor } = await import("./service.js");
+const { resetUserPassword, updateUserPermissions, updateUserRole, updateUserEmail, updateUserDetails, createBillingProfileFor, setUserActive } = await import("./service.js");
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -453,5 +453,54 @@ describe("createBillingProfileFor (12 Oct)", () => {
     mockPrisma.user.findUnique.mockImplementation(async () => subAdminWithUsers);
     await expectApiError(createBillingProfileFor("actor-2", "cr-1", body), "FULL_ADMIN_ONLY", 403);
     expect(mockPrisma.billingProfile.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("setUserActive (21 Oct, People: Deactivate / Reactivate, full admins only)", () => {
+  beforeEach(() => {
+    mockPrisma.user.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 2 });
+    mockPrisma.trustedDevice.deleteMany.mockResolvedValue({ count: 1 });
+    mockPrisma.permissionAuditLog.create.mockResolvedValue({});
+  });
+
+  it("deactivating stamps deactivatedAt, ends every session and remembered device, and is audit-logged", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(fullAdmin).mockResolvedValueOnce({ id: "u1", role: "CREATOR", deactivatedAt: null });
+    const result = await setUserActive("actor-1", "u1", false);
+    expect(result.deactivatedAt).toBeInstanceOf(Date);
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({ where: { id: "u1" }, data: { deactivatedAt: expect.any(Date) } });
+    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({ where: { userId: "u1", revoked: false }, data: { revoked: true } });
+    expect(mockPrisma.trustedDevice.deleteMany).toHaveBeenCalledWith({ where: { userId: "u1" } });
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ targetId: "u1", actorId: "actor-1", action: "deactivate" }) });
+  });
+
+  it("reactivating clears it and leaves sessions alone (there are none left)", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(fullAdmin).mockResolvedValueOnce({ id: "u1", role: "CREATOR", deactivatedAt: new Date("2026-10-20") });
+    const result = await setUserActive("actor-1", "u1", true);
+    expect(result.deactivatedAt).toBeNull();
+    expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
+    expect(mockPrisma.permissionAuditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: "reactivate" }) });
+  });
+
+  it("you can't deactivate yourself", async () => {
+    await expectApiError(setUserActive("actor-1", "actor-1", false), "CANNOT_EDIT_SELF", 403);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("a restricted sub-admin and a granted planner are refused", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(subAdminWithUsers);
+    await expectApiError(setUserActive("actor-2", "u1", false), "FULL_ADMIN_ONLY", 403);
+    mockPrisma.user.findUnique.mockResolvedValueOnce(grantedPlanner);
+    await expectApiError(setUserActive("actor-3", "u1", false), "FULL_ADMIN_ONLY", 403);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("already in the asked-for state: no write, no audit row; a missing target is a 404", async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(fullAdmin).mockResolvedValueOnce({ id: "u1", role: "CREATOR", deactivatedAt: null });
+    await setUserActive("actor-1", "u1", true);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.permissionAuditLog.create).not.toHaveBeenCalled();
+    mockPrisma.user.findUnique.mockResolvedValueOnce(fullAdmin).mockResolvedValueOnce(null);
+    await expectApiError(setUserActive("actor-1", "nope", false), "USER_NOT_FOUND", 404);
   });
 });

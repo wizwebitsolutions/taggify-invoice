@@ -171,6 +171,8 @@ export async function login({ email, password, trustedDeviceToken }) {
   // doesn't reveal which emails have accounts.
   const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!user?.email || !valid) throw invalid();
+  // After the password check, so it says nothing about accounts the caller can't already sign in to.
+  assertActive(user);
 
   // Test accounts only (OTP_BYPASS_EMAILS, unset by default — see
   // lib/auth/otpBypass.js). After the password check, so this never turns a
@@ -285,6 +287,7 @@ async function resolveSetupUser({ userId, challengeToken }) {
   if (challengeToken) return userFromChallenge(challengeToken, "email-setup");
   const user = userId ? await prisma.user.findUnique({ where: { id: userId } }) : null;
   if (!user) throw new ApiError(401, "UNAUTHENTICATED", "Sign in again");
+  assertActive(user);
   return user;
 }
 
@@ -297,6 +300,8 @@ async function userFromChallenge(challengeToken, purpose) {
   }
   const user = await prisma.user.findUnique({ where: { id: payload.sub } });
   if (!user) throw new ApiError(401, "INVALID_CHALLENGE", "This sign-in attempt has expired — start again");
+  // A challenge issued before the account was deactivated can't send codes or change its email.
+  assertActive(user);
   return user;
 }
 
@@ -369,7 +374,13 @@ export async function logout({ refreshToken }) {
   });
 }
 
+/** A deactivated account (21 Oct, admin People → Deactivate) gets no session by any route. */
+function assertActive(user) {
+  if (user.deactivatedAt) throw new ApiError(403, "ACCOUNT_DEACTIVATED", "This account has been deactivated. Contact your admin.");
+}
+
 async function issueTokenPair(user) {
+  assertActive(user);
   const accessToken = signAccessToken(user);
   const refreshTokenValue = signRefreshToken(user);
 

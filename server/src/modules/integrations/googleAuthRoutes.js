@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { verifyAccessToken } from "../../lib/auth/jwt.js";
+import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import {
@@ -41,7 +42,7 @@ router.get("/status", requireAuth, requireAccess("plans.edit", "ADMIN", "PLAN_MA
   }
 });
 
-router.get("/authorize", (req, res) => {
+router.get("/authorize", async (req, res, next) => {
   if (!isGoogleOAuthConfigured()) {
     return res.status(503).send("Google OAuth isn't configured yet — set GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI (see server/.env.example).");
   }
@@ -49,13 +50,21 @@ router.get("/authorize", (req, res) => {
   if (typeof token !== "string") {
     return res.status(401).send("Missing token");
   }
+  let payload;
   try {
-    const payload = verifyAccessToken(token);
-    if (payload.role !== "ADMIN") {
-      return res.status(403).send("Only an ADMIN can connect the Google account used for plan sheets.");
-    }
+    payload = verifyAccessToken(token);
   } catch {
     return res.status(401).send("Invalid or expired session — sign in again and retry.");
+  }
+  if (payload.role !== "ADMIN") {
+    return res.status(403).send("Only an ADMIN can connect the Google account used for plan sheets.");
+  }
+  // This route reads the token itself (a browser redirect can't send a header), so it repeats requireAuth's deactivated check (21 Oct).
+  try {
+    const user = await prisma.user.findUnique({ where: { id: payload.sub }, select: { deactivatedAt: true } });
+    if (user?.deactivatedAt) return res.status(401).send("This account has been deactivated.");
+  } catch (err) {
+    return next(err);
   }
   res.redirect(buildAuthorizeUrl());
 });

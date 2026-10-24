@@ -24,7 +24,11 @@ vi.mock("../../lib/googleOAuthClient.js", () => ({
   isGoogleConnectionHealthy: vi.fn(async () => true),
 }));
 
+// GET /authorize reads a real access token from the query string.
+process.env.JWT_ACCESS_SECRET ??= "test-access-secret";
 const { default: router } = await import("./googleAuthRoutes.js");
+const { signAccessToken } = await import("../../lib/auth/jwt.js");
+const { buildAuthorizeUrl } = await import("../../lib/googleOAuthClient.js");
 
 const app = express();
 app.use("/integrations/google", router);
@@ -61,5 +65,30 @@ describe("GET /integrations/google/status", () => {
     expect(admin.body).toEqual({ configured: true, connected: true, healthy: true });
     expect((await status({ id: "pm-1", role: "PLAN_MAKER" })).status).toBe(200);
     expect((await status({ id: "fi-2", role: "FINANCE", permissions: { "plans.edit": true } })).status).toBe(200);
+  });
+});
+
+describe("GET /integrations/google/authorize (21 Oct: deactivated accounts)", () => {
+  const authorize = (user) => fetch(`${base}/integrations/google/authorize?token=${encodeURIComponent(signAccessToken(user))}`, { redirect: "manual" });
+
+  it("an active admin is sent on to Google", async () => {
+    buildAuthorizeUrl.mockReturnValue("https://accounts.google.com/o/oauth2/auth?x=1");
+    mockPrisma.user.findUnique.mockResolvedValue({ deactivatedAt: null });
+    const res = await authorize({ id: "adm-1", role: "ADMIN" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("accounts.google.com");
+  });
+
+  it("a deactivated admin's still-valid token is refused, and Google is never reached", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ deactivatedAt: new Date() });
+    const res = await authorize({ id: "adm-1", role: "ADMIN" });
+    expect(res.status).toBe(401);
+    expect(buildAuthorizeUrl).not.toHaveBeenCalled();
+  });
+
+  it("a non-admin is refused before the account is looked up", async () => {
+    const res = await authorize({ id: "fin-1", role: "FINANCE" });
+    expect(res.status).toBe(403);
+    expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
   });
 });

@@ -17,7 +17,7 @@ import { Tag } from "@/components/ui/tag";
 import { Card, Table, THead, TH, TR, TD } from "@/components/ui/data-table";
 import { FloatingBar, BarButton } from "@/components/ui/floating-bar";
 import { TableSkeleton, EmptyState, ErrorNotice } from "@/components/ui/table-parts";
-import { PlusIcon, AssetIcon, SearchIcon, CloseIcon, RefreshIcon, TeamIcon, ChevronDownIcon, CheckIcon, UploadIcon } from "@/components/icons";
+import { PlusIcon, AssetIcon, SearchIcon, CloseIcon, RefreshIcon, TeamIcon, ChevronDownIcon, CheckIcon, UploadIcon, TrashIcon } from "@/components/icons";
 import { ImportPagesModal } from "@/components/inventory/import-pages-modal";
 import { RateFields, rateCardsFrom, missingRequiredRates, missingRatesMessage, type RateDraft } from "@/components/inventory/rate-fields";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -99,6 +99,32 @@ function InventoryContent() {
       queryClient.invalidateQueries({ queryKey: ["assets"] });
     },
   });
+  // Bulk delete (19 Oct) — admin only, same as the row's Delete, and the same
+  // two-click confirm (no browser dialog). Pages the server refuses (posts on
+  // record / approved plan) stay selected so the admin can deactivate them.
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  // The result note is tied to the selection it describes, so it disappears as soon as the selection changes.
+  const [bulkDeleteNote, setBulkDeleteNote] = useState<{ text: string; forKey: string } | null>(null);
+  const selectionKey = [...selectedAssetIds].sort().join(",");
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => assetsApi.removeMany(token, ids),
+    onSuccess: ({ deleted, skipped }) => {
+      const kept = skipped.map((s) => s.id);
+      setSelectedAssetIds(new Set(kept));
+      setBulkDeleteNote(
+        kept.length > 0
+          ? { text: `${deleted.length} deleted · ${kept.length} couldn't be — posts on record or on an approved plan; deactivate instead.`, forKey: [...kept].sort().join(",") }
+          : null
+      );
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
+    },
+    onError: (err, ids) => setBulkDeleteNote({ text: err instanceof ApiError ? err.message : "Couldn't delete these pages.", forKey: [...ids].sort().join(",") }),
+    onSettled: () => setConfirmingBulkDelete(false),
+  });
+  // A changed selection backs out of the confirm step.
+  useEffect(() => setConfirmingBulkDelete(false), [selectionKey]);
+  const canBulkDelete = isFullAdmin && isAdmin;
 
   return (
     <AppShell
@@ -148,8 +174,25 @@ function InventoryContent() {
       {showImport && <ImportPagesModal token={token} onClose={() => setShowImport(false)} onImported={() => queryClient.invalidateQueries({ queryKey: ["assets"] })} />}
 
       {hasSelection && (
-        <FloatingBar label={`${selectedAssetIds.size} page${selectedAssetIds.size === 1 ? "" : "s"} selected`} onClear={() => setSelectedAssetIds(new Set())} testId="selection-bar">
+        <FloatingBar label={`${selectedAssetIds.size} page${selectedAssetIds.size === 1 ? "" : "s"} selected`} meta={bulkDeleteNote?.forKey === selectionKey ? bulkDeleteNote.text : undefined} onClear={() => setSelectedAssetIds(new Set())} testId="selection-bar">
           <BarButton onClick={() => setSelectedAssetIds(new Set())}>Clear</BarButton>
+          {canBulkDelete &&
+            (confirmingBulkDelete ? (
+              <>
+                <BarButton onClick={() => bulkDeleteMutation.mutate([...selectedAssetIds])} disabled={bulkDeleteMutation.isPending} testId="confirm-delete-selected">
+                  <TrashIcon className="h-3.5 w-3.5 text-rose" />
+                  {bulkDeleteMutation.isPending ? "Deleting…" : `Confirm delete ${selectedAssetIds.size}`}
+                </BarButton>
+                <BarButton onClick={() => setConfirmingBulkDelete(false)} disabled={bulkDeleteMutation.isPending}>
+                  Cancel
+                </BarButton>
+              </>
+            ) : (
+              <BarButton onClick={() => setConfirmingBulkDelete(true)} testId="delete-selected">
+                <TrashIcon className="h-3.5 w-3.5 text-rose" />
+                Delete pages
+              </BarButton>
+            ))}
           {isAdmin && (
             <BarButton onClick={() => refreshSelectedMutation.mutate([...selectedAssetIds])} disabled={refreshSelectedMutation.isPending} testId="refresh-selected">
               <RefreshIcon className={cn("h-3.5 w-3.5", refreshSelectedMutation.isPending && "animate-spin")} />

@@ -89,6 +89,22 @@ describe("previewImport — per-row status", () => {
     expect(preview.owners).toEqual(owners);
   });
 
+  it("a deactivated vendor (21 Oct) is named as deactivated, never offered as a new vendor or in the owner picker", async () => {
+    const gone = { id: "creator-9", name: "Old Vendor", phoneNumber: "+919000000009", email: "old@example.com", deactivatedAt: new Date("2026-10-20") };
+    mockPrisma.user.findMany.mockResolvedValue([...owners, gone]);
+    const preview = await previewImport(
+      { hasOwnerColumn: true, rows: [row({ handle: "a.page", ownerRef: "9000000009" }), row({ rowNumber: 3, handle: "b.page", vendorName: "Old Vendor", vendorPhone: "9000000009" })] },
+      { id: "adm-1", role: "ADMIN" }
+    );
+    for (const r of preview.rows) {
+      expect(r.status).toBe("owner-unknown");
+      expect(r.reason).toMatch(/Old Vendor is deactivated/);
+    }
+    expect(preview.newVendors).toEqual([]);
+    expect(preview.owners.map((o) => o.id)).not.toContain("creator-9");
+    expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { role: "CREATOR" } }));
+  });
+
   it("flags duplicates within the sheet (case-insensitive) so only the first copy imports", async () => {
     const preview = await previewImport({ hasOwnerColumn: true, rows: [row({ handle: "Same.Page", ownerRef: "9000000001" }), row({ rowNumber: 3, handle: "same.page", ownerRef: "9000000001" })] });
     expect(preview.rows.map((r) => r.status)).toEqual(["ready", "duplicate"]);

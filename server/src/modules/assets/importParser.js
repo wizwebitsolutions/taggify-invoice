@@ -31,6 +31,18 @@ const PAGE_NAME_HEADERS = ["page name", "display name"];
 const OWNER_PHONE_HEADERS = ["owner phone", "account phone", "phone", "phone number", "creator phone", "mobile", "mobile number"];
 const OWNER_OTHER_HEADERS = ["owner", "account", "creator", "user", "owner name", "owner email", "email"];
 const CATEGORY_HEADERS = ["category", "page type", "type", "niche"];
+// Mirrors client/lib/api-client.ts's PAGE_CATEGORIES (24 Oct): a sheet's
+// "meme page" / "NEWS PAGE" is saved as the standard spelling, so it matches
+// the category pickers; any other text is kept as written.
+const STANDARD_CATEGORIES = ["Meme page", "News page", "Entertainment", "Lifestyle", "Fashion", "Fitness", "Food"];
+const STANDARD_CATEGORY_BY_KEY = new Map(STANDARD_CATEGORIES.map((c) => [c.toLowerCase(), c]));
+
+/** A sheet's category cell → the standard spelling when it is one, else the trimmed text (≤ 40 chars), or null. Exported for tests. */
+export function parseCategory(text) {
+  const value = String(text ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+  if (!value) return null;
+  return STANDARD_CATEGORY_BY_KEY.get(value.toLowerCase()) ?? value;
+}
 // Vendor columns (14 Oct): who owns the page, so the preview can match an
 // existing vendor (creator account) or flag a NEW one for the admin to
 // approve and create. Kept apart from the owner lists above — a plain
@@ -364,7 +376,7 @@ export async function parseImportSheet(buffer, fileName = "") {
       const amount = parseAmount(cells[col]);
       if (amount !== null) rateCards.push({ format, amount });
     }
-    const category = categoryCol === null ? null : cellText(cells[categoryCol]).trim().slice(0, 40) || null;
+    const category = categoryCol === null ? null : parseCategory(cellText(cells[categoryCol]));
     const gradeText = gradeCol === null ? "" : cellText(cells[gradeCol]).trim().toUpperCase().replace(/^GRADE\s*/, "");
     const grade = GRADES.has(gradeText) ? gradeText : null;
     const groupLink = groupLinkCol === null ? null : parseGroupLink(cellText(cells[groupLinkCol]));

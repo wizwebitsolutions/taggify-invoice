@@ -1,4 +1,4 @@
-import { prisma } from "../lib/prisma.js";
+import { loadUserAccess } from "../lib/requestUser.js";
 import { hasOwnCapability, isOwnScopeRole } from "../lib/permissions.js";
 
 /**
@@ -6,13 +6,14 @@ import { hasOwnCapability, isOwnScopeRole } from "../lib/permissions.js";
  * also reach (lists, detail pages) — CREATOR / TEAM_MEMBER / PLAN_MAKER pass
  * only if the admin hasn't turned `key` off for them; staff roles pass
  * straight through to whatever gate/scoping the route already has. Reads
- * fresh from the DB so a change applies at once, like requireAccess.
+ * fresh from the DB so a change applies at once, like requireAccess (one
+ * read per request, shared via lib/requestUser.js).
  */
 export function requireOwnAccess(key) {
   return async (req, res, next) => {
     try {
       if (!isOwnScopeRole(req.user?.role)) return next();
-      const user = await prisma.user.findUnique({ where: { id: req.user.id }, select: { role: true, permissions: true } });
+      const user = await loadUserAccess(req.user.id);
       if (!user) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "User no longer exists" } });
       if (!hasOwnCapability(user, key)) {
         return res.status(403).json({ error: { code: "ACCESS_REMOVED", message: "Your admin has turned this off for your account" } });

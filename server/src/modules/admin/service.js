@@ -202,8 +202,8 @@ export async function updateUserPermissions(actorId, targetId, patch) {
 
 export const DETAIL_FIELDS = ["name", "phoneNumber", "secondaryPhone", "addressLine1", "addressLine2", "state", "pincode"];
 
-function assertFullAdmin(actor) {
-  if (!isFullAdmin(actor)) throw new ApiError(403, "FULL_ADMIN_ONLY", "Only a full admin can edit someone else's details.");
+function assertFullAdmin(actor, message = "Only a full admin can edit someone else's details.") {
+  if (!isFullAdmin(actor)) throw new ApiError(403, "FULL_ADMIN_ONLY", message);
 }
 
 /**
@@ -245,6 +245,35 @@ export async function updateUserDetails(actorId, userId, patch) {
     if (err?.code === "P2002") throw new ApiError(409, "PHONE_ALREADY_REGISTERED", "Another account already uses this phone number");
     throw err;
   }
+}
+
+/**
+ * People → Deactivate / Reactivate (21 Oct, user decision: deactivate only, no
+ * hard delete — a user is on pages, posts, invoices and payouts, so deleting
+ * would either be refused by the database or erase money history). Full
+ * admins only, never yourself (so there's always an active admin left: the
+ * actor). Deactivating ends every session and remembered device at once;
+ * requireAuth refuses the account's live access tokens on their next request,
+ * and login / refresh refuse to issue new ones. Every record stays put, and
+ * Reactivate brings the account back as it was. Audit-logged both ways.
+ */
+export async function setUserActive(actorId, userId, active) {
+  if (actorId === userId) throw new ApiError(403, "CANNOT_EDIT_SELF", "You can't deactivate your own account — ask another admin.");
+  const actor = await loadActor(actorId);
+  assertFullAdmin(actor, "Only a full admin can deactivate or reactivate an account.");
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  if (Boolean(user.deactivatedAt) === !active) return { id: user.id, deactivatedAt: user.deactivatedAt };
+
+  const deactivatedAt = active ? null : new Date();
+  const [updated] = await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { deactivatedAt } }),
+    ...(active
+      ? []
+      : [prisma.refreshToken.updateMany({ where: { userId, revoked: false }, data: { revoked: true } }), prisma.trustedDevice.deleteMany({ where: { userId } })]),
+    prisma.permissionAuditLog.create({ data: { targetId: userId, actorId, action: active ? "reactivate" : "deactivate", before: { deactivatedAt: user.deactivatedAt }, after: { deactivatedAt } } }),
+  ]);
+  return { id: updated.id, deactivatedAt: updated.deactivatedAt };
 }
 
 function publicDetails(user) {

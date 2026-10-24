@@ -1,4 +1,4 @@
-import { prisma } from "../lib/prisma.js";
+import { loadUserAccess } from "../lib/requestUser.js";
 import { hasPermission, hasOwnCapability, isOwnScopeRole } from "../lib/permissions.js";
 
 /**
@@ -23,7 +23,8 @@ import { hasPermission, hasOwnCapability, isOwnScopeRole } from "../lib/permissi
  * Reads `permissions` fresh from the DB rather than trusting anything
  * cached on `req.user` from the access token, so access is revoked (or
  * granted) the moment an admin edits it — not up to 15 minutes later when
- * their token would otherwise expire.
+ * their token would otherwise expire. (Shared with requireAuth's read for
+ * this same request — lib/requestUser.js — so it costs no extra round trip.)
  */
 // 24 Sep: a bare role that is own-scope (CREATOR, TEAM_MEMBER, PLAN_MAKER) no
 // longer passes unconditionally — it passes if its *own-content* switch for
@@ -35,7 +36,7 @@ export function requireAccess(key, ...bareRoles) {
       const bare = bareRoles.includes(req.user.role);
       if (bare && !isOwnScopeRole(req.user.role)) return next();
 
-      const user = await prisma.user.findUnique({ where: { id: req.user.id }, select: { role: true, permissions: true } });
+      const user = await loadUserAccess(req.user.id);
       if (!user) {
         return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "User no longer exists" } });
       }

@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getAvgEngagement, createAsset } from "../assets/service.js";
+import { getAvgEngagementForAssets, createAsset } from "../assets/service.js";
 import {
   createSpreadsheet,
   deleteSheetTab,
@@ -432,7 +432,10 @@ export async function listPlans(requester) {
     include: PLAN_INCLUDE,
     orderBy: { createdAt: "desc" },
   });
-  return Promise.all(plans.map(annotatePlan));
+  // Engagement for every page on every plan in one query (22 Oct), instead of one per plan.
+  const assetsById = new Map(plans.flatMap((p) => p.items).map((i) => [i.assetId, i.asset ?? { id: i.assetId }]));
+  const engagementByAsset = await getAvgEngagementForAssets([...assetsById.values()]);
+  return Promise.all(plans.map((plan) => annotatePlan(plan, engagementByAsset)));
 }
 
 /**
@@ -683,12 +686,16 @@ async function comboRatesFor(items) {
   return rates;
 }
 
-async function annotatePlan(plan) {
+// `preloadedEngagement` — listPlans passes one Map covering every plan; a single
+// plan computes its own, one query for all its pages (22 Oct), off the asset
+// rows PLAN_INCLUDE already loaded.
+async function annotatePlan(plan, preloadedEngagement = null) {
   const budget = plan.budget != null ? Number(plan.budget) : null;
 
   const distinctAssetIds = [...new Set(plan.items.map((i) => i.assetId))];
-  const engagements = await Promise.all(distinctAssetIds.map((assetId) => getAvgEngagement(assetId)));
-  const engagementByAsset = new Map(distinctAssetIds.map((id, i) => [id, engagements[i]]));
+  const engagementByAsset =
+    preloadedEngagement ?? (await getAvgEngagementForAssets(distinctAssetIds.map((id) => plan.items.find((i) => i.assetId === id).asset ?? { id })));
+  const engagements = distinctAssetIds.map((id) => engagementByAsset.get(id));
   const expectedLikes = engagements.reduce((sum, e) => sum + (e.avgLikes ?? 0), 0);
   const expectedViews = engagements.reduce((sum, e) => sum + (e.avgViews ?? 0), 0);
 

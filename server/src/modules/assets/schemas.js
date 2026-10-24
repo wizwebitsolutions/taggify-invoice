@@ -114,6 +114,11 @@ export const refreshProfilesSchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1).max(500),
 });
 
+// Inventory bulk delete (19 Oct) — same cap as a bulk refresh.
+export const bulkDeleteSchema = z.object({
+  assetIds: z.array(z.string().min(1)).min(1).max(500),
+});
+
 export const importAssetsSchema = z.object({
   rows: z.array(importAssetRowSchema).min(1).max(500),
 });

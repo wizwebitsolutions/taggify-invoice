@@ -112,6 +112,7 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
 ## Link status machine
 `SUBMITTED → PENDING_SCREENSHOT_REVIEW → SCREENSHOT_APPROVED → INSIGHTS_PENDING → INSIGHTS_APPROVED → INVOICED`
 (or `SCREENSHOT_REJECTED` if an admin rejects the proof). Every transition is recorded in `LinkStatusEvent`, exposed via `GET /api/links/:id/timeline`.
+`GET /api/links/:id/thumbnail` (public, like `/assets/:id/profile-pic`) serves the post's cover: a Cloudinary copy made right after each scrape (`links/thumbnail.js`), falling back to proxying Instagram — the scraped `thumbnailUrl` is a signed CDN link that expires in days, so the browser never hotlinks it.
 
 ## Not implemented (by design, see recommend.md / system design.md)
 - No payment gateway — `POST /api/invoices/:id/mark-paid` is a manual admin/finance action.

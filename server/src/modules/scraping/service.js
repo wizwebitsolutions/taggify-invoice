@@ -1,6 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApifyInstagramProvider, PostNotFoundError } from "../../lib/apifyClient.js";
 import { recomputePostQuota } from "../../lib/postQuota.js";
+import { storePostThumbnail } from "../links/thumbnail.js";
 
 /**
  * Scrapes metrics for a single Link's URL and persists a PostSnapshot.
@@ -14,7 +15,7 @@ export async function refreshLinkMetrics(linkId) {
 
   try {
     const metrics = await ApifyInstagramProvider.getPostMetrics(link.url);
-    await prisma.postSnapshot.create({
+    const snapshot = await prisma.postSnapshot.create({
       data: {
         linkId,
         likeCount: metrics.likeCount,
@@ -29,6 +30,8 @@ export async function refreshLinkMetrics(linkId) {
         source: "apify",
       },
     });
+    // Instagram's thumbnail link expires in days — keep our own copy (links/thumbnail.js).
+    await storePostThumbnail(snapshot.id, linkId, metrics.thumbnailUrl);
     if (metrics.postedAt && !link.postedAt) {
       await prisma.link.update({ where: { id: linkId }, data: { postedAt: metrics.postedAt } });
       // Which posts count is decided by posted date, so learning one can move

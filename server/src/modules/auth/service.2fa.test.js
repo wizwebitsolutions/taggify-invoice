@@ -7,7 +7,7 @@ process.env.JWT_REFRESH_SECRET = "test-refresh-secret";
 
 const mockPrisma = {
   user: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
-  refreshToken: { create: vi.fn(), updateMany: vi.fn() },
+  refreshToken: { create: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   $transaction: vi.fn(async (fn) => fn(mockPrisma)),
 };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
@@ -27,9 +27,9 @@ const verifyTrustedDevice = vi.fn();
 const revokeTrustedDevices = vi.fn();
 vi.mock("../../lib/auth/trustedDevice.js", () => ({ issueTrustedDevice, verifyTrustedDevice, revokeTrustedDevices }));
 
-const { login, verifyLoginOtp, resendLoginOtp, startEmailVerification, confirmEmailVerification, changePassword } = await import("./service.js");
+const { login, verifyLoginOtp, resendLoginOtp, startEmailVerification, confirmEmailVerification, changePassword, refresh } = await import("./service.js");
 const { loginSchema, signupSchema } = await import("./schemas.js");
-const { signChallengeToken, verifyAccessToken, signAccessToken } = await import("../../lib/auth/jwt.js");
+const { signChallengeToken, verifyAccessToken, signAccessToken, signRefreshToken } = await import("../../lib/auth/jwt.js");
 
 const PHONE = "+919876543210";
 const unverified = (over = {}) => ({ id: "u1", phoneNumber: PHONE, role: "CREATOR", name: "C", passwordHash: "h", email: null, emailVerifiedAt: null, unverifiedLoginCount: 0, ...over });
@@ -427,5 +427,62 @@ describe("email verification", () => {
     consumeOtp.mockRejectedValue(Object.assign(new Error("bad"), { code: "OTP_INVALID" }));
     await expect(confirmEmailVerification({ userId: "u1", code: "000000" })).rejects.toMatchObject({ code: "OTP_INVALID" });
     expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("a deactivated account (21 Oct, People: Deactivate) gets no session by any route", () => {
+  const off = (over = {}) => verified({ deactivatedAt: new Date("2026-10-20"), ...over });
+
+  it("login with the right password is refused with ACCOUNT_DEACTIVATED and emails no code", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(off());
+    const err = await login({ email: "creator@gmail.com", password: "right-password" }).catch((e) => e);
+    expect(err.code).toBe("ACCOUNT_DEACTIVATED");
+    expect(err.statusCode).toBe(403);
+    expect(issueOtp).not.toHaveBeenCalled();
+  });
+
+  it("...but a wrong password is still the plain INVALID_CREDENTIALS, so it reveals nothing", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(off());
+    const err = await login({ email: "creator@gmail.com", password: "wrong" }).catch((e) => e);
+    expect(err.code).toBe("INVALID_CREDENTIALS");
+  });
+
+  it("a code redeemed after the account was deactivated mints no session", async () => {
+    const user = off();
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    consumeOtp.mockResolvedValue({ email: user.email });
+    const err = await verifyLoginOtp({ challengeToken: signChallengeToken(user, "login-otp"), code: "123456" }).catch((e) => e);
+    expect(err.code).toBe("ACCOUNT_DEACTIVATED");
+    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it("a login challenge issued before deactivation can't resend a code", async () => {
+    const user = off();
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    const err = await resendLoginOtp({ challengeToken: signChallengeToken(user, "login-otp") }).catch((e) => e);
+    expect(err.code).toBe("ACCOUNT_DEACTIVATED");
+    expect(issueOtp).not.toHaveBeenCalled();
+  });
+
+  it("email setup can't send a code or change the address for a deactivated account (review, 21 Oct)", async () => {
+    const user = off({ email: null, emailVerifiedAt: null });
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    const start = await startEmailVerification({ userId: "u1", email: "new@gmail.com" }).catch((e) => e);
+    expect(start.code).toBe("ACCOUNT_DEACTIVATED");
+    const confirm = await confirmEmailVerification({ userId: "u1", code: "123456" }).catch((e) => e);
+    expect(confirm.code).toBe("ACCOUNT_DEACTIVATED");
+    expect(issueOtp).not.toHaveBeenCalled();
+    expect(consumeOtp).not.toHaveBeenCalled();
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("a refresh token that somehow survived can't be redeemed", async () => {
+    const user = off();
+    const refreshToken = signRefreshToken(user);
+    mockPrisma.refreshToken.findFirst.mockResolvedValue({ id: "rt1", expiresAt: new Date(Date.now() + 60_000) });
+    mockPrisma.user.findUnique.mockResolvedValue(user);
+    const err = await refresh({ refreshToken }).catch((e) => e);
+    expect(err.code).toBe("ACCOUNT_DEACTIVATED");
+    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
   });
 });
