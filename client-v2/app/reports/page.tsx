@@ -12,6 +12,7 @@ import { monthKeyOf, monthLabel, monthRange, recentMonths, type MonthKey } from 
 import { compactNumber, money, plural } from "@/lib/format";
 import { useCampaigns } from "@/lib/queries/campaigns";
 import { cn } from "@/lib/utils";
+import { Illustration } from "@/components/taggify/illustration";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -67,10 +68,13 @@ function Reports() {
   const can = { pay: hasAccess(user, "finance.pay"), campaigns: canUse(user, "campaigns.view"), links: hasAccess(user, "links.view") };
   if (!staff || (!can.pay && !can.campaigns && !can.links)) return <NoAccess what="Reports" />;
   return (
-    <div className="flex flex-col gap-6 pt-2">
-      <div>
-        <h1 className="text-display">Reports</h1>
-        <p className="mt-1 text-body text-muted-foreground">Payouts, spend and delivery, by month and by campaign. Export what you need for month-end.</p>
+    <div className="workspace-page">
+      <div className="page-heading items-center">
+        <div className="page-heading-copy">
+          <h1 className="text-display">Reports</h1>
+          <p className="mt-1 text-body text-muted-foreground">Payouts, spend and delivery, by month and by campaign. Export what you need for month-end.</p>
+        </div>
+        <Illustration name="analytics-01" className="hidden w-32 shrink-0 sm:block" />
       </div>
       {(can.pay || can.campaigns) && (
         <div className={cn("grid items-start gap-6", can.pay && can.campaigns && "xl:grid-cols-2")}>
@@ -101,8 +105,8 @@ function PayoutsByMonth() {
 
   return (
     <section aria-labelledby="rep-payouts">
-      <Card className="overflow-hidden">
-        <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
+      <Card className="ledger-panel">
+        <div className="panel-heading">
           <div>
             <h2 id="rep-payouts" className="text-card-title">
               Paid to creators, by month
@@ -247,8 +251,8 @@ function PagesDelivered() {
 
   return (
     <section aria-labelledby="rep-pages" aria-describedby="rep-pages-note">
-      <Card className="overflow-hidden">
-        <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
+      <Card className="ledger-panel">
+        <div className="panel-heading">
           <h2 id="rep-pages" className="text-card-title">
             Pages by posts submitted
           </h2>

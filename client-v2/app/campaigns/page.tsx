@@ -3,10 +3,10 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowUpDown, Plus } from "lucide-react";
+import { ArrowUpDown, Plus, Upload } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
-import { canUse, hasAccess, isOwnScopeRole, type Campaign } from "@/lib/api-client";
+import { canUse, hasAccess, isOwnScopeRole, links as linksApi, type Campaign } from "@/lib/api-client";
 import { deadlineLabel, isEnded } from "@/lib/campaigns";
 import { plural } from "@/lib/format";
 import { useCampaigns } from "@/lib/queries/campaigns";
@@ -53,6 +53,9 @@ function Campaigns() {
   const [sort, setSort] = useState("deadline");
   const [page, setPage] = useState(1);
   const creatorView = isOwnScopeRole(user?.role) && user?.role !== "PLAN_MAKER";
+  // "Through My campaigns also creator can upload links" (22 Oct): each row
+  // opens /submit on that campaign, same gate as the Submit post nav entry.
+  const canSubmit = creatorView && canUse(user, "links.edit");
   // POST /campaigns needs the global campaigns.edit key; there is no own-content version of it.
   const canCreate = hasAccess(user, "campaigns.edit");
   // /campaigns?new=1 (v1's deep link) opens New campaign straight away.
@@ -79,9 +82,9 @@ function Campaigns() {
   const shown = rows.slice((current - 1) * PER_PAGE, current * PER_PAGE);
 
   return (
-    <div className="flex flex-col gap-6 pt-2">
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0">
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
           <h1 className="text-display">{creatorView ? "My campaigns" : "Campaigns"}</h1>
           <p className="mt-1 text-body text-muted-foreground">{creatorView ? "Campaigns your pages are booked on, and what's left to post." : "Every campaign, how far along it is, and what it has spent."}</p>
         </div>
@@ -93,7 +96,7 @@ function Campaigns() {
         )}
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <Tabs
           value={tab}
           onValueChange={(v) => {
@@ -101,7 +104,7 @@ function Campaigns() {
             setPage(1);
           }}
         >
-          <div className="px-5 pt-2">
+          <div className="tab-shelf">
             <TabsList className="border-b-0">
               <TabsTrigger value="live">Live ({counts.live})</TabsTrigger>
               <TabsTrigger value="ended">Ended ({counts.ended})</TabsTrigger>
@@ -109,7 +112,7 @@ function Campaigns() {
             </TabsList>
           </div>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+        <div className="filter-bar">
           <SearchField
             label="Search campaigns"
             placeholder="Search campaign or brand..."
@@ -145,21 +148,22 @@ function Campaigns() {
                 <TableHead>{creatorView ? "Your earnings" : "Spend vs budget"}</TableHead>
                 <TableHead>Deadline</TableHead>
                 <TableHead>{creatorView ? "To post" : "Needs a look"}</TableHead>
+                {canSubmit && <TableHead className="sr-only">Upload</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {list.isLoading
                 ? Array.from({ length: 4 }, (_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={5}>
+                      <TableCell colSpan={canSubmit ? 6 : 5}>
                         <Skeleton className="h-9 w-full" />
                       </TableCell>
                     </TableRow>
                   ))
-                : shown.map((c) => <CampaignRow key={c.id} c={c} creatorView={creatorView} />)}
+                : shown.map((c) => <CampaignRow key={c.id} c={c} creatorView={creatorView} canSubmit={canSubmit} />)}
               {!list.isLoading && shown.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5}>
+                  <TableCell colSpan={canSubmit ? 6 : 5}>
                     {all.length === 0 ? (
                       <EmptyState name="empty-campaigns" title="No campaigns yet">
                         {creatorView ? "When a brand books one of your pages, the campaign shows up here." : canCreate ? "Approving a plan creates its campaign, or start one yourself with New campaign." : "Approving a plan creates its campaign."}
@@ -195,7 +199,7 @@ function Campaigns() {
   );
 }
 
-function CampaignRow({ c, creatorView }: { c: Campaign; creatorView: boolean }) {
+function CampaignRow({ c, creatorView, canSubmit }: { c: Campaign; creatorView: boolean; canSubmit: boolean }) {
   const cap = c.costCap ? Number(c.costCap) : null;
   const spent = c.spent ?? 0;
   const quota = c.pageQuota ?? [];
@@ -208,7 +212,7 @@ function CampaignRow({ c, creatorView }: { c: Campaign; creatorView: boolean }) 
       <TableCell>
         <Link href={`/campaigns/${c.id}`} className="flex items-center gap-3 text-foreground hover:text-brand-ink">
           {c.representativePost?.thumbnailUrl ? (
-            <ContentThumb src={c.representativePost.thumbnailUrl} format="reel" />
+            <ContentThumb src={linksApi.thumbnailUrl(c.representativePost.linkId)} format="reel" />
           ) : (
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-sm bg-brand-soft text-label font-bold text-brand-ink">
               {c.brandName
@@ -252,6 +256,16 @@ function CampaignRow({ c, creatorView }: { c: Campaign; creatorView: boolean }) 
           <StatusPill tone="success">On track</StatusPill>
         )}
       </TableCell>
+      {canSubmit && (
+        <TableCell className="text-right">
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/submit?campaign=${c.id}`}>
+              <Upload />
+              Upload links
+            </Link>
+          </Button>
+        </TableCell>
+      )}
     </TableRow>
   );
 }

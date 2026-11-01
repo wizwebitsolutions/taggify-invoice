@@ -34,6 +34,8 @@ const STATUS_LABEL: Record<ImportRowStatus, { label: string; tone: TagTone }> = 
   "owner-missing": { label: "Needs an account", tone: "wait" },
   "owner-unknown": { label: "Account not found", tone: "wait" },
   exists: { label: "Already in Inventory", tone: "neutral" },
+  // The new frontend imports these as edits (1 Nov); here they're just listed, not sent.
+  update: { label: "Already in Inventory (sheet differs)", tone: "neutral" },
   conflict: { label: "Under another account", tone: "bad" },
   duplicate: { label: "Duplicate row", tone: "neutral" },
   invalid: { label: "Invalid handle", tone: "bad" },

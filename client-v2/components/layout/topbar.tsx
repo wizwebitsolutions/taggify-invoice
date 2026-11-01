@@ -65,7 +65,7 @@ export function Topbar({ active }: { active: string }) {
         <ThemeToggle />
         <NotificationsBell />
         <DropdownMenu>
-          <DropdownMenuTrigger className="flex items-center gap-3 rounded-pill pr-1 outline-none focus-visible:ring-3 focus-visible:ring-ring-soft" aria-label="Account menu">
+          <DropdownMenuTrigger className="flex items-center gap-3 rounded-pill pr-1 outline-none focus-visible:ring-focus focus-visible:ring-ring-soft" aria-label="Account menu">
             <span className="grid h-10 w-10 place-items-center rounded-full bg-avatar text-body font-bold text-avatar-foreground">{name.charAt(0).toUpperCase()}</span>
             <span className="hidden text-left md:block">
               <span className="block text-body font-semibold">{name}</span>
@@ -116,7 +116,7 @@ function ThemeToggle() {
       onClick={() => setChoice(dark ? "light" : "dark")}
       aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
       aria-pressed={dark}
-      className="grid h-10 w-10 place-items-center rounded-md text-foreground outline-none transition-colors duration-hover hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring-soft"
+      className="grid h-10 w-10 place-items-center rounded-md text-foreground outline-none transition-colors duration-hover hover:bg-muted focus-visible:ring-focus focus-visible:ring-ring-soft"
     >
       {/* Icon follows data-theme in CSS, so it's right before React hydrates. */}
       <Moon className="h-6 w-6 dark:hidden" strokeWidth={1.7} aria-hidden />
@@ -178,7 +178,7 @@ function NotificationsBell() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="relative grid h-10 w-10 place-items-center rounded-md text-foreground outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring-soft"
+        className="relative grid h-10 w-10 place-items-center rounded-md text-foreground outline-none hover:bg-muted focus-visible:ring-focus focus-visible:ring-ring-soft"
         aria-label={unread ? `Notifications, ${unread} unread` : "Notifications"}
       >
         <Bell className="h-6 w-6" strokeWidth={1.7} />

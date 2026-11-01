@@ -145,7 +145,7 @@ export function PaidTable({ rows, showVendor = false }: { rows: PaidLedgerRow[];
                     aria-expanded={expanded}
                     aria-label={`${expanded ? "Hide" : "Show"} posts paid on ${day(v.paidAt)}${showVendor ? ` to ${personLabel(v.vendor, "this vendor")}` : ""}`}
                     onClick={() => setOpen(expanded ? null : v.id)}
-                    className="grid h-8 w-8 place-items-center rounded-sm text-fg-muted hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+                    className="grid h-8 w-8 place-items-center rounded-sm text-fg-muted hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft"
                   >
                     <ChevronRight className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")} />
                   </button>

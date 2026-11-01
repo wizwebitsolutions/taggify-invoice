@@ -165,6 +165,8 @@ export const PERMISSION_SECTIONS = {
   plans: ["view", "edit", "approve"],
   // 12 Oct — Bulk Tracker (server lib/permissions.js OPT_IN_KEYS).
   bulkTrack: ["view"],
+  // 24 Oct — Post Tracker (same opt-in shape).
+  postTracker: ["view"],
 } as const;
 /**
  * Opt-in keys (12 Oct): grantable to any role — own-scope roles included —
@@ -172,7 +174,7 @@ export const PERMISSION_SECTIONS = {
  * effective `permissions` map carries them for every role, so hasAccess()
  * is the gate for all accounts.
  */
-export const OPT_IN_KEYS = ["bulkTrack.view"] as const;
+export const OPT_IN_KEYS = ["bulkTrack.view", "postTracker.view"] as const;
 export const isOptInKey = (key: string) => (OPT_IN_KEYS as readonly string[]).includes(key);
 export type PermissionSection = keyof typeof PERMISSION_SECTIONS;
 export type PermissionAction = "view" | "edit" | "approve" | "pay";
@@ -289,6 +291,8 @@ export interface User {
   permissions?: Permissions;
   /** Which admin created this account, if it was created via the sub-admin flow (admin Users list only). */
   createdByAdminId?: string | null;
+  /** Set when an admin deactivated the account (21 Oct): no sign-in, records kept. Admin Users list only. */
+  deactivatedAt?: string | null;
   /** Own-content switches for CREATOR / TEAM_MEMBER / PLAN_MAKER (24 Sep); all-false for staff. */
   ownAccess?: Partial<Record<string, boolean>>;
 }
@@ -375,6 +379,9 @@ export interface Asset {
   pendingEdit?: PendingAssetEdit | null;
   pendingEditBy?: { id: string; name: string | null; email?: string | null } | null;
   pendingEditAt?: string | null;
+  /** Plan form's Instagram check (17 Oct): when the page was last confirmed to exist, and whether it came back missing. */
+  profileCheckedAt?: string | null;
+  profileBroken?: boolean;
   approvalStatus: string;
   /** Admin's Active / Inactive switch (8 Oct). An inactive page can't be added to new plans. */
   isActive?: boolean;
@@ -400,6 +407,9 @@ export interface Asset {
   scrapeQueuedAt?: string | null;
   /** The creator this page belongs to — Inventory's owner filter (newTask.md, 9 Sep). */
   owner?: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } | null;
+  /** Who added the page (1 Nov) — Approvals groups new pages by this. Null for pages from before it was recorded. */
+  createdById?: string | null;
+  createdBy?: { id: string; name: string | null; email?: string | null; role: Role } | null;
   /** Every campaign this page has been assigned to, deduped — Inventory card's "campaigns they've made" (user request, 11 Sep). */
   campaigns: { id: string; title: string; brandName: string }[];
 }
@@ -415,7 +425,7 @@ export interface Campaign {
   /** How many links (posts) have been submitted under this campaign so far. */
   postCount?: number;
   /** One post's preview, picked server-side, to represent the whole campaign on its card. Null until at least one submitted post has been scraped. */
-  representativePost?: { thumbnailUrl: string | null; caption: string | null } | null;
+  representativePost?: { linkId: string; thumbnailUrl: string | null; caption: string | null } | null;
   /** Sum of likeCount across every submitted post's latest snapshot (unknown/-1 counts excluded). */
   totalLikes?: number;
   /** Sum of every non-screenshot-rejected link's cost. */
@@ -482,7 +492,7 @@ export interface PostSnapshot {
   commentsCount: number;
   videoViews: number;
   capturedAt: string;
-  /** Post cover image from the insights scrape (Apify) — null until a scrape has run. */
+  /** Post cover image from the insights scrape (Apify) — null until a scrape has run. Instagram's link expires: render `links.thumbnailUrl(linkId)` (lib/finance's postThumbSrc), never this directly. */
   thumbnailUrl?: string | null;
   /** Post caption from the same scrape. */
   caption?: string | null;
@@ -855,6 +865,9 @@ export const assets = {
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
   // Remove a page (16 Oct): ADMIN role + inventory.edit. 409 ASSET_IN_USE for a page with posts or on an approved plan.
   remove: (token: string, assetId: string) => request<{ id: string }>(`/assets/${assetId}`, { method: "DELETE", token }),
+  // Bulk delete (19 Oct), same rules as remove: pages with posts or on an approved plan come back in `skipped` with the reason.
+  removeMany: (token: string, assetIds: string[]) =>
+    request<{ deleted: string[]; skipped: { id: string; reason: string }[] }>("/assets/bulk-delete", { method: "POST", token, body: { assetIds } }),
   // A planner's suggested edit (16 Oct): parked on the row until an admin decides. Only the keys sent are proposed.
   proposeEdit: (token: string, assetId: string, body: PendingAssetEdit) => request<Asset>(`/assets/${assetId}/propose-edit`, { method: "PUT", token, body }),
   decideEdit: (token: string, assetId: string, decision: "approve" | "reject") => request<Asset>(`/assets/${assetId}/edit-decision`, { method: "PUT", token, body: { decision } }),
@@ -867,6 +880,9 @@ export const assets = {
     request<Asset>(`/assets/${assetId}/details`, { method: "PUT", token, body }),
   setApproval: (token: string, assetId: string, approvalStatus: "approved" | "rejected" | "pending") =>
     request<Asset>(`/assets/${assetId}/approval`, { method: "PUT", token, body: { approvalStatus } }),
+  // Approvals' "Approve selected" (1 Nov): pages that aren't pending come back in `skipped` with the reason.
+  setApprovalMany: (token: string, assetIds: string[], approvalStatus: "approved" | "rejected") =>
+    request<{ updated: string[]; skipped: { id: string; reason: string }[] }>("/assets/bulk-approval", { method: "POST", token, body: { assetIds, approvalStatus } }),
   // Active / Inactive (8 Oct) — admins only (role + Creators edit access, server-side).
   setActive: (token: string, assetId: string, isActive: boolean) => request<Asset>(`/assets/${assetId}/active`, { method: "PUT", token, body: { isActive } }),
   // Inventory's manual "refresh" button — re-pulls followers/name/bio/avatar
@@ -911,7 +927,15 @@ export interface PageOwner {
   email?: string | null;
 }
 
-export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "conflict" | "owner-missing" | "owner-unknown";
+export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "update" | "conflict" | "owner-missing" | "owner-unknown" | "incomplete";
+
+/** What an "update" row has on the page today, so the popup can show "Reel ₹5,000 → ₹6,000". */
+export interface ImportCurrentValues {
+  category: string | null;
+  grade: "A" | "B" | "C" | null;
+  groupLink: string | null;
+  rateCards: { format: string; amount: number }[];
+}
 
 export interface ImportPreviewRow {
   rowNumber: number;
@@ -934,6 +958,13 @@ export interface ImportPreviewRow {
   ownerId: string | null;
   status: ImportRowStatus;
   reason: string | null;
+  /** Required cells the row is missing ("incomplete"). */
+  missingFields?: string[];
+  /** For "update" (1 Nov): what the sheet changes on the page already in Inventory, and what it has now. */
+  changes?: PendingAssetEdit | null;
+  current?: ImportCurrentValues | null;
+  /** The page already has a suggested edit waiting; this import's changes replace it. */
+  replacesPendingEdit?: boolean;
   /** What the sheet's Vendor Name / Vendor Contact columns said (null when the row had none). */
   vendor?: ImportVendorContact | null;
 }
@@ -982,6 +1013,9 @@ export interface ImportAssetRow {
 export interface ImportResult {
   created: { id: string; handle: string; ownerId: string; approvalStatus: string; owner: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } }[];
   skipped: { handle: string; reason: string }[];
+  /** Pages already in Inventory (1 Nov): an admin's changes applied / anyone else's sent for approval. Missing from older servers. */
+  updated?: { id: string; handle: string }[];
+  proposed?: { id: string; handle: string }[];
 }
 
 /** POSTs a file's raw bytes (not JSON) — same auth/error conventions as request(), including the one-shot refresh on 401. */
@@ -1054,6 +1088,11 @@ export const campaigns = {
 
 // ── Links ───────────────────────────────────────────────────────────
 export const links = {
+  // A post's cover image, served by our API (22 Oct): Instagram's own link
+  // is signed and expires in days, so the server keeps a Cloudinary copy and
+  // proxies Instagram until it has one. Public like profilePicUrl — an <img>
+  // can't send a token. Only meaningful once a snapshot has a thumbnailUrl.
+  thumbnailUrl: (linkId: string) => `${API_URL}/links/${linkId}/thumbnail`,
   list: (
     token: string,
     params: {
@@ -1436,6 +1475,9 @@ export const admin = {
   // changed need to be sent; the server merges onto the existing overlay.
   updatePermissions: (token: string, userId: string, permissions: Partial<Permissions>) =>
     request<User>(`/admin/users/${userId}/permissions`, { method: "PUT", token, body: { permissions } }),
+  // Deactivate (false) / reactivate (true) an account (21 Oct): full admins only, never yourself. Deactivating signs them out everywhere.
+  setActive: (token: string, userId: string, active: boolean) =>
+    request<{ id: string; deactivatedAt: string | null }>(`/admin/users/${userId}/active`, { method: "PUT", token, body: { active } }),
 };
 
 // ── Plans ("Inventory") ────────────────────────────────────────────
@@ -1454,6 +1496,19 @@ export interface PlanItemInput {
 // is optional, matching the wizard's "fill what you have, come back later"
 // shape (see the Plans list's completeness indicator).
 export type SheetFormat = "breakdown" | "summary";
+
+/** One page's answer from POST /plans/check-pages (17 Oct). */
+export interface PageCheckResult {
+  assetId: string;
+  handle: string;
+  broken: boolean;
+  checkedAt: string | null;
+  /** True when Instagram was asked just now; false when the answer is the last check's. */
+  fresh: boolean;
+  /** Instagram didn't answer for this page (outage / timeout); nothing changed. */
+  unknown?: boolean;
+  reason?: string | null;
+}
 
 export interface PlanFields {
   sheetFormat?: SheetFormat;
@@ -1629,6 +1684,10 @@ export const plans = {
   // The plan's deliverable (user request, 10 Sep — "plan will be of google
   // sheet, not in pdf, it'll generate google sheet and will provide link"),
   // superseding the PDF downloads below as the primary Build-step action.
+  // "Are these pages still up?" (17 Oct): confirms the picked pages on Instagram. Only pages not checked in the
+  // last 24h cost an Apify call; `force` re-checks all. A broken page is flagged on the asset (profileBroken).
+  checkPages: (token: string, assetIds: string[], force = false) =>
+    request<{ results: PageCheckResult[]; checked: number; error?: string }>("/plans/check-pages", { method: "POST", token, body: { assetIds, ...(force ? { force: true } : {}) } }),
   // `sheetFormat` (16 Oct) is picked in the dialog "Client sheet" opens; the server saves it on the plan before writing.
   generateSheet: (token: string, id: string, variant?: "client" | "internal", sheetFormat?: SheetFormat) =>
     // sharedWith / shareError (8 Oct): the generator and the plan's maker get edit access; a sharing problem never fails the generation.
@@ -1787,4 +1846,61 @@ export const bulkTrack = {
     request<{ newRowsFound: number; batchId: string | null; imported: { rows: number; profiles: number; posts: number } }>(`/bulk-track/sheet-sources/${id}/check`, { method: "POST", token }),
   deleteSheet: (token: string, id: string) =>
     request<{ success: true; deleted: { posts: number; profiles: number; batches: number } }>(`/bulk-track/sheet-sources/${id}`, { method: "DELETE", token }),
+};
+
+// Post Tracker (24 Oct): a pasted public reel/post link shown as Instagram's
+// own embed. The server rebuilds `embedUrl` from the shortcode.
+export type TrackedPostStatus = "all" | "ok" | "broken" | "archived";
+export interface TrackedPost {
+  id: string;
+  shortcode: string;
+  kind: "reel" | "post";
+  canonicalUrl: string;
+  embedUrl: string;
+  note: string | null;
+  broken: boolean;
+  archivedAt: string | null;
+  createdAt: string;
+  createdBy: { id: string; name: string | null } | null;
+  snapshot: TrackedPostSnapshot;
+}
+/** Captured by a logged-out headless browser on the server (postTracker/capture.js). Plays aren't public, so there are none. */
+export interface TrackedPostSnapshot {
+  status: "queued" | "done" | "unavailable" | "failed";
+  error: string | null;
+  capturedAt: string | null;
+  screenshotUrl: string | null;
+  coverUrl: string | null;
+  ownerHandle: string | null;
+  caption: string | null;
+  postedOn: string | null;
+  likeCount: number | null;
+  commentCount: number | null;
+  viewCount?: number | null;
+}
+export interface TrackedPostList {
+  items: TrackedPost[];
+  total: number;
+  page: number;
+  pageSize: number;
+  counts: Record<TrackedPostStatus, number>;
+}
+export interface AddTrackedPostsResult {
+  results: { input: string; result: "created" | "existing" | "rejected"; shortcode?: string; reason?: string }[];
+  created: number;
+  existing: number;
+  rejected: number;
+}
+
+export const postTracker = {
+  list: (token: string, query: { status: TrackedPostStatus; q?: string; page: number; pageSize?: number }) => {
+    const params = new URLSearchParams({ status: query.status, page: String(query.page), pageSize: String(query.pageSize ?? 24) });
+    if (query.q) params.set("q", query.q);
+    return request<TrackedPostList>(`/post-tracker?${params}`, { token });
+  },
+  add: (token: string, body: { urls: string[]; note?: string }) => request<AddTrackedPostsResult>("/post-tracker", { method: "POST", token, body }),
+  update: (token: string, id: string, body: { note?: string | null; broken?: boolean; archived?: boolean }) =>
+    request<TrackedPost>(`/post-tracker/${id}`, { method: "PATCH", token, body }),
+  remove: (token: string, id: string) => request<{ ok: true }>(`/post-tracker/${id}`, { method: "DELETE", token }),
+  recapture: (token: string, id: string) => request<TrackedPost>(`/post-tracker/${id}/capture`, { method: "POST", token }),
 };

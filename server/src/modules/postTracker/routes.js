@@ -36,6 +36,7 @@ const handle = (fn, status = 200) => async (req, res, next) => {
 
 router.post("/", validateBody(addPostsSchema), handle((req) => postTrackerService.addPosts(req.trackerUser, req.body), 201));
 router.get("/", validateQuery(listPostsQuerySchema), handle((req) => postTrackerService.listPosts(req.trackerUser, req.query)));
+router.post("/:id/capture", handle((req) => postTrackerService.recapture(req.trackerUser, req.params.id)));
 router.patch("/:id", validateBody(updatePostSchema), handle((req) => postTrackerService.updatePost(req.trackerUser, req.params.id, req.body)));
 router.delete("/:id", handle((req) => postTrackerService.deletePost(req.trackerUser, req.params.id)));
 

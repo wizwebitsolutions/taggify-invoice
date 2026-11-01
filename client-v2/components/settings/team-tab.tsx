@@ -47,8 +47,8 @@ export function TeamTab({ bare = false }: { bare?: boolean }) {
   const rows = team.data ?? [];
 
   return (
-    <section aria-labelledby="team-title" className={bare ? "rounded-card border bg-card" : "border-t"}>
-      <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+    <section aria-labelledby="team-title" className={bare ? "ledger-panel rounded-card border bg-card" : "border-t"}>
+      <div className="panel-heading justify-between">
         <div>
           <h2 id="team-title" className="text-card-title">
             My team

@@ -57,7 +57,7 @@ export function SegmentedFilter<T extends string>({
               else if (e.key === "End") (e.preventDefault(), move(options.length - 1));
             }}
             className={cn(
-              "text-small font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft",
+              "text-small font-semibold transition-colors focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft",
               variant === "track"
                 ? cn("h-control-sm rounded-sm px-3 text-fg-strong", on && "bg-card text-foreground shadow-1")
                 : cn("h-control-sm rounded-pill border px-4", on ? "border-brand bg-brand-soft text-brand-ink" : "border-input bg-card text-fg-strong hover:bg-muted")

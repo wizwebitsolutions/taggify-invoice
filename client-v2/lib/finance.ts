@@ -3,7 +3,7 @@
  * screen. Pure functions only (no React) so they can be reasoned about and
  * reused; the API calls themselves stay in lib/api-client.ts.
  */
-import { payments as paymentsApi, type Asset, type Link, type PageOwner, type PaymentInvoice, type PendingLink } from "@/lib/api-client";
+import { links as linksApi, payments as paymentsApi, type Asset, type Link, type PageOwner, type PaymentInvoice, type PendingLink } from "@/lib/api-client";
 import { formatLabel as sharedFormatLabel } from "@/lib/formats";
 
 // ── Months ──────────────────────────────────────────────────────────
@@ -81,6 +81,11 @@ export function workDate(link: Pick<Link, "postedAt" | "createdAt">) {
 
 export function latestSnapshot(link: Pick<Link, "postSnapshots">) {
   return link.postSnapshots?.[0] ?? null;
+}
+
+/** The <img> src for a post's cover — our proxied copy (see links.thumbnailUrl), or null until a scrape has found one. */
+export function postThumbSrc(link: Pick<Link, "id" | "postSnapshots">) {
+  return latestSnapshot(link)?.thumbnailUrl ? linksApi.thumbnailUrl(link.id) : null;
 }
 
 /** First line of the caption, trimmed — the post's title in lists. */

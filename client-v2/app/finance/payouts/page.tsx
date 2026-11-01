@@ -116,10 +116,10 @@ function CreatorPayouts() {
       : null;
 
   return (
-    <div className="flex flex-col gap-5 pt-2">
-      <div className="flex flex-wrap items-start gap-4">
-        <div>
-          <p className="text-body font-medium text-fg-strong">Finance</p>
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <p className="page-eyebrow">Finance</p>
           <h1 className="text-display">Creator Payouts</h1>
           <p className="mt-1 text-body text-muted-foreground">See what each vendor is owed, pay them, and keep the receipts.</p>
         </div>
@@ -143,7 +143,7 @@ function CreatorPayouts() {
       </div>
 
       <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
-        <TabsList>
+        <TabsList className="detail-tabs">
           <TabsTrigger value="vendors">Vendors to pay</TabsTrigger>
           <TabsTrigger value="paid">Paid{paidLedgerTotal !== null ? ` (${paidLedgerTotal})` : ""}</TabsTrigger>
         </TabsList>
@@ -152,7 +152,7 @@ function CreatorPayouts() {
       {view === "paid" ? (
         <PaidLedger />
       ) : (
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <Tabs
           value={tab}
           onValueChange={(v) => {
@@ -160,7 +160,7 @@ function CreatorPayouts() {
             setPage(1);
           }}
         >
-          <div className="flex items-end gap-4 px-5 pt-2">
+          <div className="tab-shelf flex items-end gap-4">
             <TabsList className="flex-1 border-b-0">
               <TabsTrigger value="all">All vendors ({counts.all})</TabsTrigger>
               <TabsTrigger value="due">Due ({counts.due})</TabsTrigger>
@@ -169,7 +169,7 @@ function CreatorPayouts() {
             </TabsList>
           </div>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+        <div className="filter-bar">
           <SearchField
             label="Search vendors"
             placeholder="Search vendor, page or campaign..."
@@ -340,7 +340,7 @@ function PaidLedger() {
   const reset = () => setPage(1);
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="ledger-panel">
       <div className="flex flex-wrap items-center gap-2 px-5 py-4">
         <FilterSelect
           label="Vendor"

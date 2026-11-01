@@ -28,8 +28,8 @@ export const basicsComplete = (b: Basics) => !!(b.name.trim() && b.clientName.tr
 export function BasicsStep({ basics, setBasics, clients, source }: { basics: Basics; setBasics: (fn: (b: Basics) => Basics) => void; clients: SavedClient[]; source?: Plan }) {
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <Card className="p-6">{source ? <VariantBasics source={source} /> : <BasicsForm basics={basics} setBasics={setBasics} clients={clients} />}</Card>
-      <aside className="flex flex-col gap-3 rounded-card border bg-brand-50 p-5">
+      <Card className="form-panel p-6">{source ? <VariantBasics source={source} /> : <BasicsForm basics={basics} setBasics={setBasics} clients={clients} />}</Card>
+      <aside className="summary-panel flex flex-col gap-4 rounded-card border p-6">
         <span className="grid h-10 w-10 place-items-center rounded-md bg-card text-brand-ink">
           <Wallet className="h-5 w-5" aria-hidden />
         </span>
@@ -45,7 +45,7 @@ function BasicsForm({ basics, setBasics, clients }: { basics: Basics; setBasics:
   const known = clients.find((c) => c.clientName.trim().toLowerCase() === basics.clientName.trim().toLowerCase() && (c.clientCompany || c.clientGstNumber));
   return (
     <div className="grid gap-5 md:grid-cols-2">
-      <div className="md:col-span-2">
+      <div className="form-section-heading md:col-span-2">
         <h2 className="text-card-title">Who is this for?</h2>
         <p className="text-small text-muted-foreground">The client and the brief print on the plan and its sheets.</p>
       </div>

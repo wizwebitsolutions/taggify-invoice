@@ -25,10 +25,10 @@ export function PageHeader({
       variants={pageEnter}
       initial="hidden"
       animate="show"
-      className={cn("flex flex-col gap-4 md:flex-row md:items-end md:justify-between", className)}
+      className={cn("flex flex-col gap-4 border-b border-divider pb-6 md:flex-row md:items-end md:justify-between", className)}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <h1 className="text-h1 text-foreground">{title}</h1>
+        <h1 className="text-display text-foreground">{title}</h1>
         {description && <p className="text-body text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}

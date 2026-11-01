@@ -5,12 +5,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, CircleCheck, ExternalLink, Image as ImageIcon, IndianRupee, MoreHorizontal, PanelRight, Pencil, Plus, Send, Trash2, Wallet } from "lucide-react";
+import { ArrowLeft, CircleCheck, ExternalLink, Image as ImageIcon, IndianRupee, MoreHorizontal, PanelRight, Pencil, Plus, Send, Trash2, Upload, Wallet } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, campaigns as campaignsApi, canUse, hasAccess, links as linksApi, type CampaignAssignment, type Link as Post } from "@/lib/api-client";
 import { deadlineLabel, isEnded, pageProgress, POST_STATUS, type PostFilter } from "@/lib/campaigns";
-import { captionTitle, formatLabel, latestSnapshot } from "@/lib/finance";
+import { captionTitle, formatLabel, latestSnapshot, postThumbSrc } from "@/lib/finance";
 import { plural } from "@/lib/format";
 import { campaignKeys, useAssignments, useCampaign, useCampaignLinks, invalidateAfterPostChange } from "@/lib/queries/campaigns";
 import { usePlans } from "@/lib/queries/plans";
@@ -147,15 +147,15 @@ function ControlRoom() {
   const pagesSeen = new Map(items.map((l) => [l.assetId, l.asset?.handle ?? "page"]));
 
   return (
-    <div className="flex flex-col gap-6 pt-1">
+    <div className="workspace-page">
       <Link href="/campaigns" className="inline-flex items-center gap-2 self-start text-body-strong text-foreground hover:text-brand-ink">
         <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
         Back to Campaigns
       </Link>
 
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0">
-          <p className="text-body text-fg-strong">{c.brandName}</p>
+      <div className="page-heading detail-heading">
+        <div className="page-heading-copy">
+          <p className="page-eyebrow">{c.brandName}</p>
           <h1 className="text-display">{c.title}</h1>
           <p className="mt-1 text-body text-muted-foreground">
             {deadlineLabel(c)}
@@ -171,6 +171,14 @@ function ControlRoom() {
           </p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
+          {canFixProof && (
+            <Button asChild>
+              <Link href={`/submit?campaign=${c.id}`}>
+                <Upload />
+                Upload links
+              </Link>
+            </Button>
+          )}
           {c.sheetLink && (
             <Button asChild variant="outline">
               <a href={c.sheetLink} target="_blank" rel="noreferrer">
@@ -234,7 +242,7 @@ function ControlRoom() {
       </div>
 
       <Tabs defaultValue="posts">
-        <TabsList>
+        <TabsList className="detail-tabs">
           <TabsTrigger value="posts">Posts ({items.length})</TabsTrigger>
           {staff && assignments.data && (
             <TabsTrigger value="pages">
@@ -246,7 +254,7 @@ function ControlRoom() {
         </TabsList>
 
         <TabsContent value="posts" className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="detail-filters">
             <SegmentedFilter
               label="Show posts"
               value={filter}
@@ -259,7 +267,7 @@ function ControlRoom() {
             <SearchField label="Search posts" placeholder="Search caption or page..." className="w-full sm:w-56" value={q} onChange={(e) => setQ(e.target.value)} />
             <FilterSelect label="Page" value={pageFilter} onValueChange={setPageFilter} options={[{ value: "all", label: "All" }, ...[...pagesSeen].map(([value, h]) => ({ value, label: displayHandle(h), leading: <PageAvatar assetId={value} handle={h} size="xs" /> }))]} />
           </div>
-          <Card className="overflow-hidden">
+          <Card className="ledger-panel">
             {posts.isError ? (
               <LoadError onRetry={() => posts.refetch()} what="this campaign's posts" />
             ) : (
@@ -293,7 +301,7 @@ function ControlRoom() {
                           <TableRow key={l.id}>
                             <TableCell>
                               <span className="flex items-center gap-3">
-                                <ContentThumb src={snap?.thumbnailUrl} format={l.format} />
+                                <ContentThumb src={postThumbSrc(l)} format={l.format} />
                                 <span className="min-w-0">
                                   <button type="button" onClick={() => setOpened({ post: l, focus: "details" })} className="block max-w-56 truncate rounded-sm text-left font-medium text-foreground hover:text-brand-ink hover:underline focus-visible:outline-none focus-visible:shadow-focus">
                                     {title}
@@ -391,7 +399,7 @@ function ControlRoom() {
         {staff && assignments.data && (
           <TabsContent value="pages" className="flex flex-col gap-4">
             {pendingRows.length > 0 && (
-              <Card className="overflow-hidden">
+              <Card className="ledger-panel">
                 <div className="border-b px-5 py-4">
                   <h2 className="text-card-title">Waiting for a page ({pendingRows.length})</h2>
                   <p className="text-small text-muted-foreground">
@@ -418,7 +426,7 @@ function ControlRoom() {
                 </ul>
               </Card>
             )}
-            <Card className="overflow-hidden">
+            <Card className="ledger-panel">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -487,7 +495,7 @@ function ControlRoom() {
 
         {plan?.notes && (
           <TabsContent value="brief">
-            <Card className="max-w-3xl p-6">
+            <Card className="form-panel max-w-3xl p-6">
               <h2 className="mb-2 text-card-title">Brief</h2>
               <p className="whitespace-pre-line text-body">{plan.notes}</p>
               <p className="mt-4 text-small text-muted-foreground">

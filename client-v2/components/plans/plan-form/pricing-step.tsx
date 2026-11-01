@@ -49,7 +49,7 @@ export function PricingStep({ items, byId, budget, pricing, setPricing }: { item
   const below = !!pricing.overrideCost && t.quoted < t.ourCost;
   return (
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <div className="flex items-center gap-3 px-5 pb-3 pt-5">
           <h2 className="text-card-title">Pages and expected reach</h2>
           <span className="ml-auto text-small text-muted-foreground">
@@ -102,7 +102,7 @@ export function PricingStep({ items, byId, budget, pricing, setPricing }: { item
       </Card>
 
       <div className="flex flex-col gap-4">
-        <Card className="flex flex-col gap-4 p-5">
+        <Card className="summary-panel flex flex-col gap-4 p-6">
           <h2 className="text-card-title">Client side</h2>
           <div className="flex flex-col gap-2">
             <Label htmlFor="pl-quote">Total quoted to client (₹)</Label>

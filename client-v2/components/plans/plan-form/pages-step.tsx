@@ -23,6 +23,7 @@ import { Money } from "@/components/taggify/money";
 import { SearchField } from "@/components/taggify/search-field";
 import { audienceLabel, displayHandle, PageAvatar } from "@/components/finance/identity";
 import { BudgetMeter } from "./budget-meter";
+import { PageCheck } from "./page-check";
 import { comboSplitOf, type DraftItem, instagramUrl, itemCost, itemPostCount, lineCost, lineNeedsCost, newItem, rateFor, toDraft } from "./draft";
 
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
@@ -37,6 +38,7 @@ const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e in
  */
 export function PagesStep({
   assets,
+  allAssets,
   loading,
   items,
   setItems,
@@ -46,6 +48,8 @@ export function PagesStep({
   onSheetImported,
 }: {
   assets: Asset[];
+  /** Every page, inactive and rejected ones too, so the Instagram check can flag a picked page that has since been switched off. */
+  allAssets: Asset[];
   loading: boolean;
   items: DraftItem[];
   setItems: (fn: (items: DraftItem[]) => DraftItem[]) => void;
@@ -143,7 +147,7 @@ export function PagesStep({
       </Card>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Card className="overflow-hidden">
+        <Card className="ledger-panel">
           <div className="flex flex-wrap items-center gap-2 px-5 pt-5">
             <SearchField label="Search pages" placeholder="Search page or category..." className="w-full sm:w-64" value={q} onChange={(e) => setQ(e.target.value)} />
             <FilterSelect
@@ -244,7 +248,7 @@ export function PagesStep({
 
         {/* Stays in view while the list scrolls; scrolls on its own when it's taller than the window. */}
         <div className="thin-scroll flex flex-col gap-4 xl:sticky xl:top-[calc(var(--topbar-height)+1rem)] xl:max-h-[calc(100vh-var(--topbar-height)-7rem)] xl:overflow-y-auto xl:pb-1">
-          <Card className="flex flex-col gap-4 p-5" aria-label="Selected pages">
+          <Card className="summary-panel flex flex-col gap-4 p-6" aria-label="Selected pages">
             <div className="flex items-baseline justify-between">
               <h2 className="text-card-title">Selected pages</h2>
               <span className="text-small text-muted-foreground">{picked.size}</span>
@@ -373,6 +377,23 @@ export function PagesStep({
               </p>
             )}
           </Card>
+          {/* "Are these pages still up?" (17 Oct): checked on Instagram (24h cache), with a swap for any that aren't. */}
+          {items.length > 0 && (
+            <PageCheck
+              assets={allAssets}
+              pickedIds={[...picked]}
+              onReplace={(oldId, replacement) => {
+                setMessage("");
+                setItems((ls) => {
+                  const moved = ls.filter((i) => i.assetId === oldId).map((i) => ({ ...i, assetId: replacement.id, cost: "" }));
+                  const rest = ls.filter((i) => i.assetId !== oldId);
+                  // The replacement may already be on the plan: keep its lines, add only the formats it lacks.
+                  const have = new Set(rest.filter((i) => i.assetId === replacement.id).map((i) => i.format));
+                  return [...rest, ...moved.filter((i) => !have.has(i.format))];
+                });
+              }}
+            />
+          )}
           <SheetImport
             planId={planId}
             onImported={(plan) => {

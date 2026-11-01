@@ -8,7 +8,7 @@ import { ArrowLeft, ArrowUpDown, BadgeCheck, CalendarDays, CreditCard, ExternalL
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, hasAccess, type Asset, type PaymentInvoice } from "@/lib/api-client";
-import { captionTitle, dueStatus, formatLabel, inMonth, latestSnapshot, monthKeyOf, monthLabel, monthRange, workDate } from "@/lib/finance";
+import { captionTitle, dueStatus, formatLabel, inMonth, latestSnapshot, monthKeyOf, monthLabel, monthRange, postThumbSrc, workDate } from "@/lib/finance";
 import { personLabel, plural } from "@/lib/format";
 import { useAssets, useBillingProfiles, useDraftPayouts, usePaidLedger, usePaymentSummary, usePendingDues } from "@/lib/queries/finance";
 import { cn } from "@/lib/utils";
@@ -216,14 +216,14 @@ function VendorPayout() {
   return (
     <TooltipProvider delayDuration={200}>
       <div className="grid items-start gap-6 pt-1 xl:grid-cols-[minmax(0,1fr)_var(--rail-width)]">
-        <section className="flex min-w-0 flex-col gap-7">
+        <section className="flex min-w-0 flex-col gap-6">
           <Link href="/finance/payouts" className="inline-flex items-center gap-3 self-start text-body font-semibold text-foreground hover:text-brand-ink">
             <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
             Back to Payouts
           </Link>
 
           {/* Vendor header */}
-          <div className="relative grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 md:gap-5 2xl:grid-cols-[auto_minmax(0,1fr)_auto]">
+          <div className="detail-heading relative grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 2xl:grid-cols-[auto_minmax(0,1fr)_auto]">
             {/* Vendors have no photo, so initials at 64px read cleaner than a 112px circle with small letters. */}
             <UserAvatar name={name} size="lg" />
             <div className="min-w-0">
@@ -262,7 +262,7 @@ function VendorPayout() {
 
           {/* Pages */}
           <div className="flex flex-col gap-3">
-          <h2 className="text-h4 font-bold">Pages ({pages.length})</h2>
+          <h2 className="section-heading text-section">Pages ({pages.length})</h2>
           {assets.isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {[0, 1, 2].map((i) => (
@@ -276,10 +276,10 @@ function VendorPayout() {
               {pages.map((p) => {
                 const on = fPage === p.id;
                 return (
-                  <Card key={p.id} className={cn("relative flex min-w-[250px] items-center gap-4 px-4 py-4 transition-shadow", on && "border-brand ring-1 ring-brand")}>
+                  <Card key={p.id} className={cn("relative flex min-w-[250px] items-center gap-4 border-input bg-card p-5 shadow-1 transition-colors hover:bg-brand-50", on && "border-brand ring-1 ring-brand")}>
                     <button
                       type="button"
-                      className="absolute inset-0 rounded-card focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+                      className="absolute inset-0 rounded-card focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft"
                       aria-pressed={on}
                       aria-label={on ? `Show dues from all pages` : `Show only ${displayHandle(p.handle, p.platform)}'s dues`}
                       onClick={() => {
@@ -405,7 +405,7 @@ function VendorPayout() {
               {pending.data && pending.data.invoices.length >= 500 && (
                 <p className="rounded-md bg-warning-soft px-4 py-3 text-small text-warning-fg">Showing the newest 500 invoices. Pay these first, then older ones appear.</p>
               )}
-              <Card className="overflow-hidden">
+              <Card className="ledger-panel">
                 {selectedDues.length > 0 && (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b bg-brand-soft px-5 py-3 text-small" role="status" data-testid="selection-bar">
                     <span className="font-semibold text-foreground">
@@ -609,7 +609,7 @@ function DueTableRow({ row, selected, selectable, onToggle, assetById }: { row: 
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-3">
-          <ContentThumb src={snap?.thumbnailUrl} format={link.format} />
+          <ContentThumb src={postThumbSrc(link)} format={link.format} />
           <span className="min-w-0">
             <a href={link.url} target="_blank" rel="noreferrer" className="block max-w-[200px] truncate font-medium text-foreground hover:text-brand-ink hover:underline">
               {title}
@@ -635,7 +635,7 @@ function DueTableRow({ row, selected, selectable, onToggle, assetById }: { row: 
       <TableCell>
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={0} className="rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft">
+            <span tabIndex={0} className="rounded-sm focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft">
               <StatusPill tone={st.tone}>{st.label}</StatusPill>
             </span>
           </TooltipTrigger>
@@ -656,7 +656,7 @@ function PaidTab({ ledger }: { ledger: ReturnType<typeof usePaidLedger> }) {
   if (items.length === 0) return <Card className="p-8 text-center text-muted-foreground">Nothing has been paid to this vendor yet.</Card>;
   const total = ledger.data?.total ?? items.length;
   return (
-    <Card className="overflow-hidden">
+    <Card className="ledger-panel">
       {total > items.length && <p className="bg-warning-soft px-5 py-3 text-small text-warning-fg">Showing the latest {items.length} of {total} payments.</p>}
       <PaidTable rows={items} />
     </Card>

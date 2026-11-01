@@ -76,6 +76,17 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
   `PUT /assets/:id/edit-decision { decision: "approve" | "reject" }`
   (inventory.approve) applies or discards it. `GET /assets` adds
   `pendingEditBy` for the row.
+  1 Nov: `Asset.createdById` (+ `createdBy` on `GET /assets`) records who added
+  a page (Add page, sheet import, plan sheet); the Approvals queue groups new
+  pages by it. `POST /assets/bulk-approval { assetIds, approvalStatus:
+  "approved" | "rejected" }` (inventory.approve) decides several pages at once
+  (`{ updated, skipped: [{ id, reason }] }`). Sheet import: a staff importer's
+  rates are kept on the new (pending) page — only a creator's own sheet never
+  sets rates; and a row whose page is already in Inventory under the same
+  account is an edit — the preview marks it `update` with `changes` and
+  `current`, an ADMIN's confirm applies the changes to the live row, anyone
+  else's parks them as `pendingEdit` (`POST /assets/import` returns `updated`
+  and `proposed` alongside `created` / `skipped`).
   17 Oct: the import sheet's required cells are Page Name, Page Link, Vendor
   Name, Vendor Contact (phone), Entertainment / Brand, Reel and Story rates
   (`IMPORT_REQUIRED_HEADERS`, orange in the template); a staff/planner row

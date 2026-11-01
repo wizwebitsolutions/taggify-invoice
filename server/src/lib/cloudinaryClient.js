@@ -113,6 +113,22 @@ export function uploadPostThumbnail(linkId, buffer) {
   });
 }
 
+/**
+ * Post Tracker snapshot images (24 Oct): the phone-size screenshot and the
+ * cover image of a tracked link, one fixed public_id each per card so a
+ * re-capture overwrites rather than piles up. Returns the delivery URL.
+ */
+export function uploadTrackedPostImage(postId, name, buffer) {
+  if (!process.env.CLOUDINARY_CLOUD_NAME) return Promise.reject(new Error("Cloudinary isn't configured"));
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { public_id: `post-tracker/${postId}/${name}`, overwrite: true, resource_type: "image" },
+      (err, result) => (err ? reject(err) : resolve(result.secure_url))
+    );
+    stream.end(buffer);
+  });
+}
+
 export function isCloudinaryConfigured() {
   return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
 }

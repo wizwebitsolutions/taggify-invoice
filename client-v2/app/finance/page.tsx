@@ -10,6 +10,7 @@ import { billing as billingApi, clientInvoices as clientInvoicesApi, hasAccess, 
 import { monthKeyOf, monthLabel, monthRange, recentMonths, type MonthKey } from "@/lib/finance";
 import { personLabel, plural } from "@/lib/format";
 import { useDraftPayouts, usePaidLedger, usePaymentSummary } from "@/lib/queries/finance";
+import { Illustration } from "@/components/taggify/illustration";
 import { AppShell } from "@/components/layout/app-shell";
 import { isBuilt } from "@/components/layout/nav-config";
 import { Card } from "@/components/ui/card";
@@ -79,13 +80,14 @@ function Overview() {
   const loadingTiles = total.isLoading || monthSummary.isLoading;
 
   return (
-    <div className="flex flex-col gap-6 pt-2">
-      <div className="flex flex-wrap items-start gap-4">
-        <div>
-          <p className="text-body font-medium text-fg-strong">Finance</p>
+    <div className="workspace-page">
+      <div className="page-heading items-center">
+        <div className="page-heading-copy">
+          <p className="page-eyebrow">Finance</p>
           <h1 className="text-display">Overview</h1>
           <p className="mt-1 text-body text-muted-foreground">Dues to creators, payouts, and what clients still owe.</p>
         </div>
+        <Illustration name="finance-01" className="hidden w-32 shrink-0 xl:block" />
         <FilterSelect className="ml-auto" label="Month" icon={CalendarDays} value={month} onValueChange={(v) => setMonth(v as MonthKey)} options={recentMonths(12).map((m) => ({ value: m, label: monthLabel(m, "long") }))} />
       </div>
 
@@ -98,7 +100,7 @@ function Overview() {
       )}
 
       <section aria-labelledby="fin-attn" className="flex flex-col gap-3">
-        <h2 id="fin-attn" className="text-section">
+        <h2 id="fin-attn" className="section-heading text-section">
           Needs attention <span className="text-body font-normal text-muted-foreground">right now</span>
         </h2>
         {attentionFailed && attention.length > 0 && (
@@ -127,7 +129,7 @@ function Overview() {
                     <a.icon className="h-5 w-5" aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="num block text-section">{a.count}</span>
+                    <span className="num attention-value">{a.count}</span>
                     <span className="block text-small text-fg-muted">{a.label}</span>
                   </span>
                 </>
@@ -136,7 +138,7 @@ function Overview() {
               return (
                 <li key={a.key}>
                   {live ? (
-                    <Link href={a.href} className="flex items-center gap-3 rounded-card border bg-card p-4 text-foreground shadow-2 transition-colors hover:border-brand hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft">
+                    <Link href={a.href} className="attention-card">
                       {inner}
                       <ArrowRight className="h-4 w-4 text-fg-muted" aria-hidden />
                     </Link>
@@ -168,7 +170,7 @@ function Overview() {
                 const id = r.kind === "payout" ? r.payout.creatorId : r.invoice.creatorId;
                 return (
                   <li key={r.kind === "payout" ? r.payout.id : r.invoice.id}>
-                    <Link href={`/finance/payouts/${id}?tab=paid`} className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground">
+                    <Link href={`/finance/payouts/${id}?tab=paid`} className="dashboard-row">
                       <UserAvatar name={personLabel(creator, "Vendor")} size="sm" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-body-strong">

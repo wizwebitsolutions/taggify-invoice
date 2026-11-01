@@ -134,6 +134,7 @@ model User {
   trustedDevices            TrustedDevice[]
   emailOtps                 EmailOtp[]
   assets                    Asset[]
+  createdAssets             Asset[]                 @relation("AssetCreatedBy")
   invoices                  Invoice[]
   raisedInvoices            Invoice[]               @relation("RaisedInvoices")
   notifications             Notification[]
@@ -297,6 +298,9 @@ model Asset {
   pendingEdit         Json?
   pendingEditById     String?
   pendingEditAt       DateTime?
+  // 1 Nov: who added the page (Add page, sheet import, plan sheet) — the
+  // Approvals queue groups new pages by this. Null for pages from before.
+  createdById         String?
   // 17 Oct: "is this page still up?" — set by the plan wizard's Instagram
   // check (plans POST /check-pages) and by every successful profile scrape.
   // broken = Instagram returned no profile (deactivated, renamed, private).
@@ -336,6 +340,7 @@ model Asset {
   updatedAt           DateTime  @updatedAt
 
   owner       User                 @relation(fields: [ownerId], references: [id])
+  createdBy   User?                @relation("AssetCreatedBy", fields: [createdById], references: [id])
   rateCards   RateCard[]
   links       Link[]
   snapshots   AccountSnapshot[]
@@ -343,6 +348,7 @@ model Asset {
   planItems   PlanItem[]
 
   @@unique([ownerId, platform, handle])
+  @@index([createdById])
 }
 
 // One row per page/creator an admin listed when attaching a sheet to a
@@ -1055,8 +1061,25 @@ model TrackedPost {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
+  // Snapshot capture (24 Oct, postTracker/capture.js): a logged-out headless
+  // phone browser opens the public page and keeps what any visitor sees.
+  // Instagram doesn't show plays to logged-out visitors, so there's no views column.
+  captureStatus  String    @default("queued") // queued | done | unavailable | failed
+  captureError   String?
+  captureCount   Int       @default(0) // attempts on the current capture, for backoff
+  capturedAt     DateTime?
+  screenshotUrl  String? // Cloudinary copy of the phone-size screenshot (snapshot 1)
+  coverUrl       String? // Cloudinary copy of the cover image
+  ownerHandle    String?
+  caption        String?
+  postedOn       String? // as Instagram words it, e.g. "October 23, 2026"
+  likeCount      Int?
+  commentCount   Int?
+  viewCount      Int? // public reel plays/views scraped from creator's reels tab
+
   createdBy User @relation(fields: [createdById], references: [id])
 
+  @@index([captureStatus])
   @@unique([createdById, shortcode])
   @@index([createdById, createdAt])
 }

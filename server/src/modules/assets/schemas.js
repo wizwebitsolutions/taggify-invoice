@@ -119,6 +119,12 @@ export const bulkDeleteSchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1).max(500),
 });
 
+// Approvals' "Approve selected" / "Reject selected" (1 Nov) — same cap.
+export const bulkApprovalSchema = z.object({
+  assetIds: z.array(z.string().min(1)).min(1).max(500),
+  approvalStatus: z.enum(["approved", "rejected"]),
+});
+
 export const importAssetsSchema = z.object({
   rows: z.array(importAssetRowSchema).min(1).max(500),
 });

@@ -1171,7 +1171,7 @@ export async function importPlanSheetPages(planId, requester, rows) {
       matchedCount += 1;
     } else {
       asset = await prisma.asset.create({
-        data: { ownerId: requester.id, platform: "instagram", handle: cleanHandle, followers: row.followers ?? 0, category: row.category, approvalStatus: "pending" },
+        data: { ownerId: requester.id, createdById: requester.id, platform: "instagram", handle: cleanHandle, followers: row.followers ?? 0, category: row.category, approvalStatus: "pending" },
         include: { rateCards: true },
       });
       assetByHandle.set(cleanHandle.toLowerCase(), asset);

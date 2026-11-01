@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Mail, Pencil, Plus } from "lucide-react";
+import { Check, Copy, KeyRound, Mail, Pencil, Plus, UserCheck, UserX } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { admin as adminApi, ApiError, billing as billingApi, hasAccess, isOwnScopeRole, PERMISSION_KEYS, type BillingProfile, type Permissions, type Role, type User } from "@/lib/api-client";
@@ -47,7 +47,7 @@ function PersonDetails({ person }: { person: User }) {
   const [values, setValues] = useState<Permissions>(current);
   const [role, setRole] = useState<Role>(person.role);
   const [confirmRole, setConfirmRole] = useState(false);
-  const [dialog, setDialog] = useState<"email" | "password" | "details" | null>(null);
+  const [dialog, setDialog] = useState<"email" | "password" | "details" | "deactivate" | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: ["adminUsers"] });
 
   // Only the keys that changed: the server merges a patch onto the stored access.
@@ -103,6 +103,7 @@ function PersonDetails({ person }: { person: User }) {
         <div className="flex flex-wrap items-center gap-1.5">
           <StatusPill tone="neutral">{ROLE_NAMES[person.role]}</StatusPill>
           {person.email && (person.emailVerifiedAt ? <StatusPill tone="success">Email verified</StatusPill> : <StatusPill tone="warning">Email not verified yet</StatusPill>)}
+          {person.deactivatedAt && <StatusPill tone="danger">Deactivated</StatusPill>}
         </div>
       </SheetHeader>
 
@@ -186,6 +187,9 @@ function PersonDetails({ person }: { person: User }) {
             )}
           </section>
         )}
+
+        {/* Deactivate / Reactivate (21 Oct): PUT /admin/users/:id/active, full admins only, never yourself. */}
+        {isFullAdmin(user) && !me && <AccountSection person={person} onDeactivate={() => setDialog("deactivate")} onDone={refresh} />}
       </div>
 
       {editable && (
@@ -204,7 +208,86 @@ function PersonDetails({ person }: { person: User }) {
       <EditDetailsDialog person={dialog === "details" ? person : null} onClose={() => setDialog(null)} />
       <ChangeEmailDialog person={dialog === "email" ? person : null} onClose={() => setDialog(null)} onDone={refresh} />
       <ResetPasswordDialog person={dialog === "password" ? person : null} onClose={() => setDialog(null)} />
+      <DeactivateDialog person={dialog === "deactivate" ? person : null} onClose={() => setDialog(null)} onDone={refresh} />
     </>
+  );
+}
+
+/** Whether the account can sign in. Deactivated keeps every record (pages, posts, invoices, payouts, plans); Reactivate undoes it. */
+function AccountSection({ person, onDeactivate, onDone }: { person: User; onDeactivate: () => void; onDone: () => void }) {
+  const { accessToken } = useAuth();
+  const reactivate = useMutation({
+    mutationFn: () => adminApi.setActive(accessToken!, person.id, true),
+    onSuccess: () => toast.success(`${nameOf(person)} can sign in again.`),
+    onError: (e) => toast.error(errText(e, "Couldn't reactivate the account.")),
+    onSettled: onDone,
+  });
+  const since = person.deactivatedAt ? new Date(person.deactivatedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : null;
+
+  return (
+    <section aria-labelledby="account-title" className="flex flex-col gap-3">
+      <h3 id="account-title" className="text-card-title">
+        Account
+      </h3>
+      {since ? (
+        <>
+          <p className="rounded-md bg-danger-soft px-3 py-2 text-small text-danger-fg">Deactivated on {since}. They can&apos;t sign in. Everything they&apos;re on stays as it was.</p>
+          <Button variant="outline" className="self-start" disabled={reactivate.isPending} onClick={() => reactivate.mutate()}>
+            <UserCheck />
+            {reactivate.isPending ? "Reactivating…" : "Reactivate account"}
+          </Button>
+        </>
+      ) : (
+        <>
+          <p className="text-small text-muted-foreground">Deactivating stops them signing in. Their pages, posts, invoices, payouts and plans stay, and you can reactivate them later.</p>
+          <Button variant="ghost" className="self-start text-danger-fg hover:text-danger-fg" onClick={onDeactivate}>
+            <UserX />
+            Deactivate account
+          </Button>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** PUT /admin/users/:id/active { active: false }: confirm first, since it signs them out everywhere. */
+function DeactivateDialog({ person, onClose, onDone }: { person: User | null; onClose: () => void; onDone: () => void }) {
+  const { accessToken } = useAuth();
+  const deactivate = useMutation({
+    mutationFn: () => adminApi.setActive(accessToken!, person!.id, false),
+    onSuccess: () => {
+      toast.success(`${nameOf(person!)} is deactivated and signed out everywhere.`);
+      close();
+    },
+    onSettled: onDone,
+  });
+  const close = () => {
+    deactivate.reset();
+    onClose();
+  };
+
+  return (
+    <Dialog open={!!person} onOpenChange={(o) => !o && !deactivate.isPending && close()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Deactivate {person ? nameOf(person) : "this account"}?</DialogTitle>
+          <DialogDescription>They&apos;re signed out of every device and can&apos;t sign in. Their pages, posts, invoices, payouts and plans stay as they are. You can reactivate the account at any time.</DialogDescription>
+        </DialogHeader>
+        {deactivate.isError && (
+          <p role="alert" className="text-small text-danger-helper">
+            {errText(deactivate.error, "Couldn't deactivate the account.")}
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" disabled={deactivate.isPending} onClick={close}>
+            Keep active
+          </Button>
+          <Button variant="destructive" disabled={deactivate.isPending} onClick={() => deactivate.mutate()}>
+            {deactivate.isPending ? "Deactivating…" : "Deactivate"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

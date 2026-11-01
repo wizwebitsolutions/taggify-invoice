@@ -28,7 +28,7 @@ export function ReviewStep({
   return (
     <div className="flex flex-col gap-6">
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-      <Card className="flex flex-col gap-5 p-6">
+      <Card className="form-panel flex flex-col gap-5 p-6">
         <div>
           <p className="text-small text-muted-foreground">{basics.clientName}</p>
           <h2 className="text-h3">{basics.name}</h2>
@@ -53,7 +53,7 @@ export function ReviewStep({
           </div>
         </div>
       </Card>
-      <Card className="flex flex-col gap-4 p-5">
+      <Card className="summary-panel flex flex-col gap-4 p-6">
         <div>
           <p className="text-small font-semibold text-muted-foreground">Client pays</p>
           <p className="text-h2 font-bold">

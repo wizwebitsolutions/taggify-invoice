@@ -20,7 +20,7 @@ import {
   type PageOwner,
 } from "@/lib/api-client";
 import { canCreateLogin } from "@/lib/creators";
-import { compactNumber, personLabel, plural } from "@/lib/format";
+import { compactNumber, money, personLabel, plural } from "@/lib/format";
 import { invalidatePages } from "@/lib/queries/creators";
 import { FORMATS, formatLabel, joinLabels } from "@/lib/formats";
 import { Button } from "@/components/ui/button";
@@ -48,12 +48,32 @@ const STATUS: Record<ImportRowStatus, { label: string; tone: StatusTone }> = {
   "owner-missing": { label: "Needs a creator", tone: "warning" },
   "owner-unknown": { label: "Creator not found", tone: "warning" },
   exists: { label: "Already in Inventory", tone: "neutral" },
+  // Already in Inventory and the sheet changes it (1 Nov): imported as an edit.
+  update: { label: "Will be updated", tone: "info" },
   conflict: { label: "Under another creator", tone: "danger" },
   duplicate: { label: "Duplicate row", tone: "neutral" },
   invalid: { label: "Not a page link", tone: "danger" },
+  incomplete: { label: "Missing required cells", tone: "danger" },
 };
 /** Rows that become a page once they have a creator. */
 const PLACEABLE: ImportRowStatus[] = ["ready", "owner-missing", "owner-unknown"];
+/** An "update" row: its page exists already, keeps its creator and needs no Instagram check. */
+const isUpdate = (r: ImportPreviewRow) => r.status === "update" && !!r.handle;
+
+/** "Grade — → A · Reel ₹5,000 → ₹6,000" — what an update row changes, from the preview's `changes` and `current`. */
+function changesSummary(r: ImportPreviewRow) {
+  const c = r.changes ?? {};
+  const now = r.current;
+  const parts: string[] = [];
+  if ("category" in c) parts.push(`Category ${now?.category ?? "—"} → ${c.category ?? "—"}`);
+  if ("grade" in c) parts.push(`Grade ${now?.grade ?? "—"} → ${c.grade ?? "—"}`);
+  if ("groupLink" in c) parts.push("Group link");
+  for (const rc of c.rateCards ?? []) {
+    const before = now?.rateCards.find((x) => x.format === rc.format)?.amount;
+    parts.push(`${formatLabel(rc.format)} ${before != null ? money(before) : "—"} → ${money(rc.amount)}`);
+  }
+  return parts.join(" · ");
+}
 
 /** Whether Instagram confirmed a placeable row's page. Only "found" rows are imported; the server re-checks. */
 type CheckState = "found" | "not-found" | "unverified" | "checking";
@@ -114,8 +134,10 @@ function useCreateCreatorLogin(owners: PageOwner[]) {
  * file or a Google Sheet link of pages. The server reads the sheet and resolves
  * each row's creator; every page is then looked up on Instagram. You pick (or
  * create) the creator for rows the sheet couldn't place, see every row's status,
- * and only confirmed pages are created. An admin's pages are approved on import
- * with the sheet's rates; anyone else's wait for approval without rates.
+ * and only confirmed pages are created. An admin's pages are approved on import;
+ * anyone else's wait for approval. The sheet's rates are kept either way (1 Nov),
+ * except on a creator's own sheet. A row whose page is already in Inventory is
+ * an edit: an admin's changes are applied, anyone else's go for approval.
  */
 export function ImportPagesDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   return (
@@ -128,7 +150,7 @@ export function ImportPagesDialog({ open, onOpenChange }: { open: boolean; onOpe
 function ImportFlow({ onClose }: { onClose: () => void }) {
   const { user, accessToken } = useAuth();
   const qc = useQueryClient();
-  // Literal role check, like the server's importAssets: only an admin's pages are approved on import with rates.
+  // Literal role check, like the server's importAssets: only an admin's pages are approved on import, and only an admin's edits apply straight away.
   const isAdmin = user?.role === "ADMIN";
   // A creator's sheet is all their own pages; there's no creator to pick.
   const isCreator = user?.role === "CREATOR";
@@ -226,14 +248,17 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
     run.reset();
   }
 
-  const placeable = (r: ImportPreviewRow) => PLACEABLE.includes(r.status) && !!r.handle;
+  const placeable = (r: ImportPreviewRow) => (PLACEABLE.includes(r.status) || isUpdate(r)) && !!r.handle;
   const checkOf = (r: ImportPreviewRow): CheckState => {
+    // A page already in Inventory was confirmed on Instagram when it was added.
+    if (isUpdate(r)) return "found";
     const p = r.handle ? live[r.handle] : undefined;
     if (p) return "found";
     if (p === null) return "not-found";
     return lookup.isPending ? "checking" : "unverified";
   };
-  const ownerOf = (r: ImportPreviewRow) => ownerByRow[r.rowNumber] || ownerForAll || "";
+  // An update row stays under the creator it already has.
+  const ownerOf = (r: ImportPreviewRow) => (isUpdate(r) ? (r.ownerId ?? "") : ownerByRow[r.rowNumber] || ownerForAll || "");
   const categoryOf = (r: ImportPreviewRow) => categoryByRow[r.rowNumber] ?? r.category ?? "";
 
   const toImport = useMemo(() => {
@@ -244,7 +269,8 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
         handle: r.handle as string,
         // The server puts a creator's rows under the creator whatever is sent.
         ownerId: isCreator ? (user?.id ?? "") : ownerOf(r),
-        category: categoryOf(r) || null,
+        // An update row changes only what its sheet row says — the category pickers never touch an existing page.
+        category: isUpdate(r) ? (r.category ?? null) : categoryOf(r) || null,
         grade: r.grade ?? null,
         groupLink: r.groupLink ?? null,
         pageName: r.pageName ?? null,
@@ -257,13 +283,19 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   const recheck = preview ? [...new Set(preview.rows.filter((r) => placeable(r) && (checkOf(r) === "unverified" || checkOf(r) === "not-found")).map((r) => r.handle as string))] : [];
   const waitingForCreator = !preview || isCreator ? 0 : preview.rows.filter((r) => placeable(r) && (checkOf(r) === "found" || checkOf(r) === "checking") && !ownerOf(r)).length;
 
+  const updating = toImport.filter((row) => preview?.rows.some((r) => isUpdate(r) && r.handle === row.handle)).length;
+  const creating = toImport.length - updating;
+
   const run = useMutation({
     mutationFn: () => assetsApi.import(accessToken!, toImport),
     onSuccess: async (r) => {
       setResult(r);
-      if (r.created.length) {
+      const updated = r.updated?.length ?? 0;
+      const proposed = r.proposed?.length ?? 0;
+      if (r.created.length || updated || proposed) {
         await invalidatePages(qc);
-        toast.success(`${plural(r.created.length, "page")} imported.`);
+        const bits = [r.created.length ? `${plural(r.created.length, "page")} imported` : "", updated ? `${updated} updated` : "", proposed ? `${proposed} sent for approval` : ""].filter(Boolean);
+        toast.success(`${bits.join(", ")}.`);
       }
     },
   });
@@ -313,7 +345,11 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
           <DialogDescription>
             {fileName ?? "Google Sheet"}: {plural(preview.totalRows, "row")}.{" "}
             {leftOut ? `${plural(leftOut, "row")} can't be imported and will be left out. ` : ""}
-            {isAdmin ? "Pages are approved on import, with whatever rates the sheet has. Every rate is optional." : "Pages wait for an admin's approval. Rates in the sheet aren't used: an admin sets them."}
+            {isAdmin
+              ? "New pages are approved on import with the sheet's rates. Pages already in Inventory are updated straight away."
+              : isCreator
+                ? "Pages wait for an admin's approval. Changes to your pages are sent to an admin to apply."
+                : "New pages wait for an admin's approval, with the rates from the sheet. Changes to pages already in Inventory are sent to an admin to apply."}
           </DialogDescription>
         </DialogHeader>
 
@@ -365,7 +401,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
               keepLabel="Keep the sheet's"
               onChange={(c) => {
                 setCategoryForAll(c);
-                setCategoryByRow(c === SHEET ? {} : Object.fromEntries(preview.rows.filter(placeable).map((r) => [r.rowNumber, c])));
+                setCategoryByRow(c === SHEET ? {} : Object.fromEntries(preview.rows.filter((r) => placeable(r) && !isUpdate(r)).map((r) => [r.rowNumber, c])));
               }}
             />
           </div>
@@ -402,7 +438,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                 <TableHead>Status</TableHead>
                 <TableHead>Page</TableHead>
                 <TableHead className="text-right">Followers</TableHead>
-                {isAdmin && <TableHead className="text-right">Rates</TableHead>}
+                {!isCreator && <TableHead className="text-right">Rates</TableHead>}
                 <TableHead>Category</TableHead>
                 {!isCreator && <TableHead>Creator</TableHead>}
               </TableRow>
@@ -413,8 +449,9 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                 const check = canPlace ? checkOf(r) : null;
                 const goes = check === "found" || check === "checking";
                 const meta = check && check !== "found" ? CHECK[check] : null;
-                const status = meta ?? (goes ? (isCreator || ownerOf(r) ? STATUS.ready : STATUS["owner-missing"]) : STATUS[r.status]);
-                const note = meta?.note ?? (goes ? null : r.reason);
+                const update = isUpdate(r);
+                const status = meta ?? (update ? STATUS.update : goes ? (isCreator || ownerOf(r) ? STATUS.ready : STATUS["owner-missing"]) : STATUS[r.status]);
+                const note = meta?.note ?? (update ? `${changesSummary(r)}${r.replacesPendingEdit ? " · Replaces a suggestion already waiting." : ""}` : goes ? null : r.reason);
                 const p = r.handle ? live[r.handle] : undefined;
                 const rates = FORMATS.flatMap((f) => r.rateCards.filter((c) => c.format === f));
                 const label = displayHandle(r.handle ?? r.rawHandle);
@@ -456,7 +493,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                         "—"
                       )}
                     </TableCell>
-                    {isAdmin && (
+                    {!isCreator && (
                       <TableCell className="whitespace-nowrap text-right">
                         {rates.length === 0
                           ? "—"
@@ -468,7 +505,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                       </TableCell>
                     )}
                     <TableCell className="min-w-40">
-                      {goes ? (
+                      {goes && !update ? (
                         <CategorySelect
                           label={`Category for ${label}`}
                           value={categoryByRow[r.rowNumber] ?? SHEET}
@@ -489,7 +526,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                     </TableCell>
                     {!isCreator && (
                       <TableCell className="min-w-52">
-                        {goes && owners.length > 0 ? (
+                        {goes && !update && owners.length > 0 ? (
                           <>
                             <Select value={ownerByRow[r.rowNumber] || DEFAULT} onValueChange={(v) => setOwnerByRow((prev) => ({ ...prev, [r.rowNumber]: v === DEFAULT ? "" : v }))}>
                               <SelectTrigger aria-label={`Creator for ${label}`} className="h-control-sm text-small">
@@ -529,7 +566,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
             Start over
           </Button>
           <Button disabled={toImport.length === 0 || run.isPending || lookup.isPending} onClick={() => run.mutate()}>
-            {run.isPending ? "Importing…" : lookup.isPending ? "Checking pages…" : toImport.length ? `Import ${plural(toImport.length, "page")}` : "Nothing to import"}
+            {run.isPending ? "Importing…" : lookup.isPending ? "Checking pages…" : toImport.length ? (creating ? `Import ${plural(creating, "page")}${updating ? ` · update ${updating}` : ""}` : `Update ${plural(updating, "page")}`) : "Nothing to import"}
           </Button>
         </DialogFooter>
       </>
@@ -618,13 +655,13 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
             </>
           )}
           <span className="font-semibold text-foreground">Followers</span>
-          {isAdmin ? (
+          {!isCreator ? (
             <>
-              , <span className="font-semibold text-foreground">Reel Rate</span>, <span className="font-semibold text-foreground">Story Rate</span>, <span className="font-semibold text-foreground">Static / Carousel Rate</span>,{" "}
-              <span className="font-semibold text-foreground">Political Reel Rate</span> and <span className="font-semibold text-foreground">Reel + Story Rate</span> in whole rupees. The first three are needed before a page is approved.
+              , <span className="font-semibold text-foreground">Entertainment / Brand Rate</span>, <span className="font-semibold text-foreground">Reel Rate</span>, <span className="font-semibold text-foreground">Story Rate</span> and the other rate columns in whole rupees. Those three are needed for a new page.
+              A page already in Inventory is updated from its row{isAdmin ? "" : " once an admin approves the changes"}.
             </>
           ) : (
-            ". Rates are set by an admin when they approve the pages."
+            ". A page already in Inventory is updated from its row once an admin approves the changes."
           )}
         </p>
         <Button variant="ghost" size="sm" className="self-start" disabled={template.isPending} onClick={() => template.mutate()}>
@@ -938,16 +975,37 @@ function ResultView({ result, isAdmin, passwordCard, onClose }: { result: Import
     entry.handles.push(a.handle);
     byOwner.set(a.owner.id, entry);
   }
+  const updated = result.updated ?? [];
+  const proposed = result.proposed ?? [];
+  const headline = [result.created.length ? `${plural(result.created.length, "page")} imported` : "", updated.length ? `${updated.length} updated` : "", proposed.length ? `${proposed.length} sent for approval` : ""].filter(Boolean).join(" · ");
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{result.created.length ? `${plural(result.created.length, "page")} imported` : "Nothing was imported"}</DialogTitle>
+        <DialogTitle>{headline || "Nothing was imported"}</DialogTitle>
         <DialogDescription>
-          {result.created.length > 0 && (isAdmin ? "They're approved and live in Inventory. " : "They're waiting for an admin's approval. ")}
+          {result.created.length > 0 && (isAdmin ? "New pages are approved and live in Inventory. " : "New pages are waiting for an admin's approval. ")}
+          {updated.length > 0 && "Updated pages changed straight away. "}
+          {proposed.length > 0 && "Suggested changes wait for an admin to apply them. "}
           {result.skipped.length > 0 ? `${plural(result.skipped.length, "page")} skipped: see why below.` : result.created.length ? "Profile pictures are saved in the background." : ""}
         </DialogDescription>
       </DialogHeader>
       {passwordCard}
+      {(updated.length > 0 || proposed.length > 0) && (
+        <ul aria-label="Updated pages" className="flex flex-col divide-y rounded-card border">
+          {updated.length > 0 && (
+            <li className="px-4 py-2">
+              <span className="block text-body-strong">Updated</span>
+              <span className="block text-small text-muted-foreground">{updated.map((u) => displayHandle(u.handle)).join(", ")}</span>
+            </li>
+          )}
+          {proposed.length > 0 && (
+            <li className="px-4 py-2">
+              <span className="block text-body-strong">Sent for approval</span>
+              <span className="block text-small text-muted-foreground">{proposed.map((u) => displayHandle(u.handle)).join(", ")}</span>
+            </li>
+          )}
+        </ul>
+      )}
       {byOwner.size > 0 && (
         <ul className="flex flex-col divide-y rounded-card border">
           {[...byOwner.values()].map(({ owner, handles }) => (

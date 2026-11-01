@@ -15,12 +15,24 @@ const PEOPLE = [
   { id: "u-priya", name: "Priya Sharma", email: "priya@taggify.in", phoneNumber: null, role: "PLAN_MAKER", emailVerifiedAt: null, createdAt: ago(100), permissions: perms([]), ownAccess: perms(["plans.view", "plans.edit", "campaigns.view", "links.view", "finance.view", "finance.edit", "inventory.view", "inventory.edit"]) },
   { id: "u-riya", name: "Riya Mehta", email: "riya@example.com", phoneNumber: "+919800000001", role: "CREATOR", emailVerifiedAt: ago(10), createdAt: ago(50), permissions: perms([]), ownAccess: perms(["campaigns.view", "inventory.view", "inventory.edit", "links.view", "links.edit", "finance.view", "finance.edit", "users.view", "users.edit"]) },
   { id: "u-ops2", name: "Second Admin", email: "ops2@taggify.in", phoneNumber: null, role: "ADMIN", emailVerifiedAt: ago(5), createdAt: ago(40), permissions: perms(KEYS), ownAccess: perms([]) },
+  // Deactivated (21 Oct): hidden by the default "Active" status filter and left out of the tab count.
+  { id: "u-old", name: "Old Vendor", email: "old@example.com", phoneNumber: null, role: "CREATOR", emailVerifiedAt: ago(90), createdAt: ago(400), deactivatedAt: ago(3), permissions: perms([]), ownAccess: perms([]) },
 ];
 
 async function settingsApi(page: Page) {
-  const calls = { permissions: [] as { id: string; body: Record<string, unknown> }[], role: [] as unknown[], signup: [] as Record<string, unknown>[], numbering: [] as unknown[], email: [] as unknown[], reset: 0, billing: [] as unknown[], profile: [] as unknown[], password: 0, runNow: 0 };
+  const calls = { permissions: [] as { id: string; body: Record<string, unknown> }[], role: [] as unknown[], signup: [] as Record<string, unknown>[], numbering: [] as unknown[], email: [] as unknown[], active: [] as { id: string; active: boolean }[], reset: 0, billing: [] as unknown[], profile: [] as unknown[], password: 0, runNow: 0 };
   await mockApi(page);
-  await page.route(`${API_URL}/admin/users`, (r) => r.fulfill({ json: PEOPLE }));
+  // A copy per test, so a deactivate in one test can't leak into another.
+  const people: (typeof PEOPLE)[number][] = PEOPLE.map((p) => ({ ...p }));
+  await page.route(`${API_URL}/admin/users`, (r) => r.fulfill({ json: people }));
+  await page.route(`${API_URL}/admin/users/*/active`, (r) => {
+    const id = r.request().url().split("/users/")[1].split("/")[0];
+    const { active } = r.request().postDataJSON() as { active: boolean };
+    calls.active.push({ id, active });
+    const person = people.find((p) => p.id === id)!;
+    Object.assign(person, { deactivatedAt: active ? null : new Date().toISOString() });
+    return r.fulfill({ json: { id, deactivatedAt: person.deactivatedAt } });
+  });
   await page.route(`${API_URL}/admin/users/*/permissions`, (r) => {
     const id = r.request().url().split("/users/")[1].split("/")[0];
     const body = r.request().postDataJSON().permissions;
@@ -172,6 +184,57 @@ test.describe("Settings", () => {
     expect(calls.reset).toBe(1);
   });
 
+  test("deactivate and reactivate (21 Oct): hidden by default, asks first, never for yourself", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    const calls = await settingsApi(page);
+    await page.goto("/settings");
+    await expect(page.getByRole("row", { name: /Riya Mehta/ })).toBeVisible();
+    await expect(page.getByRole("row", { name: /Old Vendor/ })).toHaveCount(0);
+
+    // Deactivating asks first; Keep active sends nothing.
+    await page.getByRole("button", { name: "Edit access for Riya Mehta" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Deactivate account" }).click();
+    const confirm = page.getByRole("dialog", { name: "Deactivate Riya Mehta?" });
+    await expect(confirm).toContainText("signed out of every device");
+    await shot(page, "settings-deactivate-confirm");
+    await confirm.getByRole("button", { name: "Keep active" }).click();
+    expect(calls.active).toHaveLength(0);
+    await page.getByRole("dialog").getByRole("button", { name: "Deactivate account" }).click();
+    await page.getByRole("dialog", { name: "Deactivate Riya Mehta?" }).getByRole("button", { name: "Deactivate", exact: true }).click();
+    await expect.poll(() => calls.active).toEqual([{ id: "u-riya", active: false }]);
+    await expect(page.getByRole("dialog").getByRole("button", { name: "Reactivate account" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("row", { name: /Riya Mehta/ })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "People & access (4)" })).toBeVisible();
+
+    // The Deactivated filter shows them, marked; Reactivate brings one back.
+    await page.getByRole("combobox", { name: /Status/ }).click();
+    await page.getByRole("option", { name: "Deactivated" }).click();
+    await expect(page.getByRole("row", { name: /Old Vendor/ })).toContainText("Deactivated");
+    await expect(page.getByRole("row", { name: /Riya Mehta/ })).toContainText("Deactivated");
+    await page.getByRole("button", { name: "Edit access for Old Vendor" }).click();
+    await shot(page, "settings-deactivated-person");
+    await page.getByRole("dialog").getByRole("button", { name: "Reactivate account" }).click();
+    await expect.poll(() => calls.active.at(-1)).toEqual({ id: "u-old", active: true });
+    await expect(page.getByRole("dialog").getByRole("button", { name: "Deactivate account" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    // Never on your own account.
+    await page.getByRole("combobox", { name: /Status/ }).click();
+    await page.getByRole("option", { name: "All" }).click();
+    await page.getByRole("button", { name: "View Test ADMIN" }).click();
+    await expect(page.getByRole("dialog").getByRole("button", { name: /Deactivate account|Reactivate account/ })).toHaveCount(0);
+  });
+
+  test("deactivating is full-admin only: a restricted admin gets no Account controls", async ({ page }) => {
+    await signIn(page, "ADMIN", { permissions: perms(KEYS.filter((k) => k !== "finance.pay")) });
+    await settingsApi(page);
+    await page.goto("/settings");
+    await page.getByRole("button", { name: "Edit access for Riya Mehta" }).click();
+    await expect(page.getByRole("dialog").getByRole("button", { name: "Reset password" })).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("button", { name: "Deactivate account" })).toHaveCount(0);
+  });
+
   test("a restricted admin can't touch admin accounts or take over staff", async ({ page }) => {
     await signIn(page, "ADMIN", { permissions: perms(KEYS.filter((k) => k !== "finance.pay")) });
     await settingsApi(page);
@@ -218,7 +281,7 @@ test.describe("Settings", () => {
     await page.getByRole("option", { name: "Finance" }).click();
     await dialog.getByRole("button", { name: "Add person" }).click();
     await expect.poll(() => calls.signup.length).toBe(1);
-    expect(Object.keys(calls.signup[0].permissions as object)).toHaveLength(18); // 17 section keys + the opt-in bulkTrack.view (12 Oct)
+    expect(Object.keys(calls.signup[0].permissions as object)).toHaveLength(19); // 17 section keys + the opt-ins bulkTrack.view (12 Oct) and postTracker.view (24 Oct)
   });
 
   test("add person: role required, creators go via Inventory, password shown once", async ({ page }) => {
@@ -264,7 +327,7 @@ test.describe("Settings", () => {
     await expect.poll(() => calls.signup.length).toBe(1);
     const sent = calls.signup[0].permissions as Record<string, boolean>;
     expect(sent["plans.approve"]).toBe(false);
-    expect(Object.keys(sent).sort()).toEqual(["bulkTrack.view", "campaigns.edit", "campaigns.view", "finance.edit", "finance.view", "inventory.edit", "inventory.view", "links.view", "plans.approve", "plans.edit", "plans.view"]);
+    expect(Object.keys(sent).sort()).toEqual(["bulkTrack.view", "campaigns.edit", "campaigns.view", "finance.edit", "finance.view", "inventory.edit", "inventory.view", "links.view", "plans.approve", "plans.edit", "plans.view", "postTracker.view"]);
   });
 
   test("invoice numbering: preview, sends only what changed, warns when going back", async ({ page }) => {

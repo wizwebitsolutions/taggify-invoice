@@ -27,7 +27,7 @@ export function SheetFormatPicker({ value, onChange, disabled }: { value: SheetF
             disabled={disabled}
             onClick={() => onChange(key)}
             className={cn(
-              "relative flex flex-col gap-3 rounded-card border bg-card p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft disabled:opacity-60",
+              "relative flex flex-col gap-3 rounded-card border bg-card p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft disabled:opacity-60",
               on ? "border-brand ring-1 ring-brand" : "hover:border-input"
             )}
           >

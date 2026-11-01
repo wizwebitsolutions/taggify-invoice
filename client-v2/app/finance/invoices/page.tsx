@@ -143,14 +143,16 @@ function Invoices() {
   const openRow = open ? (rows.find((r) => r.id === open.id) ?? open) : null;
 
   return (
-    <div className="flex flex-col gap-5 pt-2">
-      <div>
-        <p className="text-body font-medium text-fg-strong">Finance</p>
-        <h1 className="text-display">Invoices</h1>
-        <p className="mt-1 text-body text-muted-foreground">Invoices creators raise for their posts. Approve the ones that match what was booked, then pay them from Payouts.</p>
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <p className="page-eyebrow">Finance</p>
+          <h1 className="text-display">Invoices</h1>
+          <p className="mt-1 text-body text-muted-foreground">Invoices creators raise for their posts. Approve the ones that match what was booked, then pay them from Payouts.</p>
+        </div>
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <Tabs
           value={tab}
           onValueChange={(v) => {
@@ -158,7 +160,7 @@ function Invoices() {
             setPage(1);
           }}
         >
-          <div className="flex items-end gap-4 overflow-x-auto px-5 pt-2">
+          <div className="tab-shelf flex items-end gap-4">
             <TabsList className="flex-1 border-b-0">
               {(Object.keys(TABS) as Tab[]).map((k) => (
                 <TabsTrigger key={k} value={k}>
@@ -169,7 +171,7 @@ function Invoices() {
             </TabsList>
           </div>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+        <div className="filter-bar">
           <SearchField label="Search invoices" placeholder="Search invoice number..." className="w-full sm:w-72" maxLength={60} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
 

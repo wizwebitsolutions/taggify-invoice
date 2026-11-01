@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
+import { AlertCircle, ArrowRight } from "lucide-react";
 
 import { ApiError, auth, type AuthResponse, type EmailSetupIdentity } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/taggify/field";
 
@@ -22,8 +23,9 @@ export function messageOf(error: unknown) {
 export function AuthError({ message }: { message: string | null }) {
   if (!message) return null;
   return (
-    <p role="alert" className="rounded-md bg-danger-soft px-4 py-3 text-small font-medium text-danger-fg">
-      {message}
+    <p role="alert" className="flex items-start gap-3 rounded-md border border-danger/40 border-l-3 border-l-danger bg-danger-soft px-4 py-3 text-small font-semibold text-danger-fg animate-fade-in">
+      <AlertCircle className="mt-px h-4 w-4 shrink-0 text-danger" aria-hidden />
+      <span>{message}</span>
     </p>
   );
 }
@@ -96,7 +98,7 @@ export function OtpCodeForm({
 
       {rememberDevice && (
         <label className="flex cursor-pointer items-center gap-3 text-small text-fg-strong">
-          <input type="checkbox" checked={rememberDevice.checked} onChange={(e) => rememberDevice.onChange(e.target.checked)} className="h-4 w-4 accent-primary" />
+          <Checkbox checked={rememberDevice.checked} onCheckedChange={(v) => rememberDevice.onChange(v === true)} />
           Remember this device for 7 days
         </label>
       )}

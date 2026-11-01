@@ -24,6 +24,7 @@ import googleAuthRoutes from "./modules/integrations/googleAuthRoutes.js";
 import bulkTrackRoutes from "./modules/bulkTrack/routes.js";
 import postTrackerRoutes from "./modules/postTracker/routes.js";
 import { startBulkTrackWorker } from "./modules/bulkTrack/worker.js";
+import { startPostTrackerWorker } from "./modules/postTracker/worker.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { startKeepAlive } from "./modules/jobs/keepAlive.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
@@ -96,6 +97,7 @@ app.listen(PORT, () => {
   startCronJobs();
   startKeepAlive();
   startBulkTrackWorker();
+  startPostTrackerWorker();
   clearStaleScrapeQueue().catch((err) => console.error("clearStaleScrapeQueue failed", err));
 });
 

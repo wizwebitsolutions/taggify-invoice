@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
 // `brand` the orange one, `success` the green "Submit payout", `outline` the
 // white bordered button. Every button presses down to 98% with CSS only.
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-3 whitespace-nowrap rounded-md font-semibold transition-[color,background-color,border-color,transform] duration-hover ease-out active:scale-[0.98] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center justify-center gap-3 whitespace-nowrap rounded-md font-semibold transition-[color,background-color,border-color,transform] duration-hover ease-out active:scale-[0.98] focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {

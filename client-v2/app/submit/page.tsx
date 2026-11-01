@@ -126,9 +126,11 @@ function Submit() {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 pt-2">
-      <div>
-        <h1 className="text-display">Submit a post</h1>
-        <p className="mt-1 text-body text-muted-foreground">{mode === "one" ? "Pick the campaign and page, paste the link, and add the screenshot." : "Paste several post links at once. Add each screenshot afterwards from Home."}</p>
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <h1 className="text-display">Submit a post</h1>
+          <p className="mt-1 text-body text-muted-foreground">{mode === "one" ? "Pick the campaign and page, paste the link, and add the screenshot." : "Paste several post links at once. Add each screenshot afterwards from Home."}</p>
+        </div>
       </div>
 
       <SegmentedFilter
@@ -161,9 +163,9 @@ function Submit() {
 
       {mode === "one" && (
         <>
-        <ol className="flex flex-wrap gap-2" aria-label="Steps">
+        <ol className="form-steps" aria-label="Steps">
           {STEPS.map((s, i) => (
-            <li key={s} aria-current={i === step ? "step" : undefined} className={cn("flex items-center gap-2 rounded-pill border bg-card py-1 pl-1 pr-3 text-small font-medium text-fg-muted", i === step && "border-brand-200 text-brand-ink", i < step && "text-foreground")}>
+            <li key={s} aria-current={i === step ? "step" : undefined} className={cn("form-step", i === step && "border-brand-200 text-brand-ink", i < step && "text-foreground")}>
               <span className={cn("grid h-6 w-6 place-items-center rounded-full bg-muted text-micro font-bold", i === step && "bg-brand text-brand-foreground", i < step && "bg-step-done text-brand-ink")}>{i < step ? <Check className="h-3 w-3" strokeWidth={3} /> : i + 1}</span>
               {s}
             </li>
@@ -196,7 +198,7 @@ function Submit() {
                       setAssetId(null);
                       setStep(1);
                     }}
-                    className="flex items-center gap-4 rounded-card border bg-card p-4 text-left shadow-2 transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+                    className="form-selection"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-body-strong">{c.title}</span>
@@ -250,7 +252,7 @@ function Submit() {
                     setAssetId(p.id);
                     setStep(2);
                   }}
-                  className="flex items-center gap-3 rounded-card border bg-card p-4 text-left shadow-2 transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+                  className="form-selection"
                 >
                   <PageAvatar assetId={p.id} handle={p.handle} size="md" />
                   <span className="min-w-0 flex-1">
@@ -282,7 +284,7 @@ function Submit() {
         )}
 
         {step === 2 && campaign && page && (
-          <Card className="flex flex-col gap-5 p-5 md:p-6">
+          <Card className="form-panel flex flex-col gap-6 p-5 md:p-6">
             <div className="flex items-center gap-3">
               <PageAvatar assetId={page.id} handle={page.handle} size="sm" />
               <span className="text-body">

@@ -7,7 +7,7 @@ import { CircleCheck, Download, FileText, Wallet } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, canUse, invoices as invoicesApi, type Invoice } from "@/lib/api-client";
-import { captionTitle, computePayoutTotals, formatLabel, latestSnapshot, monthKeyOf, monthLabel, monthRange, sumMoney } from "@/lib/finance";
+import { captionTitle, computePayoutTotals, formatLabel, latestSnapshot, monthKeyOf, monthLabel, monthRange, postThumbSrc, sumMoney } from "@/lib/finance";
 import { plural } from "@/lib/format";
 import { invalidateCreator, useMyInvoices, useMyPaid, useMyPending, useMySummary } from "@/lib/queries/creator";
 import { AppShell } from "@/components/layout/app-shell";
@@ -89,10 +89,12 @@ function CreatorMoney() {
   const canRaise = canUse(user, "finance.edit");
 
   return (
-    <div className="flex flex-col gap-6 pt-2">
-      <div>
-        <h1 className="text-display">Money</h1>
-        <p className="mt-1 text-body text-muted-foreground">What you can invoice, what&apos;s on its way, and what&apos;s been paid.</p>
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <h1 className="text-display">Money</h1>
+          <p className="mt-1 text-body text-muted-foreground">What you can invoice, what&apos;s on its way, and what&apos;s been paid.</p>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -102,7 +104,7 @@ function CreatorMoney() {
       </div>
 
       <Tabs defaultValue="ready">
-        <TabsList>
+        <TabsList className="detail-tabs">
           <TabsTrigger value="ready">Ready to invoice ({ready.length})</TabsTrigger>
           <TabsTrigger value="invoices">Invoices ({invoices.data?.total ?? 0})</TabsTrigger>
           <TabsTrigger value="paid">Paid ({paid.data?.total ?? 0})</TabsTrigger>
@@ -121,7 +123,7 @@ function CreatorMoney() {
             </Card>
           ) : (
             <>
-              <Card className="divide-y overflow-hidden">
+              <Card className="ledger-panel divide-y">
                 <label className="flex items-center gap-3 bg-muted px-4 py-3 text-small font-semibold">
                   <Checkbox
                     checked={chosen.length === 0 ? false : chosen.length === ready.length ? true : "indeterminate"}
@@ -131,7 +133,7 @@ function CreatorMoney() {
                   Select all
                 </label>
                 {ready.map((l) => (
-                  <label key={l.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-accent">
+                  <label key={l.id} className="flex cursor-pointer items-center gap-4 px-5 py-4 transition-colors hover:bg-accent">
                     <Checkbox
                       checked={selected.has(l.id)}
                       onCheckedChange={(v) =>
@@ -144,7 +146,7 @@ function CreatorMoney() {
                       }
                       aria-label={`Select ${captionTitle(latestSnapshot(l)?.caption) ?? formatLabel(l.format)}`}
                     />
-                    <ContentThumb src={latestSnapshot(l)?.thumbnailUrl} format={l.format} />
+                    <ContentThumb src={postThumbSrc(l)} format={l.format} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-body-strong">{captionTitle(latestSnapshot(l)?.caption) ?? formatLabel(l.format)}</span>
                       <span className="block truncate text-small text-fg-muted">
@@ -181,7 +183,7 @@ function CreatorMoney() {
               </EmptyState>
             </Card>
           ) : (
-            <Card className="divide-y overflow-hidden">
+            <Card className="ledger-panel divide-y">
               {invoices.data!.items.map((i) => (
                 <div key={i.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                   <span className="min-w-0 flex-1">
@@ -220,7 +222,7 @@ function CreatorMoney() {
               </EmptyState>
             </Card>
           ) : (
-            <Card className="divide-y overflow-hidden">
+            <Card className="ledger-panel divide-y">
               {paid.data!.items.map((r) => {
                 const amount = r.kind === "payout" ? r.payout.netAmount : r.invoice.amount;
                 const receipt = r.kind === "payout" ? r.payout.receipt : r.invoice.receipt;

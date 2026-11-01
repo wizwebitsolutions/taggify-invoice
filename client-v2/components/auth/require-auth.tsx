@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
+import { SessionLoader } from "@/components/auth/session-loader";
 import { useAuth } from "@/lib/auth-context";
 
 /**
@@ -18,13 +19,7 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     if (!isLoading && !user) router.replace("/login");
   }, [isLoading, user, router]);
 
-  if (isLoading || !user) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-surface-app text-fg-muted" role="status">
-        <p className="text-body">Checking your session…</p>
-      </div>
-    );
-  }
+  if (isLoading || !user) return <SessionLoader />;
 
   return <>{children}</>;
 }

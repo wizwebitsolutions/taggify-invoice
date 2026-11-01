@@ -79,7 +79,7 @@ function NumberingForm({ saved }: { saved: InvoiceNumbering }) {
           {(a) => <Input {...a} inputMode="numeric" value={next} onChange={(e) => setNext(e.target.value.replace(/\D/g, "").slice(0, 8))} autoComplete="off" />}
         </Field>
       </div>
-      <div className="rounded-card border bg-muted/60 px-4 py-3">
+      <div className="summary-panel rounded-card border p-5">
         <p className="text-small text-muted-foreground">Next client invoice</p>
         <p className="num text-h3 font-bold" data-testid="numbering-preview">
           {prefixError || nextError ? "—" : preview(prefix.trim(), n)}

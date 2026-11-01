@@ -142,6 +142,65 @@ test.describe("Import pages", () => {
     expect(calls.imported[0].map((r) => r.handle)).toEqual(["riya.eats", "chai.diaries"]);
   });
 
+  // 1 Nov: a planner's sheet keeps its rates (the admin approves the page with them), so the Rates column shows for them too.
+  test("plan maker: the Rates column shows and the sheet's rates are sent; a row missing required cells says so", async ({ page }) => {
+    const preview = {
+      ...PREVIEW,
+      rows: [
+        row(2, "riya.eats", { rateCards: [{ format: "reel", amount: 18000 }], owner: RIYA, ownerId: "o1" }),
+        row(3, "chai.diaries", { status: "incomplete", reason: "Missing: Story Rate.", missingFields: ["Story Rate"], rateCards: [{ format: "reel", amount: 9000 }], owner: RIYA, ownerId: "o1" }),
+      ],
+      summary: { ready: 1, incomplete: 1 },
+      totalRows: 2,
+    };
+    const calls = await importApi(page, "PLAN_MAKER", { preview, patch: { ownAccess: { "inventory.edit": true } } });
+    await page.getByRole("button", { name: "Import pages" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Entertainment / Brand Rate", { exact: true })).toBeVisible();
+    await upload(page);
+    await expect(dialog.getByRole("heading", { name: "Check the pages" })).toBeVisible();
+    await expect(dialog.getByText(/with the rates from the sheet/)).toBeVisible();
+    await expect(dialog.getByRole("columnheader", { name: "Rates" })).toBeVisible();
+    await expect(rowOf(page, 2)).toContainText("₹18,000");
+    await expect(rowOf(page, 3)).toContainText("Missing required cells");
+    await dialog.getByRole("button", { name: "Import 1 page" }).click();
+    await expect.poll(() => calls.imported.length).toBe(1);
+    expect(calls.imported[0]).toEqual([expect.objectContaining({ handle: "riya.eats", rateCards: [{ format: "reel", amount: 18000 }] })]);
+  });
+
+  // 1 Nov: a row whose page is already in Inventory is an edit. An admin's changes apply straight away; a planner's go for approval.
+  test("admin: a page already in Inventory whose row differs is sent as an update and reported as updated", async ({ page }) => {
+    const preview = {
+      ...PREVIEW,
+      rows: [
+        row(2, "riya.eats", { rateCards: [{ format: "reel", amount: 18000 }], owner: RIYA, ownerId: "o1" }),
+        row(3, "desi.memes", { status: "update", owner: RIYA, ownerId: "o1", grade: "A", rateCards: [{ format: "reel", amount: 6000 }], changes: { grade: "A", rateCards: [{ format: "reel", amount: 6000 }] }, current: { category: null, grade: null, groupLink: null, rateCards: [{ format: "reel", amount: 5000 }] }, reason: "Already in Inventory — the sheet's changes are applied to it." }),
+      ],
+      summary: { ready: 1, update: 1 },
+      totalRows: 2,
+    };
+    const calls = await importApi(page, "ADMIN", { preview });
+    await page.route(`${API_URL}/assets/import`, (r) => {
+      calls.imported.push(r.request().postDataJSON().rows);
+      return r.fulfill({ json: { created: [{ id: "n1", handle: "riya.eats", ownerId: "o1", approvalStatus: "approved", owner: RIYA }], skipped: [], updated: [{ id: "a3", handle: "desi.memes" }], proposed: [] } });
+    });
+    await page.getByRole("button", { name: "Import pages" }).click();
+    const dialog = page.getByRole("dialog");
+    await upload(page);
+    await expect(dialog.getByRole("heading", { name: "Check the pages" })).toBeVisible();
+    await expect(dialog.getByText(/Pages already in Inventory are updated straight away/)).toBeVisible();
+    // The existing page needs no Instagram check and keeps its creator (no picker on its row).
+    expect(calls.lookups).toEqual([["riya.eats"]]);
+    await expect(rowOf(page, 3)).toContainText("Will be updated");
+    await expect(rowOf(page, 3)).toContainText("Grade — → A · Reel ₹5,000 → ₹6,000");
+    await expect(rowOf(page, 3).getByRole("combobox", { name: /Creator for/ })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Import 1 page · update 1" }).click();
+    await expect.poll(() => calls.imported.length).toBe(1);
+    expect(calls.imported[0].map((r) => r.handle)).toEqual(["riya.eats", "desi.memes"]);
+    await expect(dialog.getByRole("heading", { name: "1 page imported · 1 updated" })).toBeVisible();
+    await expect(dialog.getByRole("list", { name: "Updated pages" })).toContainText("desi.memes");
+  });
+
   test("admin: one creator for all rows, then only confirmed pages are sent; skipped pages say why", async ({ page }) => {
     const calls = await importApi(page, "ADMIN");
     await page.getByRole("button", { name: "Import pages" }).click();

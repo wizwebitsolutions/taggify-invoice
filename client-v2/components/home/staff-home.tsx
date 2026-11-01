@@ -35,6 +35,7 @@ import {
   monthKeyOf,
   monthLabel,
   monthRange,
+  postThumbSrc,
 } from "@/lib/finance";
 import { personLabel, plural } from "@/lib/format";
 import {
@@ -297,7 +298,7 @@ export function StaffHome() {
               <li key={a.key}>
                 <Link
                   href={a.href}
-                  className="flex items-center gap-3 rounded-card border bg-card p-4 text-foreground shadow-2 transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+                  className="flex items-center gap-3 rounded-card border bg-card p-4 text-foreground shadow-2 transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft"
                 >
                   <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-tile-coral-icon text-tile-coral-fg">
                     <a.icon className="h-5 w-5" aria-hidden />
@@ -397,7 +398,7 @@ export function Rows({
 
 function CampaignBadge({ c }: { c: Campaign }) {
   return c.representativePost?.thumbnailUrl ? (
-    <ContentThumb src={c.representativePost.thumbnailUrl} format="reel" />
+    <ContentThumb src={linksApi.thumbnailUrl(c.representativePost.linkId)} format="reel" />
   ) : (
     <span className="grid h-10 w-10 shrink-0 place-items-center rounded-sm bg-brand-soft text-label font-bold text-brand-ink">
       {c.brandName
@@ -614,7 +615,7 @@ function RecentContent() {
                 {...(toCampaign ? {} : { target: "_blank", rel: "noreferrer" })}
                 className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground"
               >
-                <ContentThumb src={snap?.thumbnailUrl} format={l.format} />
+                <ContentThumb src={postThumbSrc(l)} format={l.format} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-body-strong">
                     {captionTitle(snap?.caption) ?? formatLabel(l.format)}

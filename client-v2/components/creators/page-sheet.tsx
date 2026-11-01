@@ -9,7 +9,7 @@ import { ExternalLink, MessageCircle, RefreshCw, Trash2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, canUse, type Asset, type PendingAssetEdit } from "@/lib/api-client";
 import { canApprovePages, canDeletePage, canEditPages, canProposeEdits, canSetPageActive, GRADES, isGrade, PAGE_APPROVAL, rateOf, scrapeState, type Grade } from "@/lib/creators";
-import { personLabel } from "@/lib/format";
+import { personLabel, roleLabel } from "@/lib/format";
 import { invalidatePages } from "@/lib/queries/creators";
 import { FORMATS, formatLabel } from "@/lib/formats";
 import { cn } from "@/lib/utils";
@@ -120,6 +120,7 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={st.tone}>{st.label}</StatusPill>
           {!active && <StatusPill tone="neutral">Inactive</StatusPill>}
+          {page.profileBroken && <StatusPill tone="danger">Not on Instagram</StatusPill>}
           {pending && <StatusPill tone="info">Edit suggested</StatusPill>}
           {page.grade && <GradeBadge grade={page.grade} />}
           {page.category && <Badge variant="tag">{page.category}</Badge>}
@@ -176,6 +177,14 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
                 <dt className="text-label text-muted-foreground">Grade</dt>
                 <dd className="text-body-strong">{page.grade ? `Grade ${page.grade}` : "Not graded"}</dd>
               </div>
+              <div className="rounded-md bg-muted px-3 py-2">
+                <dt className="text-label text-muted-foreground">Vendor</dt>
+                <dd className="truncate text-body-strong">{personLabel(page.owner, "No vendor")}</dd>
+              </div>
+              <div className="rounded-md bg-muted px-3 py-2">
+                <dt className="text-label text-muted-foreground">Added by</dt>
+                <dd className="truncate text-body-strong">{page.createdBy ? `${personLabel(page.createdBy)} · ${roleLabel(page.createdBy.role)}` : <span className="font-normal text-muted-foreground">Before tracking</span>}</dd>
+              </div>
               <div className="col-span-2 rounded-md bg-muted px-3 py-2">
                 <dt className="text-label text-muted-foreground">Group link</dt>
                 <dd className="truncate text-body-strong">
@@ -197,20 +206,19 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
             <h3 id="rates-title" className="text-card-title">
               Rates
             </h3>
-            {priced.length === 0 ? (
-              <p className="rounded-md bg-muted px-3 py-2 text-small text-muted-foreground">No rates yet. A plan line on this page needs its cost typed in.</p>
-            ) : (
-              <dl className="grid grid-cols-2 gap-2">
-                {priced.map((f) => (
+            {/* Every format (1 Nov) — "—" where the page has no rate, so what's missing is visible too. */}
+            <dl className="grid grid-cols-2 gap-2">
+              {FORMATS.map((f) => {
+                const v = rateOf(page, f);
+                return (
                   <div key={f} className="rounded-md bg-muted px-3 py-2">
                     <dt className="text-label text-muted-foreground">{formatLabel(f)}</dt>
-                    <dd className="text-body-strong">
-                      <Money value={rateOf(page, f)!} />
-                    </dd>
+                    <dd className={v == null ? "text-body text-muted-foreground" : "text-body-strong"}>{v == null ? "—" : <Money value={v} />}</dd>
                   </div>
-                ))}
-              </dl>
-            )}
+                );
+              })}
+            </dl>
+            {priced.length === 0 && <p className="text-small text-muted-foreground">No rates yet. A plan line on this page needs its cost typed in.</p>}
           </section>
 
           <section aria-labelledby="camps-title" className="flex flex-col gap-2">

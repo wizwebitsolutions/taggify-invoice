@@ -1,0 +1,177 @@
+/* Page compositions. Tune the app's visual treatment here; all values use
+ the Taggify tokens. Selectors are opt-in so dialogs and embedded views keep
+ their own layout and behaviour. Repeated selectors intentionally outrank
+ primitive utility defaults without !important. */
+.workspace-page {
+  @apply flex min-w-0 flex-col gap-6 pt-2;
+}
+
+.page-heading {
+  @apply flex min-w-0 flex-wrap items-start gap-4 border-b border-input pb-6;
+}
+
+.page-heading-copy {
+  @apply min-w-0 flex-1 basis-full sm:basis-64;
+}
+
+.page-heading h1 {
+  @apply break-words;
+}
+
+.page-heading-copy > p:last-child {
+  @apply max-w-2xl;
+}
+
+.page-eyebrow {
+  @apply mb-2 text-th uppercase text-brand-ink;
+}
+
+.page-symbol {
+  @apply grid h-12 w-12 shrink-0 place-items-center rounded-card border border-input bg-card text-brand-ink shadow-1;
+}
+
+.dashboard-hero.dashboard-hero {
+  @apply relative isolate flex items-center gap-6 overflow-hidden border-brand-line bg-peach p-6 shadow-2 md:p-8;
+}
+
+.dashboard-hero::before {
+  @apply pointer-events-none absolute inset-0;
+  content: "";
+  opacity: var(--auth-pattern-opacity);
+  background-image: radial-gradient(rgb(var(--brand)) var(--auth-pattern-dot), transparent var(--auth-pattern-dot));
+  background-size: var(--auth-pattern-size) var(--auth-pattern-size);
+  mask-image: linear-gradient(to left, black, transparent);
+}
+
+.dashboard-hero-copy {
+  @apply relative z-10 flex min-w-0 flex-1 flex-col gap-6;
+}
+
+.dashboard-hero-copy h1 {
+  @apply mt-2 max-w-xl text-display;
+}
+
+.dashboard-art {
+  @apply relative hidden w-64 shrink-0 items-center justify-center self-stretch rounded-card bg-card/60 p-4 lg:flex;
+}
+
+.section-heading {
+  @apply flex items-center gap-3;
+}
+
+.section-heading::before {
+  @apply h-5 w-1 shrink-0 rounded-pill bg-brand;
+  content: "";
+}
+
+.attention-card {
+  @apply flex h-full items-center gap-4 rounded-card border border-input bg-card p-5 text-foreground shadow-1 transition-colors duration-hover hover:border-brand-line hover:bg-brand-50 hover:text-foreground focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft;
+}
+
+.attention-value {
+  @apply block text-display;
+}
+
+.section-panel.section-panel {
+  @apply min-w-0 overflow-hidden shadow-2;
+}
+
+.panel-heading {
+  @apply flex flex-wrap items-center gap-3 border-b border-divider bg-muted/40 px-5 py-5 md:px-6;
+}
+
+.dashboard-row {
+  @apply flex min-h-16 items-center gap-3 px-5 py-4 text-foreground transition-colors duration-hover hover:bg-accent hover:text-foreground md:px-6;
+}
+
+.ledger-panel.ledger-panel {
+  @apply min-w-0 overflow-hidden border-input shadow-2;
+}
+
+.ledger-panel thead {
+  @apply bg-muted/60;
+}
+
+.ledger-panel tbody td {
+  @apply py-3;
+}
+
+.tab-shelf {
+  @apply overflow-x-auto bg-muted/30 px-5 pt-2 md:px-6;
+}
+
+.filter-bar {
+  @apply flex flex-wrap items-center gap-3 border-t border-divider bg-card px-5 py-4 md:px-6;
+}
+
+.detail-tabs.detail-tabs {
+  @apply rounded-card border border-input bg-card px-4 shadow-1;
+}
+
+.detail-heading {
+  @apply rounded-card border border-input bg-card p-5 shadow-2 md:p-6;
+}
+
+.detail-filters {
+  @apply flex flex-wrap items-center gap-3 rounded-card border bg-muted/40 p-4;
+}
+
+.approval-workspace.approval-workspace {
+  @apply border-input shadow-2;
+}
+
+.approval-queue {
+  @apply bg-muted/40;
+}
+
+.approval-context {
+  @apply bg-muted/40;
+}
+
+.profile-page-card.profile-page-card {
+  @apply flex flex-col gap-4 overflow-hidden border-input p-5 shadow-2;
+}
+
+.profile-page-identity {
+  @apply flex items-center gap-3 border-b border-divider pb-4;
+}
+
+.form-steps {
+  @apply flex flex-wrap gap-3 rounded-card border border-input bg-card p-4;
+}
+
+.form-step {
+  @apply flex items-center gap-3 rounded-md border border-transparent bg-muted/50 p-3 text-small font-medium text-muted-foreground;
+}
+
+.form-step[aria-current="step"] {
+  @apply border-brand-line bg-brand-50 text-brand-ink;
+}
+
+.form-panel.form-panel {
+  @apply border-input shadow-2;
+}
+
+.form-section-heading {
+  @apply border-b border-divider pb-4;
+}
+
+.form-selection {
+  @apply flex items-center gap-4 rounded-card border border-input bg-card p-5 text-left shadow-1 transition-colors duration-hover hover:border-brand-line hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft;
+}
+
+.form-action-bar {
+  @apply border-input bg-card shadow-3;
+}
+
+.summary-panel.summary-panel {
+  @apply border-brand-line bg-peach shadow-2;
+}
+
+.settings-section {
+  @apply flex flex-col gap-5 rounded-card border border-input bg-card p-6 shadow-1;
+}
+
+.settings-identity {
+  @apply flex items-center gap-4 rounded-md bg-muted/60 p-4;
+}

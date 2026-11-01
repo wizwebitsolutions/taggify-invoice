@@ -24,14 +24,16 @@ export default function VerifyEmailPage() {
 function VerifyEmail() {
   const { user, accessToken, adoptSession } = useAuth();
   return (
-    <div className="flex max-w-md flex-col gap-5 pt-2">
-      <div>
-        <h1 className="text-display">Verify your email</h1>
-        <p className="mt-1 text-body text-muted-foreground">
-          Every account signs in with an email and a code. Once it&apos;s verified, you&apos;ll sign in with this email and we&apos;ll send a code to it each time.
-        </p>
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-6 pt-2">
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <h1 className="text-display">Verify your email</h1>
+          <p className="mt-1 text-body text-muted-foreground">
+            Every account signs in with an email and a code. Once it&apos;s verified, you&apos;ll sign in with this email and we&apos;ll send a code to it each time.
+          </p>
+        </div>
       </div>
-      <Card className="p-5">
+      <Card className="form-panel p-6">
         {user?.emailVerified ? (
           <div role="status" className="flex flex-col gap-3">
             <p className="text-body">

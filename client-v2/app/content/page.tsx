@@ -7,7 +7,7 @@ import { CircleAlert, ClipboardCheck, ExternalLink, Image as ImageIcon, IndianRu
 
 import { useAuth } from "@/lib/auth-context";
 import { canUse, hasAccess, links as linksApi, type Link as Post } from "@/lib/api-client";
-import { captionTitle, formatLabel, latestSnapshot, monthKeyOf, monthLabel, monthRange, recentMonths } from "@/lib/finance";
+import { captionTitle, formatLabel, latestSnapshot, monthKeyOf, monthLabel, monthRange, postThumbSrc, recentMonths } from "@/lib/finance";
 import { personLabel, plural } from "@/lib/format";
 import { useCampaign, useCampaigns, invalidateAfterPostChange } from "@/lib/queries/campaigns";
 import { useAllPages } from "@/lib/queries/creators";
@@ -126,9 +126,9 @@ function Content() {
   const reset = () => setPage(1);
 
   return (
-    <div className="flex flex-col gap-5 pt-2">
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0">
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
           <h1 className="text-display">Content</h1>
           <p className="mt-1 text-body text-muted-foreground">Every post submitted for a campaign, from posted to paid.</p>
         </div>
@@ -147,7 +147,7 @@ function Content() {
         <MetricTile tone="mint" icon={Send} label={`Submitted in ${monthLabel(thisMonth)}`} loading={live.isLoading} value={plural(live.data?.total ?? 0, "post")} meta="Not counting broken links" />
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <Tabs
           value={tab}
           onValueChange={(v) => {
@@ -155,7 +155,7 @@ function Content() {
             reset();
           }}
         >
-          <div className="flex items-end gap-4 overflow-x-auto px-5 pt-2">
+          <div className="tab-shelf flex items-end gap-4">
             <TabsList className="flex-1 border-b-0">
               {(Object.keys(TABS) as Tab[]).map((k) => (
                 <TabsTrigger key={k} value={k}>
@@ -166,7 +166,7 @@ function Content() {
             </TabsList>
           </div>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+        <div className="filter-bar">
           {toCampaign && (
             <FilterSelect
               label="Campaign"
@@ -265,7 +265,7 @@ function Content() {
                   <TableRow key={l.id}>
                     <TableCell>
                       <span className="flex items-center gap-3">
-                        <ContentThumb src={snap?.thumbnailUrl} format={l.format} />
+                        <ContentThumb src={postThumbSrc(l)} format={l.format} />
                         <span className="min-w-0">
                           <button type="button" onClick={() => setOpened({ post: l, focus: "details" })} className="block max-w-56 truncate rounded-sm text-left font-medium text-foreground hover:text-brand-ink hover:underline focus-visible:outline-none focus-visible:shadow-focus">
                             {title}

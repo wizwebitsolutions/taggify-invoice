@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowRight, BarChart3, CalendarCheck2, Eye, EyeOff, FileCheck2, LockKeyhole, Mail } from "lucide-react";
@@ -52,28 +51,7 @@ function CampaignPulse() {
         ))}
       </div>
 
-      <span className="contents dark:hidden">
-        <Image
-          src="/illustrations/login-team-premium.webp"
-          alt=""
-          width={1536}
-          height={768}
-          priority
-          data-testid="login-hero-illustration-light"
-          className="auth-hero-illustration absolute inset-x-0 bottom-0 z-20 h-auto w-full select-none object-contain"
-        />
-      </span>
-      <span className="hidden dark:contents">
-        <Image
-          src="/illustrations/login-team-premium-dark.webp"
-          alt=""
-          width={1536}
-          height={768}
-          priority
-          data-testid="login-hero-illustration-dark"
-          className="auth-hero-illustration absolute inset-x-0 bottom-0 z-20 h-auto w-full select-none object-contain"
-        />
-      </span>
+      <div className="auth-hero-illustration absolute inset-x-0 bottom-0 z-20 aspect-[2/1] w-full select-none bg-contain bg-bottom bg-no-repeat" data-testid="login-hero-illustration" />
     </div>
   );
 }

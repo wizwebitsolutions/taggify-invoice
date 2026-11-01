@@ -98,15 +98,15 @@ function PlanDetail() {
   const perLineClient = p.items.some((i) => i.clientCost != null);
 
   return (
-    <div className="flex flex-col gap-6 pt-1">
+    <div className="workspace-page">
       <Link href="/plans" className="inline-flex items-center gap-2 self-start text-body-strong text-foreground hover:text-brand-ink">
         <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
         Back to Plans
       </Link>
 
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0">
-          <p className="text-body text-fg-strong">
+      <div className="page-heading detail-heading">
+        <div className="page-heading-copy">
+          <p className="page-eyebrow">
             {p.clientName} · {p.variantLabel}
           </p>
           <h1 className="text-display">{p.name}</h1>
@@ -197,8 +197,8 @@ function PlanDetail() {
       )}
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_var(--rail-width)]">
-        <Card className="overflow-hidden">
-          <div className="flex items-center gap-3 px-5 pb-3 pt-5">
+        <Card className="ledger-panel">
+          <div className="panel-heading">
             <h2 className="text-card-title">Pages and deliverables</h2>
             <span className="ml-auto text-small text-muted-foreground">
               {pages} pages · {p.overview.totalPosts} posts{perLineClient ? " · cost vs client price" : ""}
@@ -288,7 +288,7 @@ function PlanDetail() {
           <BudgetCard plan={p} />
           <SourceSheetCard plan={p} editable={editable} />
 
-          <Card className="p-5">
+          <Card className="form-panel p-6">
             <h2 className="mb-1 text-card-title">Decision</h2>
             {p.status === "APPROVED" ? (
               <div className="flex flex-col gap-3">
@@ -397,7 +397,7 @@ function BudgetCard({ plan: p }: { plan: Plan }) {
   const marginPct = paid > 0 ? Math.round((m / paid) * 100) : null;
   const over = left !== null && left < 0;
   return (
-    <Card className="flex flex-col gap-4 p-5">
+    <Card className="summary-panel flex flex-col gap-4 p-6">
       <div>
         <h2 className="text-small font-semibold text-muted-foreground">Client pays</h2>
         <p className="mt-1 text-h2 font-bold">
@@ -508,7 +508,7 @@ function ClientSheetDialog({ plan: p, open, busy, onOpenChange, onGenerate }: { 
 function ClientCard({ plan: p, editable, onInvoice }: { plan: Plan; editable: boolean; onInvoice: () => void }) {
   const { accessToken } = useAuth();
   return (
-    <Card className="p-5">
+    <Card className="form-panel p-6">
       <h2 className="mb-3 text-card-title">Client</h2>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-body">
         <dt className="text-muted-foreground">Name</dt>

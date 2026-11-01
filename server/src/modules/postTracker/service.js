@@ -1,11 +1,13 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { parseInstagramPostUrl, urlsFor } from "./url.js";
+import { enqueueCapture } from "./worker.js";
 
 /**
- * Post Tracker (24 Oct). A card is just a cleaned-up link: the browser shows
- * Instagram's own embed of it, so nothing here talks to Instagram, scrapes,
- * or stores images — there's nothing to expire, get blocked or fall behind.
+ * Post Tracker (24 Oct). A card is a cleaned-up link plus a snapshot of its
+ * public page (worker.js / capture.js: phone-size screenshot, cover image,
+ * likes and comments), captured in the background after the link is added.
+ * The browser also shows Instagram's own embed of it.
  *
  * `user` is routes.js's req.trackerUser: { id, seesAll }. Everyone works on
  * their own cards; a full admin can also see (and tidy) everyone's.
@@ -26,6 +28,19 @@ function toDto(post) {
     archivedAt: post.archivedAt,
     createdAt: post.createdAt,
     createdBy: post.createdBy ? { id: post.createdBy.id, name: post.createdBy.name ?? post.createdBy.email ?? null } : null,
+    snapshot: {
+      status: post.captureStatus,
+      error: post.captureError,
+      capturedAt: post.capturedAt,
+      screenshotUrl: post.screenshotUrl,
+      coverUrl: post.coverUrl,
+      ownerHandle: post.ownerHandle,
+      caption: post.caption,
+      postedOn: post.postedOn,
+      likeCount: post.likeCount,
+      commentCount: post.commentCount,
+      viewCount: post.viewCount,
+    },
   };
 }
 
@@ -56,6 +71,8 @@ export async function addPosts(user, { urls, note }) {
       // Two tabs pasting the same link at once: the unique key settles it.
       skipDuplicates: true,
     });
+    const fresh = await prisma.trackedPost.findMany({ where: { createdById: user.id, shortcode: { in: toCreate } }, select: { id: true } });
+    for (const { id } of fresh) await enqueueCapture(id);
   }
   if (existed.size) {
     await prisma.trackedPost.updateMany({ where: { createdById: user.id, shortcode: { in: [...existed] }, archivedAt: { not: null } }, data: { archivedAt: null } });
@@ -111,6 +128,20 @@ export async function updatePost(user, id, { note, broken, archived }) {
   if (broken !== undefined) data.broken = broken;
   if (archived !== undefined) data.archivedAt = archived ? new Date() : null;
   return toDto(await prisma.trackedPost.update({ where: { id }, data, include: withCreator }));
+}
+
+/** A re-capture can't be asked for more often than this per card — each one opens Instagram. */
+export const RECAPTURE_COOLDOWN_MS = 10 * 60_000;
+
+export async function recapture(user, id) {
+  const post = await findOwn(user, id);
+  if (post.captureStatus === "queued") throw new ApiError(409, "CAPTURE_PENDING", "This snapshot is already being taken");
+  if (post.capturedAt && Date.now() - new Date(post.capturedAt).getTime() < RECAPTURE_COOLDOWN_MS) {
+    throw new ApiError(429, "CAPTURE_TOO_SOON", "This snapshot was taken less than 10 minutes ago — try again later");
+  }
+  const updated = await prisma.trackedPost.update({ where: { id }, data: { captureStatus: "queued", captureError: null, captureCount: 0 }, include: withCreator });
+  await enqueueCapture(id);
+  return toDto(updated);
 }
 
 export async function deletePost(user, id) {

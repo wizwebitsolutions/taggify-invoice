@@ -25,7 +25,7 @@ vi.mock("../../lib/cloudinaryClient.js", () => ({ uploadProfilePic: vi.fn(async 
 // must be confirmed on Instagram before it's stored).
 const found = (over = {}) => ({ followers: 4321, mediaCount: 3, avgViews: null, avgLikes: null, avgComments: null, sampleSize: 0, fullName: null, biography: null, profilePicUrl: null, ...over });
 
-const { previewImport, importAssets, resolveOwnerRef, previewImportFromSheetUrl, fetchImportFollowers } = await import("./service.js");
+const { previewImport, importAssets, importEditDiff, resolveOwnerRef, previewImportFromSheetUrl, fetchImportFollowers } = await import("./service.js");
 const { ApiError } = await import("../../middleware/errorHandler.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
@@ -111,7 +111,7 @@ describe("previewImport — per-row status", () => {
   });
 
   it("distinguishes 'already under this account' from 'already under someone else'", async () => {
-    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "taken.page", ownerId: "creator-2", owner: { id: "creator-2", name: "Rahul Creator", phoneNumber: "+919000000002" } }]);
+    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "taken.page", ownerId: "creator-2", rateCards: REQUIRED_RATES, owner: { id: "creator-2", name: "Rahul Creator", phoneNumber: "+919000000002" } }]);
     const preview = await previewImport({
       hasOwnerColumn: true,
       rows: [row({ handle: "taken.page", ownerRef: "9000000002" }), row({ rowNumber: 3, handle: "other.page", ownerRef: "9000000001" }), row({ rowNumber: 4, handle: "taken.page", ownerRef: "9000000001" })],
@@ -143,7 +143,7 @@ describe("previewImport — per-row status", () => {
   });
 
   it("asks for an account when the owner cell is blank or unknown, and shows the existing owner when the page already exists anyway", async () => {
-    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "known.page", ownerId: "creator-1", owner: priya }]);
+    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "known.page", ownerId: "creator-1", rateCards: REQUIRED_RATES, owner: priya }]);
     const preview = await previewImport({
       hasOwnerColumn: false,
       rows: [row({ handle: "fresh.page" }), row({ rowNumber: 3, handle: "other.page", ownerRef: "nobody" }), row({ rowNumber: 4, handle: "known.page" })],
@@ -327,7 +327,7 @@ describe("importAssets — creating the confirmed rows", () => {
     expect(mockPrisma.asset.create).toHaveBeenCalledWith(
       expect.objectContaining({
         // Admin-only route → approved on creation (14 Sep), same as createAsset.
-        data: expect.objectContaining({ handle: "One.Page", ownerId: "creator-1", category: "News page", followers: 4321, approvalStatus: "approved", rateCards: { create: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "post", amount: 2500 }] } }),
+        data: expect.objectContaining({ handle: "One.Page", ownerId: "creator-1", createdById: "admin-1", category: "News page", followers: 4321, approvalStatus: "approved", rateCards: { create: [{ format: "reel", amount: 5000 }, { format: "story", amount: 1500 }, { format: "post", amount: 2500 }] } }),
       })
     );
     // No rate is mandatory (16 Oct, later): an admin's row with no Reel / Story rate is approved too.
@@ -375,9 +375,10 @@ describe("importAssets — creating the confirmed rows", () => {
   });
 });
 
-// 25 Sep: CREATOR and PLAN_MAKER can bulk-import too — pending, no rate
-// cards (same rule as the single "Add page" flow), and a CREATOR's rows are
-// always forced onto their own account regardless of the sheet.
+// 25 Sep: CREATOR and PLAN_MAKER can bulk-import too — pending, and a
+// CREATOR's rows are always forced onto their own account regardless of the
+// sheet. A creator's sheet never sets rates (same as "Add page"); a planner's
+// rates are kept for the admin to approve (1 Nov).
 describe("importAssets — CREATOR and PLAN_MAKER (25 Sep)", () => {
   it("a CREATOR's rows are forced onto their own id, ignoring whatever ownerId is sent, and land pending with no rate card", async () => {
     // Bare shape — req.user off the access token only ever carries {id, role}
@@ -403,13 +404,12 @@ describe("importAssets — CREATOR and PLAN_MAKER (25 Sep)", () => {
     expect(result.skipped).toEqual([{ handle: "taken.page", reason: "Already registered under another account." }]);
   });
 
-  it("a PLAN_MAKER picks from real creator accounts like an admin does, but still lands pending with no rate card", async () => {
+  it("a PLAN_MAKER picks from real creator accounts like an admin does; the page lands pending WITH the sheet's rates and records who added it (1 Nov)", async () => {
     const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
     await importAssets(planMaker, [{ handle: "vendor.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }] }]);
     expect(mockPrisma.asset.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ ownerId: "creator-1", approvalStatus: "pending" }) })
+      expect.objectContaining({ data: expect.objectContaining({ ownerId: "creator-1", createdById: "pm-1", approvalStatus: "pending", rateCards: { create: [{ format: "reel", amount: 5000 }] } }) })
     );
-    expect(mockPrisma.asset.create).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ rateCards: expect.anything() }) }));
   });
 
   it("a PLAN_MAKER targeting a non-creator id is skipped, same as an unresolved owner", async () => {
@@ -522,7 +522,7 @@ describe("previewImport — vendor matching and newVendors", () => {
   });
 
   it("a new vendor's page that already exists keeps the existing exists/conflict logic and isn't listed", async () => {
-    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "known.page", ownerId: "creator-2", owner: rahul }]);
+    mockPrisma.asset.findMany.mockResolvedValue([{ id: "a1", handle: "known.page", ownerId: "creator-2", rateCards: REQUIRED_RATES, owner: rahul }]);
     const preview = await previewImport({ hasOwnerColumn: true, rows: [vrow({ handle: "known.page", vendorName: "Brand New Vendor" })] }, admin);
     expect(preview.rows[0]).toMatchObject({ status: "exists", ownerId: "creator-2" });
     expect(preview.newVendors).toEqual([]);
@@ -583,5 +583,138 @@ describe("previewImport — required cells (17 Oct: Page Name + Entertainment, R
   it("anyone else's rows carry an empty missingRates (their pages land pending without rates anyway)", async () => {
     const result = await previewImport({ hasOwnerColumn: false, rows: [row({ handle: "mine.page" })] }, { id: "creator-1", role: "CREATOR" });
     expect(result.rows[0].missingRates).toEqual([]);
+  });
+});
+
+// 1 Nov — "edit can be done by importing as well": a row whose page is already
+// in Inventory under the same account is an edit. The preview says what would
+// change; on confirm an admin's changes land on the live row and anyone else's
+// are parked as the page's pendingEdit (the live row stays as it was).
+describe("importEditDiff — what a sheet row changes on an existing page", () => {
+  const live = { category: "Meme page", grade: "B", groupLink: "https://chat.example/x", rateCards: [{ format: "reel", amount: "5000.00" }, { format: "story", amount: "1500" }] };
+
+  it("is null when nothing differs, and blank cells never clear a value", () => {
+    expect(importEditDiff(live, { category: "Meme page", grade: "B", groupLink: "https://chat.example/x", rateCards: [{ format: "reel", amount: 5000 }] })).toBeNull();
+    expect(importEditDiff(live, { category: null, grade: null, groupLink: null, rateCards: [] })).toBeNull();
+    expect(importEditDiff(live, { category: "  ", rateCards: [{ format: "story", amount: 1500 }] })).toBeNull();
+  });
+
+  it("reports only the cells that differ: a changed rate, a new format, category / grade / group link", () => {
+    expect(importEditDiff(live, { category: "News page", grade: "A", groupLink: "https://chat.example/y", rateCards: [{ format: "reel", amount: 6000 }, { format: "story", amount: 1500 }, { format: "post", amount: 2000 }, { format: "post", amount: 9 }] })).toEqual({
+      category: "News page",
+      grade: "A",
+      groupLink: "https://chat.example/y",
+      rateCards: [{ format: "reel", amount: 6000 }, { format: "post", amount: 2000 }],
+    });
+  });
+
+  it("ignores the rate columns when asked (a creator's own sheet)", () => {
+    expect(importEditDiff(live, { grade: "A", rateCards: [{ format: "reel", amount: 6000 }] }, { rates: false })).toEqual({ grade: "A" });
+    expect(importEditDiff(live, { rateCards: [{ format: "reel", amount: 6000 }] }, { rates: false })).toBeNull();
+  });
+});
+
+describe("previewImport — a page already in Inventory whose row differs is 'update' (1 Nov)", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+  const existing = (over = {}) => ({ id: "a1", handle: "known.page", ownerId: "creator-1", category: "Meme page", grade: null, groupLink: null, pendingEdit: null, rateCards: [{ format: "reel", amount: "5000" }], owner: priya, ...over });
+
+  it("says what would change and what the page has now; an admin's are applied, a planner's go for approval", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([existing()]);
+    const sheet = { hasOwnerColumn: true, rows: [row({ handle: "known.page", ownerRef: "9000000001", grade: "A", rateCards: [{ format: "reel", amount: 6000 }] })] };
+    const preview = await previewImport(sheet, admin);
+    expect(preview.rows[0]).toMatchObject({
+      status: "update",
+      ownerId: "creator-1",
+      changes: { grade: "A", rateCards: [{ format: "reel", amount: 6000 }] },
+      current: { category: "Meme page", grade: null, groupLink: null, rateCards: [{ format: "reel", amount: 5000 }] },
+      replacesPendingEdit: false,
+    });
+    expect(preview.rows[0].reason).toMatch(/applied to it/);
+    expect(preview.summary).toEqual({ update: 1 });
+
+    const asPlanner = await previewImport(sheet, { id: "pm-1", role: "PLAN_MAKER" });
+    expect(asPlanner.rows[0].reason).toMatch(/go to an admin for approval/);
+
+    mockPrisma.asset.findMany.mockResolvedValue([existing({ pendingEdit: { grade: "C" } })]);
+    const replacing = await previewImport(sheet, { id: "pm-1", role: "PLAN_MAKER" });
+    expect(replacing.rows[0]).toMatchObject({ status: "update", replacesPendingEdit: true });
+    expect(replacing.rows[0].reason).toMatch(/replace the edit waiting/);
+  });
+
+  it("other staff (not admin, not plan maker) see 'exists' — they can't edit from a sheet, so nothing is promised", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([existing()]);
+    const preview = await previewImport({ hasOwnerColumn: true, rows: [row({ handle: "known.page", ownerRef: "9000000001", grade: "A" })] }, { id: "fin-1", role: "FINANCE" });
+    expect(preview.rows[0]).toMatchObject({ status: "exists", changes: null });
+    expect(preview.rows[0].reason).toMatch(/Only an admin or plan maker/);
+  });
+
+  it("a creator's own page: rates in their sheet never count as a change", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([existing()]);
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const preview = await previewImport({ hasOwnerColumn: false, rows: [row({ handle: "known.page", rateCards: [{ format: "reel", amount: 9000 }] })] }, creator);
+    expect(preview.rows[0].status).toBe("exists");
+  });
+});
+
+describe("importAssets — rows already in Inventory are edits (1 Nov)", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+  const live = { id: "a1", handle: "known.page", ownerId: "creator-1", category: "Meme page", grade: null, groupLink: null, rateCards: [{ format: "reel", amount: "5000" }], owner: { name: "Priya Creator", phoneNumber: "+919000000001" } };
+  const sheetRow = { handle: "known.page", ownerId: "creator-1", grade: "A", rateCards: [{ format: "reel", amount: 6000 }] };
+
+  beforeEach(() => {
+    mockPrisma.asset.findFirst.mockImplementation(async ({ where }) => (where.handle.equals === "known.page" ? live : null));
+    mockPrisma.rateCard = { upsert: vi.fn(async ({ create }) => create) };
+    mockPrisma.$transaction = vi.fn(async (fn) => fn(mockPrisma));
+    // proposeAssetEdit's own lookup of the page.
+    mockPrisma.asset.findUnique.mockResolvedValue({ id: "a1", ownerId: "creator-1" });
+    mockPrisma.asset.update.mockImplementation(async ({ data }) => ({ id: "a1", ...data }));
+  });
+
+  it("an admin's changes are applied to the live page — no Instagram check, nothing created, no approval needed", async () => {
+    const result = await importAssets(admin, [sheetRow, { handle: "fresh.page", ownerId: "creator-1" }]);
+    expect(result.updated).toEqual([{ id: "a1", handle: "known.page" }]);
+    expect(result.proposed).toEqual([]);
+    expect(result.created.map((a) => a.handle)).toEqual(["fresh.page"]);
+    expect(result.skipped).toEqual([]);
+    expect(mockPrisma.rateCard.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { assetId_format: { assetId: "a1", format: "reel" } }, update: expect.objectContaining({ amount: 6000 }) }));
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "a1" }, data: { grade: "A" } }));
+    expect(getAccountMetricsBatch).toHaveBeenCalledWith(["fresh.page"]);
+  });
+
+  it("an admin's import drops an older proposal on the page, so approving it later can't undo the sheet", async () => {
+    mockPrisma.asset.findFirst.mockResolvedValue({ ...live, pendingEdit: { rateCards: [{ format: "reel", amount: 4000 }] } });
+    await importAssets(admin, [sheetRow]);
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith(expect.objectContaining({ data: { grade: "A", pendingEdit: null, pendingEditById: null, pendingEditAt: null } }));
+  });
+
+  it("a planner's changes are parked as the page's pendingEdit — the live row is untouched until an admin approves", async () => {
+    const result = await importAssets({ id: "pm-1", role: "PLAN_MAKER" }, [sheetRow]);
+    expect(result.proposed).toEqual([{ id: "a1", handle: "known.page" }]);
+    expect(result.updated).toEqual([]);
+    expect(mockPrisma.rateCard.upsert).not.toHaveBeenCalled();
+    const { data } = mockPrisma.asset.update.mock.calls[0][0];
+    expect(data).toEqual({ pendingEdit: { grade: "A", rateCards: [{ format: "reel", amount: 6000 }] }, pendingEditById: "pm-1", pendingEditAt: expect.any(Date) });
+  });
+
+  it("a creator's own page takes the grade but never the rates; a row that changes nothing is skipped with a reason", async () => {
+    const creator = { id: "creator-1", role: "CREATOR" };
+    const result = await importAssets(creator, [{ handle: "known.page", grade: "A", rateCards: [{ format: "reel", amount: 6000 }] }]);
+    expect(result.proposed).toEqual([{ id: "a1", handle: "known.page" }]);
+    expect(mockPrisma.asset.update.mock.calls[0][0].data.pendingEdit).toEqual({ grade: "A" });
+
+    vi.clearAllMocks();
+    mockPrisma.user.findUnique.mockResolvedValue(priya);
+    mockPrisma.user.findMany.mockResolvedValue(owners);
+    mockPrisma.asset.findFirst.mockResolvedValue(live);
+    const same = await importAssets(admin, [{ handle: "known.page", ownerId: "creator-1", rateCards: [{ format: "reel", amount: 5000 }] }]);
+    expect(same.skipped).toEqual([{ handle: "known.page", reason: "Already in Inventory — nothing in the sheet differs." }]);
+    expect(mockPrisma.asset.update).not.toHaveBeenCalled();
+  });
+
+  it("someone else's page is still skipped, never edited", async () => {
+    const result = await importAssets(admin, [{ ...sheetRow, ownerId: "creator-2" }]);
+    expect(result.skipped).toEqual([{ handle: "known.page", reason: "Already registered under Priya Creator." }]);
+    expect(result.updated).toEqual([]);
+    expect(mockPrisma.asset.update).not.toHaveBeenCalled();
   });
 });

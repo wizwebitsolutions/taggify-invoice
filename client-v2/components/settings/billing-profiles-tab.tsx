@@ -64,7 +64,7 @@ export function BillingProfilesTab() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+      <div className="filter-bar">
         <SearchField
           label="Search bank details"
           placeholder="Search person, PAN or GSTIN..."

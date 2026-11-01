@@ -10,7 +10,7 @@ test.describe("premium login", () => {
     await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
     await expect(page.getByRole("region", { name: "From campaign booking to payout" })).toBeVisible();
     await expect(page.getByTestId("login-campaign-pulse")).toBeVisible();
-    await expect(page.getByTestId("login-hero-illustration-light")).toHaveAttribute("src", /login-team-premium/);
+    await expect(page.getByTestId("login-hero-illustration")).toBeVisible();
   });
 
   test("keeps the form focused and removes the decorative hero on phones", async ({ page }) => {

@@ -141,13 +141,13 @@ function BulkTrackContent() {
 
   return (
     <div className="flex flex-col pt-2">
-      <motion.div {...fadeRise(0)} className="mb-6 flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-md border border-info bg-info-soft">
+      <motion.div {...fadeRise(0)} className="page-heading mb-6 items-center">
+        <div className="page-symbol">
           <Radar className="h-4 w-4 text-info-fg" />
         </div>
         <div>
-          <h1 className="text-h2 text-foreground">Bulk Tracker</h1>
-          <p className="mt-0.5 text-caption font-normal text-muted-foreground">Market-research Instagram scraping — outside your managed pages, not tied to payouts.</p>
+          <h1 className="text-display text-foreground">Bulk Tracker</h1>
+          <p className="mt-1 text-body text-muted-foreground">Market-research Instagram scraping — outside your managed pages, not tied to payouts.</p>
         </div>
       </motion.div>
 
@@ -158,7 +158,7 @@ function BulkTrackContent() {
         <StatChip index={4} icon={Share2} label="Failed" value={String(totals.failed)} tone="rose" />
       </div>
 
-      <motion.div {...fadeRise(5)} className={cn(CARD, "mb-5 p-5")} data-testid="bulk-new-batch">
+      <motion.div {...fadeRise(5)} className={cn(CARD, "mb-5 border-input p-6")} data-testid="bulk-new-batch">
         <div className="mb-3 flex items-center gap-2">
           <PlusCircle className="h-3.5 w-3.5 text-info-fg" />
           <h3 className="text-body-strong font-bold">New batch</h3>
@@ -225,7 +225,7 @@ function BulkTrackContent() {
       </div>
 
       {tab === "batches" ? (
-        <motion.div {...fadeRise(8)} className={cn(CARD, "overflow-hidden")}>
+        <motion.div {...fadeRise(8)} className={cn(CARD, "ledger-panel")}>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse" data-testid="bulk-batches-table">
               <thead>

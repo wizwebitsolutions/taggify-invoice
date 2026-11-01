@@ -185,14 +185,14 @@ export function PlanForm({ mode }: { mode: PlanFormMode }) {
     ) : null;
 
   return (
-    <div className="flex flex-col gap-6 pt-1" data-testid="plan-form">
+    <div className="workspace-page" data-testid="plan-form">
       <Link href={exitHref} className="inline-flex items-center gap-2 self-start text-body-strong text-foreground hover:text-brand-ink">
         <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
         {plan || mode.kind !== "create" ? "Back to plan" : "Back to Plans"}
       </Link>
 
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0">
+      <div className="page-heading">
+        <div className="page-heading-copy">
           <h1 className="text-display">{title}</h1>
           <p className="mt-1 text-body text-muted-foreground">
             {mode.kind === "variant" ? `${mode.source.name} · ${mode.source.clientName} · ` : plan ? `${plan.name} · ${plan.variantLabel} · ` : ""}
@@ -204,12 +204,12 @@ export function PlanForm({ mode }: { mode: PlanFormMode }) {
         </Button>
       </div>
 
-      <ol className="flex flex-wrap gap-2" aria-label="Steps">
+      <ol className="form-steps" aria-label="Steps">
         {STEPS.map((s, i) => (
           <li
             key={s.label}
             aria-current={i === step ? "step" : undefined}
-            className={cn("flex items-center gap-2 rounded-pill border bg-card py-1 pl-1 pr-3 text-small font-medium text-fg-muted", i === step && "border-brand-200 text-brand-ink", i < step && "text-foreground")}
+            className={cn("form-step", i === step && "border-brand-200 text-brand-ink", i < step && "text-foreground")}
           >
             <span className={cn("grid h-6 w-6 place-items-center rounded-full bg-muted text-micro font-bold", i === step && "bg-brand text-brand-foreground", i < step && "bg-step-done text-brand-ink")}>{i < step ? <Check className="h-3 w-3" strokeWidth={3} /> : i + 1}</span>
             {s.label}
@@ -221,6 +221,7 @@ export function PlanForm({ mode }: { mode: PlanFormMode }) {
       {step === 1 && (
         <PagesStep
           assets={pool}
+          allAssets={all}
           loading={assets.isLoading}
           items={items}
           setItems={setItems}
@@ -235,7 +236,7 @@ export function PlanForm({ mode }: { mode: PlanFormMode }) {
       {step === 2 && <PricingStep items={items} byId={byId} budget={budgetNumber} pricing={pricing} setPricing={setPricing} />}
       {step === 3 && <ReviewStep basics={basics} items={items} byId={byId} budget={budgetNumber} pricing={pricing} />}
 
-      <div className="sticky bottom-0 z-20 -mx-1 flex flex-wrap items-center gap-3 rounded-card border bg-card px-5 py-3 shadow-2">
+      <div className="form-action-bar sticky bottom-0 z-20 flex flex-wrap items-center gap-3 rounded-card border px-5 py-4">
         {step > 0 && (
           <Button variant="ghost" disabled={busy} onClick={() => setStep((s) => s - 1)}>
             <ArrowLeft />

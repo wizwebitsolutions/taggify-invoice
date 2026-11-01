@@ -24,7 +24,8 @@ const deleteAsset = vi.fn(async (id) => ({ id }));
 const proposeAssetEdit = vi.fn(async (_user, id, fields) => ({ id, pendingEdit: fields }));
 const decideAssetEdit = vi.fn(async (id, decision) => ({ id, decision }));
 const deleteAssets = vi.fn(async (ids) => ({ deleted: ids, skipped: [] }));
-vi.mock("./service.js", () => ({ deleteAsset, deleteAssets, proposeAssetEdit, decideAssetEdit }));
+const bulkSetApprovalStatus = vi.fn(async (ids) => ({ updated: ids, skipped: [] }));
+vi.mock("./service.js", () => ({ deleteAsset, deleteAssets, proposeAssetEdit, decideAssetEdit, bulkSetApprovalStatus }));
 vi.mock("../../lib/importPagesTemplate.js", () => ({ buildImportPagesTemplate: vi.fn() }));
 
 const { default: router } = await import("./routes.js");
@@ -101,6 +102,42 @@ describe("POST /assets/bulk-delete (19 Oct)", () => {
     currentUser = { id: "admin-1", role: "ADMIN" };
     expect((await bulkDel({ assetIds: [] })).status).toBe(400);
     expect(deleteAssets).not.toHaveBeenCalled();
+  });
+});
+
+const bulkApprove = (body) => fetch(`${base}/assets/bulk-approval`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+// 1 Nov — Approvals' "Approve selected": the same inventory.approve gate as a
+// single decision; no bare roles, so planners and creators can't approve pages.
+describe("POST /assets/bulk-approval (1 Nov)", () => {
+  it("an admin approves or rejects several pages at once", async () => {
+    currentUser = { id: "admin-1", role: "ADMIN" };
+    const res = await bulkApprove({ assetIds: ["a1", "a2"], approvalStatus: "approved" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ updated: ["a1", "a2"], skipped: [] });
+    expect(bulkSetApprovalStatus).toHaveBeenCalledWith(["a1", "a2"], "approved");
+  });
+
+  for (const role of ["CREATOR", "TEAM_MEMBER", "FINANCE", "PLAN_MAKER"]) {
+    it(`${role} is refused`, async () => {
+      currentUser = { id: `${role.toLowerCase()}-1`, role };
+      expect((await bulkApprove({ assetIds: ["a1"], approvalStatus: "approved" })).status).toBe(403);
+      expect(bulkSetApprovalStatus).not.toHaveBeenCalled();
+    });
+  }
+
+  it("a restricted admin without Inventory approve access is refused", async () => {
+    currentUser = { id: "admin-2", role: "ADMIN" };
+    storedPermissions = { "inventory.approve": false };
+    expect((await bulkApprove({ assetIds: ["a1"], approvalStatus: "approved" })).status).toBe(403);
+    expect(bulkSetApprovalStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty list and a status other than approved/rejected", async () => {
+    currentUser = { id: "admin-1", role: "ADMIN" };
+    expect((await bulkApprove({ assetIds: [], approvalStatus: "approved" })).status).toBe(400);
+    expect((await bulkApprove({ assetIds: ["a1"], approvalStatus: "pending" })).status).toBe(400);
+    expect(bulkSetApprovalStatus).not.toHaveBeenCalled();
   });
 });
 

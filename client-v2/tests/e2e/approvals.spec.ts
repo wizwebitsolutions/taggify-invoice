@@ -24,7 +24,7 @@ const link = (id: string, caption: string, status: string, hoursAgo: number) => 
 });
 
 async function approvalsApi(page: Page) {
-  const calls = { reviews: [] as Record<string, unknown>[], insights: [] as string[], billing: [] as Record<string, unknown>[], requested: new Set<string>() };
+  const calls = { reviews: [] as Record<string, unknown>[], insights: [] as string[], billing: [] as Record<string, unknown>[], bulk: [] as Record<string, unknown>[], requested: new Set<string>() };
   await mockApi(page);
   await page.route(`${API_URL}/links**`, (route) => {
     const req = route.request();
@@ -47,9 +47,17 @@ async function approvalsApi(page: Page) {
     calls.requested.add("plans");
     return route.fulfill({ json: [] });
   });
+  // Three waiting pages: two added by one planner (1 Nov grouping), one from before the adder was recorded.
+  const PRIYA = { id: "pm1", name: "Priya Planner", role: "PLAN_MAKER" };
+  const pending = (id: string, handle: string, hoursAgo: number, createdBy: typeof PRIYA | null) => ({ id, ownerId: "o9", platform: "instagram", handle, followers: 265000, category: "Fitness", approvalStatus: "pending", createdAt: ago(hoursAgo), rateCards: [], engagement: {}, owner: { name: "Arjun Nair" }, createdBy });
   await page.route(`${API_URL}/assets`, (route) => {
     calls.requested.add("assets");
-    return route.fulfill({ json: [{ id: "a9", ownerId: "o9", platform: "instagram", handle: "arjun.fits", followers: 265000, category: "Fitness", approvalStatus: "pending", createdAt: ago(20), rateCards: [], engagement: {}, owner: { name: "Arjun Nair" } }] });
+    return route.fulfill({ json: [pending("a9", "arjun.fits", 20, PRIYA), pending("a10", "arjun.eats", 18, PRIYA), pending("a11", "old.page", 15, null)] });
+  });
+  await page.route(`${API_URL}/assets/bulk-approval`, (route) => {
+    const body = route.request().postDataJSON();
+    calls.bulk.push(body);
+    return route.fulfill({ json: { updated: body.assetIds, skipped: [] } });
   });
   await page.route(`${API_URL}/campaigns`, (route) => route.fulfill({ json: [] }));
   await page.route(`${API_URL}/billing-profiles**`, (route) => {
@@ -72,7 +80,7 @@ test.describe("Approvals", () => {
     const calls = await approvalsApi(page);
     await page.goto("/approvals");
     const queue = page.getByRole("list", { name: "Queue" });
-    await expect(queue.getByRole("button")).toHaveCount(4); // proof, insights, page, bank details
+    await expect(queue.getByRole("button")).toHaveCount(6); // proof, insights, 3 pages, bank details
     // Oldest first: the proof (50h) is selected.
     await expect(page.getByRole("heading", { name: "Diwali Thali Hacks" })).toBeVisible();
     // The mocked screenshot URL doesn't resolve, so the fallback shows with a direct link.
@@ -88,6 +96,8 @@ test.describe("Approvals", () => {
 
     // Moved on to the next item (bank details, 30h).
     await expect(page.getByRole("heading", { name: "Kabir Malhotra" })).toBeVisible();
+    // Kinds sit under categories (1 Nov): Posts → Insights.
+    await page.getByRole("radio", { name: /Posts/ }).click();
     await page.getByRole("radio", { name: /Insights/ }).click();
     await expect(page.getByText("41,200")).toBeVisible();
     await expect(page.getByRole("button", { name: "Reject…" })).toHaveCount(0);
@@ -118,6 +128,43 @@ test.describe("Approvals", () => {
     await page.keyboard.press("Escape");
     await evidence.getByRole("button", { name: "Approve", exact: true }).click();
     await expect.poll(() => approvals).toHaveLength(1);
+  });
+
+  // 1 Nov: Inventory → New page groups the waiting pages by who added them; a whole group (or single pages) can be approved at once.
+  test("admin: new pages are grouped by who added them and a group can be approved in one go", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    const calls = await approvalsApi(page);
+    await page.route(`${API_URL}/assets/*/profile-pic`, (route) => route.fulfill({ status: 404, body: "" }));
+    await page.goto("/approvals");
+    await page.getByRole("radio", { name: /Inventory/ }).click();
+    await page.getByRole("radio", { name: /New page/ }).click();
+    const priya = page.getByRole("group", { name: "Priya Planner" });
+    await expect(priya).toContainText("Plan maker");
+    await expect(priya).toContainText("2 pages");
+    await expect(page.getByRole("group", { name: "Added before tracking" })).toBeVisible();
+    // The focused page's context says who added it.
+    await expect(page.getByRole("region", { name: "Context" })).toContainText("Added by · Plan maker");
+    await shot(page, "approvals-pages-grouped");
+
+    await page.getByRole("checkbox", { name: "Select all from Priya Planner" }).click();
+    const bar = page.getByRole("region", { name: "Selected pages" });
+    await expect(bar).toContainText("2 pages selected");
+    // Untick one and tick the untracked page: any mix works.
+    await page.getByRole("checkbox", { name: "Select arjun.eats" }).click();
+    await page.getByRole("checkbox", { name: "Select old.page" }).click();
+    await expect(bar).toContainText("2 pages selected");
+    await bar.getByRole("button", { name: "Approve selected" }).click();
+    await expect.poll(() => calls.bulk).toEqual([{ assetIds: ["a9", "a11"], approvalStatus: "approved" }]);
+    await expect(page.getByText("2 pages approved.")).toBeVisible();
+  });
+
+  test("a deep link to one kind lands on its category with that kind picked", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await approvalsApi(page);
+    await page.goto("/approvals?type=page");
+    await expect(page.getByRole("radio", { name: /Inventory/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radio", { name: /New page/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("group", { name: "Priya Planner" })).toBeVisible();
   });
 
   test("finance only sees bank-detail approvals and approves one", async ({ page }) => {

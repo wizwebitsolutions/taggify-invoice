@@ -5,11 +5,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ClipboardList, MessageCircle, Plus, RefreshCw, Upload } from "lucide-react";
+import { ClipboardList, Eye, MessageCircle, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, hasAccess, type Asset } from "@/lib/api-client";
-import { canAddForOwner, canApprovePages, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, PAGE_APPROVAL, rateOf, scrapeState } from "@/lib/creators";
+import { canAddForOwner, canApprovePages, canDeletePage, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, PAGE_APPROVAL, rateOf, scrapeState } from "@/lib/creators";
 import { money, personLabel, plural } from "@/lib/format";
 import { canEditPlan } from "@/lib/plans";
 import { FORMATS, formatLabel } from "@/lib/formats";
@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -74,8 +75,10 @@ function Creators() {
   const [open, setOpen] = useState<Asset | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const editable = canEditPages(user);
+  const deletable = canDeletePage(user);
   const proposer = canProposeEdits(user);
   // Ticking pages: bulk Instagram refresh (inventory.edit) and, as in v1, "Create plan" for anyone who can make plans.
   const canPlan = canEditPlan(user);
@@ -118,6 +121,25 @@ function Creators() {
     },
     onError: (e) => toast.error(errText(e, "Couldn't start the refresh.")),
   });
+  // Bulk delete (19 Oct, v1 parity): pages the server refuses (posts on record / approved plan) stay ticked so they can be switched to Inactive.
+  const removeMany = useMutation({
+    mutationFn: (ids: string[]) => assetsApi.removeMany(accessToken!, ids),
+    onSuccess: async ({ deleted, skipped }) => {
+      setSelected(new Set(skipped.map((s) => s.id)));
+      setConfirmDelete(false);
+      await invalidatePages(qc);
+      await qc.invalidateQueries({ queryKey: ["plans"] });
+      if (skipped.length === 0) toast.success(`${plural(deleted.length, "page")} removed from Inventory.`);
+      else toast.warning(`${plural(deleted.length, "page")} removed. ${plural(skipped.length, "page")} couldn't be (usually posts on record or an approved plan). They're still selected; switch them to Inactive instead.`);
+    },
+    onError: async (e) => {
+      setConfirmDelete(false);
+      // The server removes pages one by one, so a failure part-way may still have removed some.
+      await invalidatePages(qc);
+      await qc.invalidateQueries({ queryKey: ["plans"] });
+      toast.error(errText(e, "Couldn't remove these pages."));
+    },
+  });
   const decide = useMutation({
     mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected"; handle: string }) => assetsApi.setApproval(accessToken!, id, status),
     onSuccess: async (_r, v) => {
@@ -139,9 +161,9 @@ function Creators() {
   const openPage = open ? (all.find((p) => p.id === open.id) ?? open) : null;
 
   return (
-    <div className="flex flex-col gap-5 pt-2">
-      <div className="flex flex-wrap items-start gap-4">
-        <div>
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
           <h1 className="text-display">Inventory</h1>
           <p className="mt-1 text-body text-muted-foreground">Vendors and the pages they own. A vendor is paid once for all their pages.</p>
         </div>
@@ -163,7 +185,7 @@ function Creators() {
         )}
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <Tabs
           value={tab}
           onValueChange={(v) => {
@@ -172,7 +194,7 @@ function Creators() {
             setSelected(new Set());
           }}
         >
-          <div className="flex items-end gap-4 px-5 pt-2">
+          <div className="tab-shelf flex items-end gap-4">
             <TabsList className="flex-1 border-b-0">
               <TabsTrigger value="pages">Pages ({all.length})</TabsTrigger>
               <TabsTrigger value="vendors">Vendors ({vendors.length})</TabsTrigger>
@@ -180,7 +202,7 @@ function Creators() {
             </TabsList>
           </div>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+        <div className="filter-bar">
           <SearchField
             label="Search creators"
             placeholder="Search page, vendor or category..."
@@ -254,6 +276,12 @@ function Creators() {
                   <Button size="sm" onClick={createPlan}>
                     <ClipboardList />
                     Create plan ({selectedRows.length})
+                  </Button>
+                )}
+                {deletable && (
+                  <Button size="sm" variant="ghost" className="text-danger-fg hover:text-danger-fg" onClick={() => setConfirmDelete(true)}>
+                    <Trash2 />
+                    Remove ({selectedRows.length})
                   </Button>
                 )}
                 <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
@@ -420,24 +448,31 @@ function Creators() {
                       <span className="flex flex-wrap gap-1">
                         <StatusPill tone={st.tone}>{st.label}</StatusPill>
                         {p.isActive === false && <StatusPill tone="neutral">Inactive</StatusPill>}
+                        {p.profileBroken && (
+                          <span title={p.lastScrapeError ?? "Not found on Instagram"}>
+                            <StatusPill tone="danger">Not on Instagram</StatusPill>
+                          </span>
+                        )}
                         {p.pendingEdit && typeof p.pendingEdit === "object" && Object.keys(p.pendingEdit).length > 0 && <StatusPill tone="info">Edit suggested</StatusPill>}
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      {approvable && p.approvalStatus === "pending" ? (
-                        <span className="inline-flex gap-2">
-                          <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate({ id: p.id, status: "rejected", handle: p.handle })}>
-                            Reject
-                          </Button>
-                          <Button size="sm" variant="success" disabled={decide.isPending} onClick={() => decide.mutate({ id: p.id, status: "approved", handle: p.handle })}>
-                            Approve
-                          </Button>
-                        </span>
-                      ) : (
-                        <Button size="sm" variant="ghost" onClick={() => setOpen(p)}>
-                          {proposer ? "View / suggest" : "View"}
+                      {/* Every row opens the page's full details, all rates included (1 Nov) — pending ones too. */}
+                      <span className="inline-flex items-center gap-2">
+                        <Button size="icon-sm" variant="ghost" aria-label={`View ${displayHandle(p.handle, p.platform)}`} title={proposer ? "View / suggest changes" : "View details"} onClick={() => setOpen(p)}>
+                          <Eye />
                         </Button>
-                      )}
+                        {approvable && p.approvalStatus === "pending" && (
+                          <>
+                            <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate({ id: p.id, status: "rejected", handle: p.handle })}>
+                              Reject
+                            </Button>
+                            <Button size="sm" variant="success" disabled={decide.isPending} onClick={() => decide.mutate({ id: p.id, status: "approved", handle: p.handle })}>
+                              Approve
+                            </Button>
+                          </>
+                        )}
+                      </span>
                     </TableCell>
                   </TableRow>
                 );
@@ -451,6 +486,22 @@ function Creators() {
       <PageSheet page={openPage} onClose={() => setOpen(null)} />
       <AddPageDialog open={adding} onOpenChange={setAdding} />
       <ImportPagesDialog open={importing} onOpenChange={setImporting} />
+      <Dialog open={confirmDelete} onOpenChange={(o) => !o && !removeMany.isPending && setConfirmDelete(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove {plural(selectedRows.length, "page")}?</DialogTitle>
+            <DialogDescription>They leave Inventory and any draft plans they are on. A page with posts on record or on an approved plan can&apos;t be removed; it stays selected so you can switch it to Inactive instead.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={removeMany.isPending} onClick={() => setConfirmDelete(false)}>
+              Keep them
+            </Button>
+            <Button variant="destructive" disabled={removeMany.isPending || selectedRows.length === 0} onClick={() => removeMany.mutate(selectedRows.map((p) => p.id))}>
+              {removeMany.isPending ? "Removing…" : `Remove ${plural(selectedRows.length, "page")}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

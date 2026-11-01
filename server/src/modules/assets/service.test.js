@@ -16,7 +16,7 @@ vi.mock("../scraping/service.js", () => ({ refreshAssetMetrics: vi.fn(async () =
 const getAccountMetricsBatch = vi.fn(async () => ({}));
 vi.mock("../../lib/apifyClient.js", () => ({ ApifyInstagramProvider: { getAccountMetricsBatch: (...a) => getAccountMetricsBatch(...a), getAccountMetrics: vi.fn() } }));
 
-const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails, setApprovalStatus, missingRequiredRates, proposeAssetEdit, decideAssetEdit, deleteAsset, deleteAssets, checkProfiles } = await import("./service.js");
+const { createAsset, listAssets, refreshProfile, fetchProfilePic, getAvgEngagement, updateAssetDetails, setApprovalStatus, bulkSetApprovalStatus, missingRequiredRates, proposeAssetEdit, decideAssetEdit, deleteAsset, deleteAssets, checkProfiles } = await import("./service.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
 // listAssets (23 Sep, Step 3) reads the *caller's* effective permissions
@@ -54,6 +54,8 @@ describe("createAsset — admin registering a page for someone else (newTask.md 
     const asset = await createAsset(admin, { platform: "instagram", handle: "new.page", ownerId: "new-creator-1", category: "Meme page", rateCards: FULL_RATES });
     expect(asset.ownerId).toBe("new-creator-1");
     expect(asset.category).toBe("Meme page");
+    // Who added it (1 Nov) — the Approvals queue groups new pages by this.
+    expect(asset.createdById).toBe("admin-1");
   });
 
   it("a non-admin cannot register a page for someone else", async () => {
@@ -324,6 +326,27 @@ describe("planner edit proposals (16 Oct — 'planner can edit inventory, admin 
 
   it("deciding on a page with no proposal is a 400", async () => {
     await expect(decideAssetEdit("asset-1", "approve")).rejects.toMatchObject({ code: "NO_PENDING_EDIT" });
+  });
+});
+
+describe("bulkSetApprovalStatus (1 Nov — Approvals' 'Approve selected')", () => {
+  it("decides each pending page, skips the rest with a reason, and still scrapes every approved page", async () => {
+    mockPrisma.asset.findMany.mockResolvedValueOnce([
+      { id: "a1", handle: "one", approvalStatus: "pending" },
+      { id: "a2", handle: "two", approvalStatus: "approved" },
+      { id: "a3", handle: "three", approvalStatus: "pending" },
+    ]);
+    mockPrisma.asset.findUnique.mockResolvedValue({ approvalStatus: "pending", rateCards: [] });
+    const result = await bulkSetApprovalStatus(["a1", "a2", "missing", "a3", "a1"], "approved");
+    expect(result).toEqual({
+      updated: ["a1", "a3"],
+      skipped: [
+        { id: "a2", reason: "@two is already approved." },
+        { id: "missing", reason: "Page not found." },
+      ],
+    });
+    expect(mockPrisma.asset.update).toHaveBeenCalledTimes(2);
+    expect(refreshAssetMetrics).toHaveBeenCalledTimes(2);
   });
 });
 

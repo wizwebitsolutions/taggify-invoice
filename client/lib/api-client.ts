@@ -911,7 +911,7 @@ export interface PageOwner {
   email?: string | null;
 }
 
-export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "conflict" | "owner-missing" | "owner-unknown" | "incomplete";
+export type ImportRowStatus = "ready" | "invalid" | "duplicate" | "exists" | "update" | "conflict" | "owner-missing" | "owner-unknown" | "incomplete";
 
 export interface ImportPreviewRow {
   rowNumber: number;

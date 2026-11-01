@@ -39,7 +39,7 @@ export function GoogleTab() {
   } as const;
 
   return (
-    <section aria-labelledby="google-title" className="flex flex-col gap-4 border-t p-5">
+    <section aria-labelledby="google-title" className="flex flex-col gap-5 border-t p-6">
       <div>
         <h2 id="google-title" className="text-card-title">
           Google Sheets
@@ -51,7 +51,7 @@ export function GoogleTab() {
       ) : !state ? (
         <Skeleton className="h-20 max-w-xl" aria-label="Checking the Google connection" />
       ) : (
-        <div className="flex max-w-xl flex-col gap-3 rounded-card border p-4">
+        <div className="flex max-w-xl flex-col gap-4 rounded-card border border-input bg-muted/40 p-5">
           <StatusPill className="self-start" tone={copy[state].tone}>
             {copy[state].pill}
           </StatusPill>

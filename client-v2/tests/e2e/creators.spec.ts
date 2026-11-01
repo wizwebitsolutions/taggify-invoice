@@ -31,11 +31,11 @@ const ASSETS = [
   asset("a1", "riya.eats", RIYA, 482000),
   asset("a2", "riyatravels", RIYA, 310000, { category: "Travel", campaigns: [] }),
   asset("a3", "desi.memes", DEV, 1200000, { category: "Meme page", engagement: eng(240000) }),
-  asset("a4", "arjun.fits", DEV, 265000, { category: "Fitness", approvalStatus: "pending", rateCards: [], campaigns: [] }),
+  asset("a4", "arjun.fits", DEV, 265000, { category: "Fitness", approvalStatus: "pending", rateCards: [], campaigns: [], createdBy: { id: "pm1", name: "Priya Planner", role: "PLAN_MAKER" } }),
 ];
 
 async function creatorsApi(page: Page, opts: { createStatus?: number; createError?: { code: string; message: string }; assets?: unknown[] } = {}) {
-  const calls = { active: [] as unknown[], rate: [] as unknown[], details: [] as unknown[], approval: [] as unknown[], refresh: [] as unknown[], created: [] as unknown[], signup: [] as unknown[], requested: new Set<string>() };
+  const calls = { active: [] as unknown[], rate: [] as unknown[], details: [] as unknown[], approval: [] as unknown[], refresh: [] as unknown[], created: [] as unknown[], signup: [] as unknown[], bulkDelete: [] as unknown[], requested: new Set<string>() };
   await mockApi(page);
   page.on("request", (req) => {
     if (req.url().startsWith(API_URL)) calls.requested.add(new URL(req.url()).pathname.replace(/^\/api/, ""));
@@ -67,6 +67,12 @@ async function creatorsApi(page: Page, opts: { createStatus?: number; createErro
       calls.refresh.push(req.postDataJSON());
       return route.fulfill({ json: { queued: req.postDataJSON().assetIds.length } });
     }
+    if (m === "POST" && path === "/bulk-delete") {
+      const { assetIds } = req.postDataJSON() as { assetIds: string[] };
+      calls.bulkDelete.push({ assetIds });
+      // desi.memes has posts on record, so the server keeps it.
+      return route.fulfill({ json: { deleted: assetIds.filter((id) => id !== "a3"), skipped: assetIds.filter((id) => id === "a3").map((id) => ({ id, reason: "ASSET_IN_USE" })) } });
+    }
     if (m === "POST" && path === "") {
       const body = req.postDataJSON();
       calls.created.push(body);
@@ -97,9 +103,13 @@ test.describe("Creators", () => {
     await expect(page.getByRole("row")).toHaveCount(3); // header + Riya's two pages
     await shot(page, "creators-pages");
 
-    await page.getByRole("button", { name: /riya\.eats/ }).click();
+    // The view icon (1 Nov) opens the same panel as the handle; every format is listed, "—" where there's no rate.
+    await page.getByRole("button", { name: "View riya.eats" }).click();
     const panel = page.getByRole("dialog");
     await expect(panel.getByRole("link", { name: /Diwali Food Stories/ })).toHaveAttribute("href", "/campaigns/c1");
+    await expect(panel.getByText("Added by")).toBeVisible();
+    await expect(panel.getByText("Before tracking")).toBeVisible();
+    await expect(panel.getByRole("region", { name: "Rates" }).getByText("PR", { exact: true })).toBeVisible();
     await panel.getByRole("button", { name: "Edit details" }).click();
     // A saved rate is a line that can be changed but not removed (the server only upserts); a ₹0 amount is refused.
     await expect(panel.getByRole("button", { name: "Remove Reel rate" })).toHaveCount(0);
@@ -138,6 +148,10 @@ test.describe("Creators", () => {
     await page.goto("/creators");
     await page.getByRole("tab", { name: "Waiting for approval (1)" }).click();
     await expect(page.getByRole("row")).toHaveCount(2);
+    // A waiting page can be opened too (1 Nov), and says who added it.
+    await page.getByRole("button", { name: "View arjun.fits" }).click();
+    await expect(page.getByRole("dialog").getByText("Priya Planner · Plan maker")).toBeVisible();
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Approve", exact: true }).click();
     await expect(page.getByText("arjun.fits approved.")).toBeVisible();
     expect(calls.approval).toEqual([{ id: "a4", approvalStatus: "approved" }]);
@@ -148,6 +162,49 @@ test.describe("Creators", () => {
     await page.getByRole("button", { name: "Refresh from Instagram" }).click();
     await expect(page.getByText("Fetching 2 pages from Instagram.")).toBeVisible();
     expect(calls.refresh).toEqual([{ assetIds: ["a3", "a1"] }]);
+  });
+
+  test("a page that failed the Instagram check shows Not on Instagram in the list and its panel (17 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await creatorsApi(page, { assets: [asset("a1", "riya.eats", RIYA, 482000, { profileBroken: true, lastScrapeError: "Profile not found" }), ASSETS[2]] });
+    await page.goto("/creators");
+    const row = page.getByRole("row").filter({ hasText: "riya.eats" });
+    await expect(row.getByText("Not on Instagram")).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: "desi.memes" }).getByText("Not on Instagram")).toHaveCount(0);
+    await shot(page, "creators-not-on-instagram");
+    await page.getByRole("button", { name: /riya\.eats/ }).click();
+    await expect(page.getByRole("dialog").getByText("Not on Instagram")).toBeVisible();
+  });
+
+  test("admin removes selected pages in bulk; a page the server keeps stays selected (19 Oct)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    const calls = await creatorsApi(page);
+    await page.goto("/creators");
+    await page.getByRole("checkbox", { name: "Select riya.eats" }).click();
+    await page.getByRole("checkbox", { name: "Select desi.memes" }).click();
+    await page.getByTestId("selection-bar").getByRole("button", { name: "Remove (2)" }).click();
+    const confirm = page.getByRole("dialog");
+    await expect(confirm.getByRole("heading", { name: "Remove 2 pages?" })).toBeVisible();
+    await shot(page, "creators-bulk-remove-confirm");
+    // Backing out sends nothing.
+    await confirm.getByRole("button", { name: "Keep them" }).click();
+    expect(calls.bulkDelete).toHaveLength(0);
+    await page.getByTestId("selection-bar").getByRole("button", { name: "Remove (2)" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Remove 2 pages" }).click();
+    await expect.poll(() => calls.bulkDelete).toEqual([{ assetIds: expect.arrayContaining(["a1", "a3"]) }]);
+    await expect(page.getByText("1 page removed. 1 page couldn't be", { exact: false })).toBeVisible();
+    await expect(page.getByTestId("selection-bar")).toContainText("1 of 4 selected");
+    await expect(page.getByRole("checkbox", { name: "Select desi.memes" })).toBeChecked();
+    await shot(page, "creators-bulk-remove-result");
+  });
+
+  test("bulk Remove is admin-only: a planner who can tick pages for a plan gets no Remove", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await creatorsApi(page);
+    await page.goto("/creators");
+    await page.getByRole("checkbox", { name: "Select riya.eats" }).click();
+    await expect(page.getByTestId("selection-bar").getByRole("button", { name: /Create plan/ })).toBeVisible();
+    await expect(page.getByTestId("selection-bar").getByRole("button", { name: /^Remove/ })).toHaveCount(0);
   });
 
   test("vendors tab groups pages by who gets paid and links to their payouts", async ({ page }) => {

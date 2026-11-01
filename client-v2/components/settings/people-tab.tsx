@@ -37,6 +37,8 @@ export function PeopleTab() {
   const people = usePeople(true);
   const [q, setQ] = useState("");
   const [role, setRole] = useState<"all" | Role>("all");
+  // Deactivated accounts (21 Oct) are kept for their history but out of the way by default.
+  const [status, setStatus] = useState<"active" | "deactivated" | "all">("active");
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -44,7 +46,7 @@ export function PeopleTab() {
 
   const all = useMemo(() => people.data ?? [], [people.data]);
   const needle = q.trim().toLowerCase();
-  const rows = all.filter((u) => (role === "all" || u.role === role) && (!needle || `${u.name ?? ""} ${u.email ?? ""} ${u.phoneNumber ?? ""}`.toLowerCase().includes(needle)));
+  const rows = all.filter((u) => (role === "all" || u.role === role) && (status === "all" || (status === "deactivated") === !!u.deactivatedAt) && (!needle || `${u.name ?? ""} ${u.email ?? ""} ${u.phoneNumber ?? ""}`.toLowerCase().includes(needle)));
   const pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
   useEffect(() => {
     if (page > pages) setPage(pages);
@@ -56,7 +58,7 @@ export function PeopleTab() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+      <div className="filter-bar">
         <SearchField
           label="Search people"
           placeholder="Search name or email..."
@@ -76,6 +78,19 @@ export function PeopleTab() {
           }}
           options={[{ value: "all", label: "All" }, ...ROLES.map((r) => ({ value: r, label: ROLE_NAMES[r] }))]}
         />
+        <FilterSelect
+          label="Status"
+          value={status}
+          onValueChange={(v) => {
+            setStatus(v as typeof status);
+            setPage(1);
+          }}
+          options={[
+            { value: "active", label: "Active" },
+            { value: "deactivated", label: "Deactivated" },
+            { value: "all", label: "All" },
+          ]}
+        />
         {editable && (
           <Button className="sm:ml-auto" onClick={() => setAdding(true)}>
             <Plus />
@@ -94,7 +109,7 @@ export function PeopleTab() {
         </div>
       ) : rows.length === 0 ? (
         <EmptyState name="empty-search" title={all.length === 0 ? "No one here yet" : "No one matches"}>
-          {all.length === 0 ? "Add the first person to give them a login." : "Try another name, or clear the role filter."}
+          {all.length === 0 ? "Add the first person to give them a login." : "Try another name, or clear the role and status filters."}
         </EmptyState>
       ) : (
         <>
@@ -145,6 +160,7 @@ function PersonRow({ person: u, me, canEdit, onOpen }: { person: User; me: boole
         <div className="flex flex-wrap items-center gap-1.5">
           <StatusPill tone="neutral">{ROLE_NAMES[u.role]}</StatusPill>
           {tag && <StatusPill tone="warning">{tag}</StatusPill>}
+          {u.deactivatedAt && <StatusPill tone="danger">Deactivated</StatusPill>}
         </div>
       </TableCell>
       <TableCell className="hidden whitespace-nowrap text-small text-muted-foreground lg:table-cell">{joined(u.createdAt)}</TableCell>

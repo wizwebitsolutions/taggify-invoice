@@ -7,7 +7,7 @@ import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, CircleCheck, Credit
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, payments as paymentsApi, type BillingProfile, type PaymentInvoice, type Payout, type PendingLink } from "@/lib/api-client";
-import { captionTitle, computePayoutTotals, formatLabel, latestSnapshot, receiptProblem, todayKey, TDS_RATES, uploadPayoutReceipt, type TdsRate } from "@/lib/finance";
+import { captionTitle, computePayoutTotals, formatLabel, latestSnapshot, postThumbSrc, receiptProblem, todayKey, TDS_RATES, uploadPayoutReceipt, type TdsRate } from "@/lib/finance";
 import { money } from "@/lib/format";
 import { invalidateAfterPayout } from "@/lib/queries/finance";
 import { cn } from "@/lib/utils";
@@ -241,7 +241,7 @@ export function PayoutRail({
               <li key={s.key} className="grid grid-cols-[40px_24px_minmax(0,1fr)_auto_32px] items-center gap-2">
                 {s.kind === "link" ? (
                   <>
-                    <ContentThumb src={latestSnapshot(s.link)?.thumbnailUrl} format={s.link.format} />
+                    <ContentThumb src={postThumbSrc(s.link)} format={s.link.format} />
                     <PageAvatar assetId={s.link.asset.id} handle={s.link.asset.handle} size="xs" />
                     <span className="min-w-0">
                       <span className="block truncate text-small font-medium">{captionTitle(latestSnapshot(s.link)?.caption) ?? `${formatLabel(s.link.format)} · ${s.link.campaign?.title ?? ""}`}</span>
@@ -530,7 +530,7 @@ function Choice({ options, value, onChange, name, disabled }: { options: { label
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
-            "h-control-sm rounded-md border text-small font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft disabled:opacity-50",
+            "h-control-sm rounded-md border text-small font-semibold transition-colors focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft disabled:opacity-50",
             value === o.value ? "border-brand bg-brand-50 text-brand-ink" : "border-input bg-card text-fg-strong hover:bg-muted"
           )}
         >

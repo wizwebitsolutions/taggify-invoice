@@ -51,6 +51,8 @@ export async function listAssets(user) {
     include: {
       rateCards: true,
       owner: { select: { id: true, name: true, phoneNumber: true, email: true } },
+      // Who added the page (1 Nov) — Approvals groups new pages by this.
+      createdBy: { select: { id: true, name: true, email: true, role: true } },
       assignments: { select: { campaign: { select: { id: true, title: true, brandName: true } } } },
     },
     orderBy: { createdAt: "desc" },
@@ -225,6 +227,7 @@ export async function createAsset(user, { platform, handle, category, ownerId, r
     asset = await prisma.asset.create({
       data: {
         ownerId: ownerId ?? user.id,
+        createdById: user.id,
         platform,
         handle,
         category,
@@ -273,6 +276,39 @@ export async function queueProfileRefresh(assetIds) {
   await markScrapeQueued(queued);
   void scrapeSequentially(queued);
   return { queued: queued.length };
+}
+
+/**
+ * Approvals' "Approve selected" (1 Nov): the same decision as above for each
+ * id, one at a time so every approved page still gets its scrape. Ids that
+ * aren't pending (or don't exist) come back in `skipped` with the reason;
+ * one refusal doesn't stop the rest.
+ */
+export async function bulkSetApprovalStatus(assetIds, approvalStatus) {
+  const ids = [...new Set(assetIds)];
+  const found = await prisma.asset.findMany({ where: { id: { in: ids } }, select: { id: true, handle: true, approvalStatus: true } });
+  const byId = new Map(found.map((a) => [a.id, a]));
+  const updated = [];
+  const skipped = [];
+  for (const id of ids) {
+    const asset = byId.get(id);
+    if (!asset) {
+      skipped.push({ id, reason: "Page not found." });
+      continue;
+    }
+    if (asset.approvalStatus !== "pending") {
+      skipped.push({ id, reason: `@${asset.handle} is already ${asset.approvalStatus}.` });
+      continue;
+    }
+    try {
+      await setApprovalStatus(id, approvalStatus);
+      updated.push(id);
+    } catch (err) {
+      if (!(err instanceof ApiError)) throw err;
+      skipped.push({ id, reason: err.message });
+    }
+  }
+  return { updated, skipped };
 }
 
 export async function setApprovalStatus(assetId, approvalStatus) {
@@ -517,11 +553,22 @@ export async function decideAssetEdit(assetId, decision) {
   const clear = { pendingEdit: null, pendingEditById: null, pendingEditAt: null };
   if (decision === "reject") return prisma.asset.update({ where: { id: assetId }, data: clear, include: { rateCards: true } });
 
-  const data = { ...clear };
-  if ("category" in pending) data.category = pending.category;
-  if ("grade" in pending) data.grade = pending.grade;
-  if ("groupLink" in pending) data.groupLink = pending.groupLink;
-  const rateCards = Array.isArray(pending.rateCards) ? dedupeRateCards(pending.rateCards) : [];
+  return applyAssetEdit(assetId, pending, clear);
+}
+
+/**
+ * Writes an edit ({ category?, grade?, groupLink?, rateCards? }) onto the
+ * live page in one transaction — rates upserted per format, the rest set as
+ * given. Shared by decideAssetEdit (approving a proposal) and an admin's
+ * sheet import of a page that's already in Inventory (1 Nov). `extra` is
+ * merged into the row update (decideAssetEdit clears the proposal with it).
+ */
+export async function applyAssetEdit(assetId, edit, extra = {}) {
+  const data = { ...extra };
+  if ("category" in edit) data.category = edit.category;
+  if ("grade" in edit) data.grade = edit.grade;
+  if ("groupLink" in edit) data.groupLink = edit.groupLink;
+  const rateCards = Array.isArray(edit.rateCards) ? dedupeRateCards(edit.rateCards) : [];
   return prisma.$transaction(async (tx) => {
     for (const entry of rateCards) {
       await tx.rateCard.upsert({
@@ -532,6 +579,28 @@ export async function decideAssetEdit(assetId, decision) {
     }
     return tx.asset.update({ where: { id: assetId }, data, include: { rateCards: true } });
   });
+}
+
+/**
+ * What a sheet row would change on a page that's already in Inventory
+ * (1 Nov — "edit can be done by importing as well"). Only cells the sheet
+ * actually filled count: a blank category/grade/group link leaves the page's
+ * value alone, and a rate only counts when it differs from the page's.
+ * Returns { category?, grade?, groupLink?, rateCards? } or null for no change.
+ * `rates: false` ignores the rate columns (a creator's own sheet).
+ */
+export function importEditDiff(existing, row, { rates = true } = {}) {
+  const changes = {};
+  const category = row.category?.trim();
+  if (category && category !== (existing.category ?? "")) changes.category = category;
+  if (row.grade && row.grade !== existing.grade) changes.grade = row.grade;
+  if (row.groupLink && row.groupLink !== existing.groupLink) changes.groupLink = row.groupLink;
+  if (rates) {
+    const current = new Map((existing.rateCards ?? []).map((rc) => [rc.format, Number(rc.amount)]));
+    const changed = dedupeRateCards(row.rateCards).filter((rc) => current.get(rc.format) !== rc.amount);
+    if (changed.length > 0) changes.rateCards = changed;
+  }
+  return Object.keys(changes).length > 0 ? changes : null;
 }
 
 /* ── "Is this page still up?" (17 Oct — plan wizard) ─────────────────────
@@ -737,6 +806,10 @@ function vendorKey(vendor) {
  *   invalid        — bad/missing handle; never importable
  *   duplicate      — same handle appeared on an earlier row of this sheet
  *   exists         — already registered under that same account; skipped
+ *   update         — already in Inventory under this account and the sheet
+ *                    changes something on it (1 Nov): `changes` says what. An
+ *                    admin's confirm applies them; anyone else's parks them
+ *                    as the page's pendingEdit for an admin to approve
  *   conflict       — already registered under a *different* account; skipped
  *                    (a page can't sensibly live under two creators)
  *   owner-missing  — no owner cell; the admin picks a default account
@@ -783,9 +856,27 @@ export async function previewImport(parsed, user) {
   const existing = handles.length
     ? await prisma.asset.findMany({
         where: { platform: "instagram", handle: { in: handles, mode: "insensitive" } },
-        select: { id: true, handle: true, ownerId: true, owner: { select: { id: true, name: true, phoneNumber: true, email: true } } },
+        select: { id: true, handle: true, ownerId: true, category: true, grade: true, groupLink: true, pendingEdit: true, rateCards: { select: { format: true, amount: true } }, owner: { select: { id: true, name: true, phoneNumber: true, email: true } } },
       })
     : [];
+  // A page already in Inventory under the row's own account (1 Nov): "update"
+  // when the sheet changes something on it, "exists" when it doesn't.
+  // Who may edit this way: an admin (applied), a plan maker or the page's own
+  // creator (parked for approval) — the same people proposeAssetEdit accepts.
+  const canEdit = isAdmin || isCreator || user?.role === "PLAN_MAKER";
+  const existsOrUpdate = (base, match, row, owner) => {
+    const changes = canEdit ? importEditDiff(match, row, { rates: !isCreator }) : null;
+    if (!changes) return { ...base, owner, ownerId: owner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(owner)}.${canEdit ? "" : " Only an admin or plan maker can change it from a sheet."}` };
+    const replacesPendingEdit = !!match.pendingEdit && typeof match.pendingEdit === "object";
+    const reason = isAdmin
+      ? `Already in Inventory — the sheet's changes are applied to it.${replacesPendingEdit ? " The edit waiting for approval is dropped." : ""}`
+      : replacesPendingEdit
+        ? "Already in Inventory — the sheet's changes replace the edit waiting for approval."
+        : "Already in Inventory — the sheet's changes go to an admin for approval.";
+    // `current` is what the page has now, so the popup can show "Reel ₹5,000 → ₹6,000".
+    const current = { category: match.category, grade: match.grade, groupLink: match.groupLink, rateCards: (match.rateCards ?? []).map((rc) => ({ format: rc.format, amount: Number(rc.amount) })) };
+    return { ...base, owner, ownerId: owner.id, status: "update", changes, current, replacesPendingEdit, reason };
+  };
   const existingByHandle = new Map();
   for (const a of existing) {
     const k = a.handle.toLowerCase();
@@ -801,7 +892,7 @@ export async function previewImport(parsed, user) {
     // still imports, but lands pending until those rates are set.
     // Empty for anyone else — their pages land pending, without rates, anyway.
     const missingRates = isAdmin ? missingRequiredRates(row.rateCards) : [];
-    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, grade: row.grade ?? null, groupLink: row.groupLink ?? null, followers: row.followers, rateCards: row.rateCards, missingRates, missingFields: [], ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null };
+    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, grade: row.grade ?? null, groupLink: row.groupLink ?? null, followers: row.followers, rateCards: row.rateCards, missingRates, missingFields: [], ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null, changes: null, current: null, replacesPendingEdit: false };
     if (row.problem) return { ...base, status: "invalid", reason: row.problem };
     const key = row.handle.toLowerCase();
     if (seen.has(key)) return { ...base, status: "duplicate", reason: "Same handle appears earlier in this sheet." };
@@ -824,7 +915,7 @@ export async function previewImport(parsed, user) {
     if (isCreator) {
       if (!selfAsOwner) return { ...base, status: "owner-missing", reason: "Couldn't verify your account — try again." };
       const same = matches.find((a) => a.ownerId === selfAsOwner.id);
-      if (same) return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(selfAsOwner)}.` };
+      if (same) return existsOrUpdate(base, same, row, selfAsOwner);
       if (matches.length > 0) return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id, status: "conflict", reason: "Already registered under another account — a page can't be under two accounts." };
       return { ...base, owner: selfAsOwner, ownerId: selfAsOwner.id };
     }
@@ -836,13 +927,11 @@ export async function previewImport(parsed, user) {
     }
     if (owner) {
       const same = matches.find((a) => a.ownerId === owner.id);
-      if (same) return { ...base, owner, ownerId: owner.id, status: "exists", reason: `Already in Inventory under ${ownerLabel(owner)}.` };
+      if (same) return existsOrUpdate(base, same, row, owner);
       if (matches.length > 0) return { ...base, owner, ownerId: owner.id, status: "conflict", reason: `Already registered under ${ownerLabel(matches[0].owner)} — a page can't be under two accounts.` };
       return { ...base, owner, ownerId: owner.id };
     }
-    if (matches.length > 0) {
-      return { ...base, owner: matches[0].owner, ownerId: matches[0].ownerId, status: "exists", reason: `Already in Inventory under ${ownerLabel(matches[0].owner)}.` };
-    }
+    if (matches.length > 0) return existsOrUpdate(base, matches[0], row, matches[0].owner);
     if (vendor) {
       if (isNew) newVendorRows.push({ vendor, rowNumber: row.rowNumber });
       return { ...base, status: "owner-unknown", reason };
@@ -940,9 +1029,15 @@ function clashReason(clash, owner, isCreator) {
  * CREATOR and PLAN_MAKER (25 Sep) — only CREATOR accounts can own pages.
  * A CREATOR's own rows are always forced onto their own id (never trusts
  * a client-sent ownerId for them, same as createAsset); a PLAN_MAKER picks
- * from `owners` like an admin does. Only an ADMIN's rows are auto-approved
- * and can carry a rate card — everyone else's land `pending`, no rates,
- * same rule as the single "Add page" flow.
+ * from `owners` like an admin does. Only an ADMIN's rows are auto-approved;
+ * everyone else's land `pending`. Rates from the sheet are kept for every
+ * staff importer (1 Nov — a planner's sheet carries the costs the admin then
+ * approves); a creator's own sheet never sets rates, same as "Add page".
+ *
+ * A row whose page is already in Inventory under the same account is an
+ * edit, not a skip (1 Nov): an admin's changes are applied to the live row,
+ * anyone else's are parked as the page's pendingEdit for an admin to approve
+ * (the live row stays as it was until then). → { created, updated, proposed, skipped }.
  */
 export async function importAssets(user, rows) {
   const isAdmin = user.role === "ADMIN";
@@ -953,9 +1048,12 @@ export async function importAssets(user, rows) {
   const ownerById = new Map(owners.map((o) => [o.id, o]));
   const selfAsOwner = await selfAsOwnerFor(user);
   const created = [];
+  const updated = [];
+  const proposed = [];
   const skipped = [];
   const seen = new Set();
   const candidates = [];
+  const edits = [];
 
   // Pass 1 — everything checkable without Instagram.
   for (const input of rows) {
@@ -979,13 +1077,39 @@ export async function importAssets(user, rows) {
     }
     const clash = await prisma.asset.findFirst({
       where: { platform: "instagram", handle: { equals: handle, mode: "insensitive" } },
-      select: { ownerId: true, owner: { select: { name: true, phoneNumber: true } } },
+      select: { id: true, handle: true, ownerId: true, category: true, grade: true, groupLink: true, pendingEdit: true, rateCards: { select: { format: true, amount: true } }, owner: { select: { name: true, phoneNumber: true } } },
     });
     if (clash) {
-      skipped.push({ handle, reason: clashReason(clash, owner, isCreator) });
+      // The same account's page: an edit (below). Someone else's: can't be registered twice.
+      if (clash.ownerId === owner.id) edits.push({ input, handle, existing: clash });
+      else skipped.push({ handle, reason: clashReason(clash, owner, isCreator) });
       continue;
     }
     candidates.push({ input, handle, owner });
+  }
+
+  // Edits to pages already in Inventory (1 Nov). No Instagram check — the
+  // page was verified when it was first added.
+  for (const { input, handle, existing } of edits) {
+    const changes = importEditDiff(existing, input, { rates: !isCreator });
+    if (!changes) {
+      skipped.push({ handle, reason: "Already in Inventory — nothing in the sheet differs." });
+      continue;
+    }
+    try {
+      if (isAdmin) {
+        // The admin's sheet is the latest word: an older proposal on the page would otherwise undo it when approved.
+        const dropProposal = existing.pendingEdit ? { pendingEdit: null, pendingEditById: null, pendingEditAt: null } : {};
+        await applyAssetEdit(existing.id, changes, dropProposal);
+        updated.push({ id: existing.id, handle: existing.handle });
+      } else {
+        await proposeAssetEdit(user, existing.id, changes);
+        proposed.push({ id: existing.id, handle: existing.handle });
+      }
+    } catch (err) {
+      if (!(err instanceof ApiError)) throw err;
+      skipped.push({ handle, reason: err.message });
+    }
   }
 
   // Pass 2 — every page must be confirmed on Instagram before it's stored
@@ -1036,15 +1160,16 @@ export async function importAssets(user, rows) {
       skipped.push({ handle, reason: clashReason(lateClash, owner, isCreator) });
       continue;
     }
-    // Only an admin's rate cards survive — a non-admin's import lands
-    // pending, same as createAsset, so a rate can't be smuggled in through
-    // a sheet column instead of the single-page form.
-    const rateCards = isAdmin ? dedupeRateCards(input.rateCards) : [];
+    // The sheet's rates are kept for staff (1 Nov) — a planner's import lands
+    // pending with its costs on it for the admin to approve. A creator's own
+    // sheet never sets rates, same as createAsset.
+    const rateCards = isCreator ? [] : dedupeRateCards(input.rateCards);
     let asset;
     try {
       asset = await prisma.asset.create({
         data: {
           ownerId: owner.id,
+          createdById: user.id,
           platform: "instagram",
           handle,
           category: input.category || null,
@@ -1084,7 +1209,7 @@ export async function importAssets(user, rows) {
   // an Instagram download + an upload; not worth holding the response for).
   void storeProfilePicsSequentially(toStorePic);
 
-  return { created, skipped };
+  return { created, updated, proposed, skipped };
 }
 
 /**

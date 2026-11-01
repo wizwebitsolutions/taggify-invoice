@@ -94,11 +94,13 @@ function Receivables() {
   const canOpenPlan = canUse(user, "plans.view");
 
   return (
-    <div className="flex flex-col gap-5 pt-2">
-      <div>
-        <p className="text-body font-medium text-fg-strong">Finance</p>
-        <h1 className="text-display">Receivables</h1>
-        <p className="mt-1 text-body text-muted-foreground">What clients owe Taggify for approved plans.</p>
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <p className="page-eyebrow">Finance</p>
+          <h1 className="text-display">Receivables</h1>
+          <p className="mt-1 text-body text-muted-foreground">What clients owe Taggify for approved plans.</p>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -107,7 +109,7 @@ function Receivables() {
         <MetricTile tone="amber" icon={Clock} label="Oldest unpaid" loading={list.isLoading} value={oldest ? plural(daysSince(oldest.issuedAt), "day") : "—"} meta={oldest ? `${clientOf(oldest)} · issued ${day(oldest.issuedAt)}` : "Nothing unpaid"} />
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="ledger-panel">
         <Tabs
           value={tab}
           onValueChange={(v) => {
@@ -115,7 +117,7 @@ function Receivables() {
             setPage(1);
           }}
         >
-          <div className="flex items-end gap-4 px-5 pt-2">
+          <div className="tab-shelf flex items-end gap-4">
             <TabsList className="flex-1 border-b-0">
               {(Object.keys(TABS) as Tab[]).map((k) => (
                 <TabsTrigger key={k} value={k}>
@@ -125,7 +127,7 @@ function Receivables() {
             </TabsList>
           </div>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2 border-t px-5 py-4">
+        <div className="filter-bar">
           <SearchField
             label="Search receivables"
             placeholder="Search client, planner or invoice no..."

@@ -6,6 +6,7 @@ import { motion } from "motion/react";
 import { FileSpreadsheet, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { inputClass } from "@/components/ui/input";
 import { CARD, FIELD, MICRO, errorMessage, fadeRise } from "@/components/bulk-track/shared";
 import { bulkTrack as bulkTrackApi } from "@/lib/api-client";
@@ -191,7 +192,7 @@ export function ConnectSheetCard({ onConnected, index = 0 }: { onConnected: () =
               { label: "Post engagement", hint: "views, likes, comments, shares, saves", checked: fetchEngagement, set: setFetchEngagement },
             ].map((o) => (
               <label key={o.label} className="flex cursor-pointer items-center gap-2 text-caption font-normal text-foreground">
-                <input type="checkbox" checked={o.checked} onChange={(e) => o.set(e.target.checked)} className="h-3.5 w-3.5 accent-success" />
+                <Checkbox className="h-4 w-4" checked={o.checked} onCheckedChange={(v) => o.set(v === true)} />
                 <span className="font-medium">{o.label}</span>
                 <span className="text-muted-foreground">({o.hint})</span>
               </label>

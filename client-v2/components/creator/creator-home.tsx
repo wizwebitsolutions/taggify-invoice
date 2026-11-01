@@ -7,7 +7,7 @@ import { ArrowRight, Upload, Wallet } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { canUse, type Link as Post } from "@/lib/api-client";
 import { POST_STATUS } from "@/lib/campaigns";
-import { captionTitle, formatLabel, latestSnapshot } from "@/lib/finance";
+import { captionTitle, formatLabel, latestSnapshot, postThumbSrc } from "@/lib/finance";
 import { personLabel, plural } from "@/lib/format";
 import { useCampaigns } from "@/lib/queries/campaigns";
 import { useMyPaid, useMyPending, useMyPosts } from "@/lib/queries/creator";
@@ -44,11 +44,11 @@ export function CreatorHome() {
   const lastPaid = paid.data?.items?.[0];
 
   return (
-    <div className="flex flex-col gap-6 pt-2">
-      <Card className="flex items-center gap-4 overflow-hidden p-5 md:p-6">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+    <div className="workspace-page">
+      <Card className="dashboard-hero">
+        <div className="dashboard-hero-copy">
           <div>
-            <p className="text-body text-muted-foreground">Hi {firstName}</p>
+            <p className="text-body-strong text-brand-ink">Hi {firstName}</p>
             <h1 className="text-display">{toFix.length ? plural(toFix.length, "thing") + " to fix" : live.length ? "Ready for your next post" : "You're all caught up"}</h1>
           </div>
           {canSubmit && (
@@ -60,18 +60,20 @@ export function CreatorHome() {
             </Button>
           )}
         </div>
-        <Illustration name="creator-01" className="hidden h-36 w-auto sm:block" />
+        <div className="dashboard-art" aria-hidden>
+          <Illustration name="creator-01" className="w-full" />
+        </div>
       </Card>
 
       {toFix.length > 0 && (
         <section aria-labelledby="fix-title" className="flex flex-col gap-3">
-          <h2 id="fix-title" className="text-section">
+          <h2 id="fix-title" className="section-heading text-section">
             Fix these
           </h2>
-          <Card className="divide-y overflow-hidden border-danger/30">
+          <Card className="section-panel divide-y border-danger/30">
             {toFix.map((p) => (
               <div key={p.id} className="flex flex-wrap items-center gap-3 p-4">
-                <ContentThumb src={latestSnapshot(p)?.thumbnailUrl} format={p.format} />
+                <ContentThumb src={postThumbSrc(p)} format={p.format} />
                 <span className="min-w-0 flex-1 basis-40">
                   <span className="block truncate text-body-strong">{captionTitle(latestSnapshot(p)?.caption) ?? formatLabel(p.format)}</span>
                   <span className="block truncate text-small text-fg-muted">
@@ -95,7 +97,7 @@ export function CreatorHome() {
 
       <section aria-labelledby="camp-title" className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
-          <h2 id="camp-title" className="text-section">
+          <h2 id="camp-title" className="section-heading text-section">
             Your campaigns
           </h2>
           <Link href="/campaigns" className="ml-auto text-small font-semibold text-brand-ink hover:underline">
@@ -107,12 +109,13 @@ export function CreatorHome() {
         ) : live.length === 0 ? (
           <Card className="p-6 text-center text-small text-muted-foreground">No posts are due right now. When a brand books one of your pages, it shows up here.</Card>
         ) : (
-          <Card className="divide-y overflow-hidden">
+          <Card className="section-panel divide-y">
             {live.slice(0, 5).map((c) => {
               const booked = (c.pageQuota ?? []).reduce((s, q) => s + q.booked, 0);
               const done = (c.pageQuota ?? []).reduce((s, q) => s + q.submitted, 0);
               return (
-                <Link key={c.id} href={`/campaigns/${c.id}`} className="flex items-center gap-4 p-4 text-foreground hover:bg-accent hover:text-foreground">
+                <Link key={c.id} href={`/campaigns/${c.id}`} className="dashboard-row gap-4">
+                  <span aria-hidden className="grid h-12 w-12 shrink-0 place-items-center rounded-md bg-brand-soft text-card-title text-brand-ink">{c.brandName.slice(0, 1).toUpperCase()}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-body-strong">{c.title}</span>
                     <span className="block text-small text-fg-muted">
@@ -133,7 +136,7 @@ export function CreatorHome() {
       {isCreator && canUse(user, "finance.view") && (
         <section aria-labelledby="money-title" className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
-            <h2 id="money-title" className="text-section">
+            <h2 id="money-title" className="section-heading text-section">
               Money
             </h2>
             <Link href="/money" className="ml-auto text-small font-semibold text-brand-ink hover:underline">

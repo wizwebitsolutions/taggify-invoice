@@ -42,7 +42,7 @@ function Settings() {
   const people = usePeople(canSeePeople(user));
 
   const tabs: { value: Tab; label: string }[] = [
-    ...(canSeePeople(user) ? [{ value: "people" as const, label: people.data ? `People & access (${people.data.length})` : "People & access" }] : []),
+    ...(canSeePeople(user) ? [{ value: "people" as const, label: people.data ? `People & access (${people.data.filter((u) => !u.deactivatedAt).length})` : "People & access" }] : []),
     ...(canEditNumbering(user) ? [{ value: "numbering" as const, label: "Invoice numbering" }] : []),
     ...(canSeeJobs(user) ? [{ value: "jobs" as const, label: "Background jobs" }] : []),
     ...(canConnectGoogle(user) ? [{ value: "google" as const, label: "Google Sheets" }] : []),
@@ -58,10 +58,12 @@ function Settings() {
   const team = !staff && canSeeTeam(user);
 
   return (
-    <div className="flex flex-col gap-5 pt-2">
-      <div>
-        <h1 className="text-display">Settings</h1>
-        <p className="mt-1 text-body text-muted-foreground">{staff ? "People and access, numbering, and background jobs in one place." : ownLine(canSeeOwnBilling(user), team)}</p>
+    <div className="workspace-page">
+      <div className="page-heading">
+        <div className="page-heading-copy">
+          <h1 className="text-display">Settings</h1>
+          <p className="mt-1 text-body text-muted-foreground">{staff ? "People and access, numbering, and background jobs in one place." : ownLine(canSeeOwnBilling(user), team)}</p>
+        </div>
       </div>
 
       {!staff ? (
@@ -70,9 +72,9 @@ function Settings() {
           {team && <TeamTab bare />}
         </>
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="ledger-panel">
           <Tabs value={tab} onValueChange={(v) => router.replace(`${pathname}?tab=${v}`, { scroll: false })}>
-            <div className="overflow-x-auto px-5 pt-2">
+            <div className="tab-shelf">
               <TabsList className="border-b-0">
                 {tabs.map((t) => (
                   <TabsTrigger key={t.value} value={t.value}>

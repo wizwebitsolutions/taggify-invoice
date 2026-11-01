@@ -6,6 +6,7 @@ import {
   House,
   IdCard,
   Radar,
+  Smartphone,
   Send,
   Upload,
   Settings,
@@ -85,6 +86,8 @@ export const NAV: NavItem[] = [
   { key: "reports", label: "Reports", icon: BarChart3, href: "/reports", built: true, roles: ["ADMIN", "FINANCE"] },
   // 12 Oct (v1 replaced "Job runs" with it). Opt-in: Admin by default, anyone else once granted on People → Edit access.
   { key: "bulk-track", label: "Bulk Tracker", icon: Radar, href: "/bulk-track", built: true, optInKey: "bulkTrack.view" },
+  // 24 Oct. Opt-in like Bulk Tracker: paste public reel/post links, see Instagram's own embed of each.
+  { key: "post-tracker", label: "Post Tracker", icon: Smartphone, href: "/post-tracker", built: true, optInKey: "postTracker.view" },
   // Everyone: My profile. The People, numbering and jobs tabs inside are gated per permission (lib/settings.ts).
   { key: "settings", label: "Settings", icon: Settings, href: "/settings", built: true },
 ];

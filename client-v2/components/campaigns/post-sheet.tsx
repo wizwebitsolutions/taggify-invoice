@@ -8,7 +8,7 @@ import { ExternalLink, Image as ImageIcon, RefreshCw, Trash2 } from "lucide-reac
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, hasAccess, links as linksApi, type Link as Post } from "@/lib/api-client";
 import { POST_STATUS } from "@/lib/campaigns";
-import { captionTitle, formatLabel, latestSnapshot } from "@/lib/finance";
+import { captionTitle, formatLabel, latestSnapshot, postThumbSrc } from "@/lib/finance";
 import { personLabel } from "@/lib/format";
 import { invalidateAfterPostChange } from "@/lib/queries/campaigns";
 import { Button } from "@/components/ui/button";
@@ -81,7 +81,7 @@ function PostDetails({ post, focus, onClose }: { post: Post; focus: PostSheetFoc
     <>
       <SheetHeader className="gap-3 border-b p-5 text-left">
         <div className="flex items-center gap-3">
-          <ContentThumb src={snap?.thumbnailUrl} format={post.format} size={56} />
+          <ContentThumb src={postThumbSrc(post)} format={post.format} size={56} />
           <div className="min-w-0">
             <SheetTitle className="truncate text-section">{title}</SheetTitle>
             <SheetDescription className="flex items-center gap-1 truncate">

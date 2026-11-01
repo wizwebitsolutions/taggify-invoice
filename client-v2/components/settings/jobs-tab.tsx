@@ -65,9 +65,9 @@ export function JobsTab() {
   if (runs.isError) return <LoadError onRetry={() => runs.refetch()} what="job runs" />;
 
   return (
-    <div className="flex flex-col gap-6 border-t p-5">
+    <div className="flex flex-col gap-6 border-t p-6">
       <section aria-labelledby="jobs-latest" className="flex flex-col gap-3">
-        <h2 id="jobs-latest" className="text-card-title">
+        <h2 id="jobs-latest" className="section-heading text-card-title">
           Jobs
         </h2>
         <ul className="grid gap-3 md:grid-cols-2">
@@ -75,7 +75,7 @@ export function JobsTab() {
             const last = latest.get(name);
             const run = runNow[name];
             return (
-              <li key={name} className="flex items-start gap-3 rounded-card border p-4" data-testid={`job-${name}`}>
+              <li key={name} className="flex flex-wrap items-start gap-4 rounded-card border border-input bg-muted/30 p-5" data-testid={`job-${name}`}>
                 <div className="min-w-0 flex-1">
                   <p className="text-body-strong">{labelOf(name)}</p>
                   {JOBS[name] && <p className="text-small text-muted-foreground">{JOBS[name].what}</p>}
@@ -106,7 +106,7 @@ export function JobsTab() {
       </section>
 
       <section aria-labelledby="jobs-history" className="flex flex-col gap-3">
-        <h2 id="jobs-history" className="text-card-title">
+        <h2 id="jobs-history" className="section-heading text-card-title">
           History
         </h2>
         {runs.isLoading ? (

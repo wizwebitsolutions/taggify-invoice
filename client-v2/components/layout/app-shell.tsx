@@ -57,13 +57,13 @@ export function AppShell({ active, children, hideEmailVerifyBanner }: { active: 
   return (
     <RequireAuth>
       {/* No background here: the canvas gradient (CanvasGlow in the root layout) shows through. */}
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen bg-transparent">
         <Sidebar active={active} collapsed={collapsed} onToggle={toggle} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar active={active} />
-          <main className={cn("w-full max-w-content flex-1 px-4 pb-10 pt-2 md:px-8", creatorSide && "pb-24 md:pb-10")}>
+          <main className={cn("relative w-full max-w-content flex-1 px-4 pb-10 pt-6 md:px-8 md:pt-8", creatorSide && "pb-24 md:pb-10")}>
             <EmailVerifyBanner hidden={hideEmailVerifyBanner} />
-            {children}
+            <div className="animate-fade-in">{children}</div>
           </main>
         </div>
         <CreatorTabs active={active} />

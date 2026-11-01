@@ -19,6 +19,9 @@ vi.mock("../../middleware/requireAuth.js", () => ({
   },
 }));
 
+const enqueueCapture = vi.fn(async () => {});
+vi.mock("./worker.js", () => ({ enqueueCapture: (...a) => enqueueCapture(...a) }));
+
 const { default: router } = await import("./routes.js");
 const { errorHandler } = await import("../../middleware/errorHandler.js");
 
@@ -83,6 +86,7 @@ const EVERY_ROUTE = [
   ["GET", "/"],
   ["PATCH", "/tp-1", { broken: true }],
   ["DELETE", "/tp-1"],
+  ["POST", "/tp-1/capture"],
 ];
 
 describe("access", () => {
@@ -140,7 +144,7 @@ describe("scope", () => {
 
 describe("POST / — adding links", () => {
   it("adds valid lines, reports duplicates and rejects with reasons", async () => {
-    mockPrisma.trackedPost.findMany.mockResolvedValueOnce([{ shortcode: "OLDcode123" }]);
+    mockPrisma.trackedPost.findMany.mockResolvedValueOnce([{ shortcode: "OLDcode123" }]).mockResolvedValueOnce([{ id: "new-1" }]);
     const res = await call(GRANTED_CREATOR, "POST", "/", {
       urls: [REEL, "https://www.instagram.com/reels/C9xYz_12-Ab/", "https://www.instagram.com/p/OLDcode123/", "https://www.instagram.com/somepage/", "nope"],
       note: "Diwali drop",
@@ -155,6 +159,8 @@ describe("POST / — adding links", () => {
     expect(data).toEqual([
       { createdById: "cr-2", inputUrl: REEL, canonicalUrl: "https://www.instagram.com/reel/C9xYz_12-Ab/", shortcode: "C9xYz_12-Ab", kind: "reel", note: "Diwali drop" },
     ]);
+    // Only the new card is sent for a snapshot.
+    expect(enqueueCapture.mock.calls).toEqual([["new-1"]]);
     // Re-pasting an archived card brings it back.
     expect(mockPrisma.trackedPost.updateMany.mock.calls[0][0]).toEqual({
       where: { createdById: "cr-2", shortcode: { in: ["OLDcode123"] }, archivedAt: { not: null } },
@@ -205,6 +211,22 @@ describe("GET / and PATCH", () => {
     mockPrisma.trackedPost.findUnique.mockResolvedValue(card({ archivedAt: new Date() }));
     expect((await call(GRANTED_CREATOR, "DELETE", "/tp-1")).status).toBe(200);
     expect(mockPrisma.trackedPost.delete).toHaveBeenCalledWith({ where: { id: "tp-1" } });
+  });
+
+  it("re-capture: queues a fresh snapshot, but not twice at once or within 10 minutes", async () => {
+    mockPrisma.trackedPost.findUnique.mockResolvedValue(card({ captureStatus: "done", capturedAt: new Date(Date.now() - 11 * 60_000) }));
+    const ok = await call(GRANTED_CREATOR, "POST", "/tp-1/capture");
+    expect(ok.status).toBe(200);
+    expect(mockPrisma.trackedPost.update.mock.calls[0][0].data).toEqual({ captureStatus: "queued", captureError: null, captureCount: 0 });
+    expect(enqueueCapture).toHaveBeenCalledWith("tp-1");
+
+    mockPrisma.trackedPost.findUnique.mockResolvedValue(card({ captureStatus: "done", capturedAt: new Date() }));
+    expect((await call(GRANTED_CREATOR, "POST", "/tp-1/capture")).status).toBe(429);
+    mockPrisma.trackedPost.findUnique.mockResolvedValue(card({ captureStatus: "queued" }));
+    expect((await call(GRANTED_CREATOR, "POST", "/tp-1/capture")).status).toBe(409);
+    mockPrisma.trackedPost.findUnique.mockResolvedValue(card({ createdById: "someone-else", captureStatus: "failed" }));
+    expect((await call(GRANTED_CREATOR, "POST", "/tp-1/capture")).status).toBe(404);
+    expect(enqueueCapture).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an empty update", async () => {

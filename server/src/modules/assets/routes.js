@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, bulkDeleteSchema, proposeEditSchema, decideEditSchema } from "./schemas.js";
+import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, bulkDeleteSchema, bulkApprovalSchema, proposeEditSchema, decideEditSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import { requireRole } from "../../middleware/requireRole.js";
@@ -75,6 +75,16 @@ router.post("/", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), valid
 router.put("/:id/approval", requireAccess("inventory.approve"), validateBody(setApprovalSchema), async (req, res, next) => {
   try {
     res.json(await assetsService.setApprovalStatus(req.params.id, req.body.approvalStatus));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Approvals' "Approve selected" (1 Nov) — the same gate as a single decision;
+// pages that aren't pending come back in `skipped` with the reason.
+router.post("/bulk-approval", requireAccess("inventory.approve"), validateBody(bulkApprovalSchema), async (req, res, next) => {
+  try {
+    res.json(await assetsService.bulkSetApprovalStatus(req.body.assetIds, req.body.approvalStatus));
   } catch (err) {
     next(err);
   }

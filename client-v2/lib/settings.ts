@@ -121,6 +121,8 @@ const SECTION_META: Record<PermissionSection, SectionMeta> = {
   },
   // 12 Oct — opt-in for any role, off by default except Admin. Rows are always the account's own batches; only an Admin sees everyone's.
   bulkTrack: { label: "Bulk Tracker", view: "Track any Instagram profile or post for research (not tied to campaigns or payouts)", actions: {} },
+  // 24 Oct — same opt-in shape as Bulk Tracker; each account only sees the links it added.
+  postTracker: { label: "Post Tracker", view: "Paste public Instagram reel or post links and see them as snapshots", actions: {} },
 };
 
 /** Own-content wording for creators, team members and planners: the same keys, their own content only. */

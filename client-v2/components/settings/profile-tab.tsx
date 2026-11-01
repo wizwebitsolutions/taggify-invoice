@@ -46,8 +46,8 @@ export function ProfileTab({ bare = false }: { bare?: boolean }) {
 
 function Card({ title, description, children, id }: { title: string; description?: string; children: React.ReactNode; id: string }) {
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-4 rounded-card border bg-card p-5">
-      <div>
+    <section aria-labelledby={id} className="settings-section">
+      <div className="form-section-heading">
         <h2 id={id} className="text-card-title">
           {title}
         </h2>
@@ -98,7 +98,7 @@ function ContactCard({ me }: { me: User }) {
 
   return (
     <Card id="contact-title" title="Your details" description="How Taggify reaches you. Your sign-in email can't be changed here once it's verified; ask an admin.">
-      <div className="flex items-center gap-3">
+      <div className="settings-identity">
         <UserAvatar name={me.name ?? me.email} size="md" />
         <span className="min-w-0">
           <span className="block truncate text-body-strong">{me.name?.trim() || me.email}</span>

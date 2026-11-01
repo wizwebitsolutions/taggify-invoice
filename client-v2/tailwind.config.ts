@@ -162,7 +162,7 @@ const config: Config = {
         3: v("shadow-3"),
         modal: v("shadow-modal"),
         premium: v("shadow-premium"),
-        focus: "0 0 0 3px rgb(var(--ring-soft))",
+        focus: "0 0 0 1px rgb(var(--ring-soft))",
       },
       spacing: {
         sidebar: v("sidebar-width"),
@@ -178,8 +178,8 @@ const config: Config = {
         pill: "26px", // status pills ("Verified", "Due")
       },
       maxWidth: { content: v("content-max") },
-      // Focus ring and the active-tab underline are 3px (ux/design-system.md).
-      ringWidth: { 3: "3px" },
+      // Focus ring is 1px (user choice, 21 Oct); the active-tab underline stays 3px.
+      ringWidth: { 3: "3px", focus: "1px" },
       borderWidth: { 3: "3px" },
       transitionDuration: { hover: "120ms", micro: "160ms", page: "180ms", drawer: "220ms" },
       transitionTimingFunction: { out: v("ease-out") },
