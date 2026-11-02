@@ -92,6 +92,36 @@ async function creatorsApi(page: Page, opts: { createStatus?: number; createErro
 test.describe("Creators", () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
 
+  test("inventory keeps vendor names and complete rate summaries horizontal at narrow widths", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 900 });
+    await signIn(page, "ADMIN");
+    await creatorsApi(page, { assets: [asset("a1", "riya.eats", { ...RIYA, name: "Test Creator Two With A Long Name" }, 482000, {
+      rateCards: [{ format: "reel", amount: "25000" }, { format: "story", amount: "5000" }],
+    })] });
+    await page.goto("/creators");
+    const row = page.getByRole("row", { name: /riya.eats/ });
+    await expect(row.getByRole("cell", { name: "Test Creator Two With A Long Name", exact: true })).toHaveCSS("white-space", "nowrap");
+    const rate = row.locator(".inventory-rate");
+    await expect(rate).toHaveText(/Reel\s*₹25,000\s*\+1 more/);
+    await expect(rate).toHaveCSS("flex-wrap", "nowrap");
+    await expect(row.getByRole("cell", { name: /Reel.*₹25,000/ })).toHaveAttribute("title", /Story: ₹5,000/);
+  });
+
+  test("page details prioritize audience values and keep rates in labelled rows", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await creatorsApi(page);
+    await page.goto("/creators");
+    await page.getByRole("button", { name: "View riya.eats", exact: true }).click();
+    const panel = page.getByRole("dialog");
+    await expect(panel.getByRole("region", { name: "Audience & engagement" })).toBeVisible();
+    const values = panel.locator(".detail-metrics dd");
+    await expect(values.nth(0)).toContainText("4,82,000");
+    await expect(values.nth(0)).toHaveCSS("font-size", "32px");
+    await expect(values.nth(2)).toHaveCSS("font-size", "16px");
+    await expect(panel.getByRole("region", { name: "Rates", exact: true }).locator(".detail-key-value").filter({ hasText: "Reel" }).first()).toContainText("₹32,000");
+    await expect(panel.getByRole("switch", { name: "Available for new plans", exact: true })).toBeChecked();
+  });
+
   test("admin: pages list with search, the page panel, and edits that hit the right routes", async ({ page }) => {
     await signIn(page, "ADMIN");
     const calls = await creatorsApi(page);
@@ -403,8 +433,8 @@ test.describe("Creators", () => {
     await expect(page.getByRole("row", { name: /desi\.memes/ }).getByText("Inactive")).toBeVisible();
     await page.getByRole("button", { name: /riya\.eats/ }).click();
     const panel = page.getByRole("dialog");
-    await expect(panel.getByRole("switch", { name: "Active" })).toBeChecked();
-    await panel.getByRole("switch", { name: "Active" }).click();
+    await expect(panel.getByRole("switch", { name: "Available for new plans" })).toBeChecked();
+    await panel.getByRole("switch", { name: "Available for new plans" }).click();
     await expect(page.getByText("riya.eats is inactive.")).toBeVisible();
     expect(calls.active).toEqual([{ id: "a1", isActive: false }]);
   });
@@ -416,7 +446,7 @@ test.describe("Creators", () => {
       await page.goto("/creators");
       await page.getByRole("button", { name: /riya\.eats/ }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
-      await expect(page.getByRole("dialog").getByRole("switch", { name: "Active" })).toHaveCount(0);
+      await expect(page.getByRole("dialog").getByRole("switch", { name: "Available for new plans" })).toHaveCount(0);
       await page.keyboard.press("Escape");
     }
   });

@@ -1,11 +1,11 @@
 "use client";
 
-import { Suspense, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ClipboardList, Eye, MessageCircle, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ClipboardList, Eye, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, hasAccess, type Asset } from "@/lib/api-client";
@@ -13,7 +13,6 @@ import { canAddForOwner, canApprovePages, canDeletePage, canImportPages, canEdit
 import { money, personLabel, plural } from "@/lib/format";
 import { canEditPlan } from "@/lib/plans";
 import { FORMATS, formatLabel } from "@/lib/formats";
-import { cn } from "@/lib/utils";
 import { invalidatePages, useAllPages } from "@/lib/queries/creators";
 import { AppShell } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -30,10 +28,12 @@ import { FilterSelect } from "@/components/taggify/filter-select";
 import { Money } from "@/components/taggify/money";
 import { PlatformIcon } from "@/components/taggify/platform-icon";
 import { SearchField } from "@/components/taggify/search-field";
+import { SelectionBar } from "@/components/taggify/selection-bar";
 import { StatusPill } from "@/components/taggify/status-pill";
 import { UserAvatar } from "@/components/taggify/user-avatar";
 import { audienceLabel, displayHandle, PageAvatar, PageAvatarStack } from "@/components/finance/identity";
 import { Pager, PER_PAGE } from "@/components/finance/pager";
+import { WhatsAppIcon } from "@/components/taggify/platform-icon";
 import { LoadError, NoAccess } from "@/components/finance/states";
 import { AddPageDialog } from "@/components/creators/add-page-dialog";
 import { ImportPagesDialog } from "@/components/creators/import-pages-dialog";
@@ -338,7 +338,7 @@ function Creators() {
                   <TableCell className="text-right">{count(v.followers)}</TableCell>
                   <TableCell className="text-right">{v.campaigns}</TableCell>
                   <TableCell>
-                    <span className="flex flex-wrap gap-1">
+                    <span className="inline-flex flex-nowrap items-center gap-2">
                       {v.pending > 0 && <StatusPill tone="warning">{plural(v.pending, "page")} waiting</StatusPill>}
                       {v.rejected > 0 && <StatusPill tone="danger">{plural(v.rejected, "page")} rejected</StatusPill>}
                       {v.pending === 0 && v.rejected === 0 && <StatusPill tone="success">Approved</StatusPill>}
@@ -418,22 +418,26 @@ function Creators() {
                       </TableCell>
                     )}
                     <TableCell>
-                      <button type="button" onClick={() => setOpen(p)} className="flex items-center gap-3 rounded-md text-left text-foreground hover:text-brand-ink">
-                        <PageAvatar assetId={p.id} handle={p.handle} size="md" />
-                        <span className="min-w-0">
-                          <span className="flex items-center gap-1 text-body-strong">
-                            <PlatformIcon platform={p.platform} size={16} />
-                            <span className="truncate">{displayHandle(p.handle, p.platform)}</span>
-                          </span>
-                          <span className="block max-w-48 truncate text-small text-fg-muted">{scrape === "fetching" ? "Fetching from Instagram…" : scrape === "failed" ? "Couldn't fetch the profile" : (p.fullName ?? (p.platform.toLowerCase() === "youtube" ? "YouTube" : "Instagram"))}</span>
-                        </span>
-                      </button>
-                      {p.groupLink && (
-                        <a href={p.groupLink} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-small text-muted-foreground hover:text-brand-ink" title={p.groupLink}>
-                          <MessageCircle className="h-3.5 w-3.5" aria-hidden />
-                          Group
-                        </a>
-                      )}
+                      <div className="inventory-identity">
+                        <button type="button" tabIndex={-1} aria-hidden onClick={() => setOpen(p)} className="shrink-0 rounded-pill">
+                          <PageAvatar assetId={p.id} handle={p.handle} size="md" />
+                        </button>
+                        <div className="inventory-identity-text">
+                          <div className="inventory-identity-line">
+                            <button type="button" onClick={() => setOpen(p)} className="inline-flex min-w-0 items-center gap-2 rounded-md text-left text-body-strong text-foreground hover:text-brand-ink">
+                              <PlatformIcon platform={p.platform} size={16} />
+                              <span className="truncate">{displayHandle(p.handle, p.platform)}</span>
+                            </button>
+                            {p.groupLink && (
+                              <a href={p.groupLink} target="_blank" rel="noreferrer" className="whatsapp-chip" title={`Open WhatsApp group: ${p.groupLink}`} aria-label={`WhatsApp group for ${displayHandle(p.handle, p.platform)}`}>
+                                <WhatsAppIcon size={14} />
+                                WhatsApp
+                              </a>
+                            )}
+                          </div>
+                          <span className="inventory-identity-name">{scrape === "fetching" ? "Fetching from Instagram…" : scrape === "failed" ? "Couldn't fetch the profile" : (p.fullName ?? (p.platform.toLowerCase() === "youtube" ? "YouTube" : "Instagram"))}</span>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{personLabel(p.owner, "—")}</TableCell>
                     <TableCell>{p.category ? <Badge variant="tag">{p.category}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
@@ -441,11 +445,13 @@ function Creators() {
                     <TableCell className="text-right">{count(p.followers)}</TableCell>
                     <TableCell className="text-right">{count(p.engagement.avgViews)}</TableCell>
                     <TableCell className="text-right" title={allRates}>
-                      <span className="block font-semibold">{reel != null ? <>Reel <Money value={reel} /></> : priced.length ? <>{formatLabel(priced[0])} <Money value={rateOf(p, priced[0])!} /></> : <span className="font-normal text-muted-foreground">No rates</span>}</span>
-                      {others.length > 0 && <span className="block text-small text-fg-muted">{reel != null ? `+${others.length} more` : others.length > 1 ? `+${others.length - 1} more` : ""}</span>}
+                      <span className="inventory-rate">
+                      <span className="font-semibold">{reel != null ? <>Reel <Money value={reel} /></> : priced.length ? <>{formatLabel(priced[0])} <Money value={rateOf(p, priced[0])!} /></> : <span className="font-normal text-muted-foreground">No rates</span>}</span>
+                      {others.length > 0 && <span className="text-small text-fg-muted">{reel != null ? `+${others.length} more` : others.length > 1 ? `+${others.length - 1} more` : ""}</span>}
+                      </span>
                     </TableCell>
                     <TableCell>
-                      <span className="flex flex-wrap gap-1">
+                      <span className="inline-flex flex-nowrap items-center gap-2">
                         <StatusPill tone={st.tone}>{st.label}</StatusPill>
                         {p.isActive === false && <StatusPill tone="neutral">Inactive</StatusPill>}
                         {p.profileBroken && (
@@ -502,57 +508,6 @@ function Creators() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-/**
- * v1 Inventory's selection row: tick every page the filter shows (across pager
- * pages) or the first N of them in the current sort, then act on the selection.
- */
-function SelectionBar({ total, selectedCount, onToggleAll, onSelectFirst, children }: { total: number; selectedCount: number; onToggleAll: () => void; onSelectFirst: (n: number) => void; children?: ReactNode }) {
-  const [n, setN] = useState("");
-  const all = selectedCount === total;
-  const apply = () => {
-    const v = Number.parseInt(n, 10);
-    if (!Number.isFinite(v) || v <= 0) return;
-    onSelectFirst(v);
-    setN("");
-  };
-  return (
-    <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2 border-t px-5 py-3", selectedCount > 0 && "bg-brand-50")} data-testid="selection-bar">
-      <label className="flex cursor-pointer select-none items-center gap-2 text-body-strong">
-        <Checkbox checked={selectedCount === 0 ? false : all ? true : "indeterminate"} onCheckedChange={onToggleAll} aria-label={all ? `Deselect all ${total} pages` : `Select all ${total} pages`} />
-        {selectedCount > 0 ? `${selectedCount} of ${total} selected` : `Select all ${total}`}
-      </label>
-      <span className="flex flex-wrap items-center gap-2 text-small text-muted-foreground">
-        Select first
-        {[10, 25, 50]
-          .filter((x) => x < total)
-          .map((x) => (
-            <Button key={x} size="sm" variant="outline" onClick={() => onSelectFirst(x)}>
-              {x}
-            </Button>
-          ))}
-        <Input
-          aria-label={`Number of pages to select (out of ${total})`}
-          inputMode="numeric"
-          placeholder="e.g. 5"
-          className="h-control-sm w-20"
-          value={n}
-          onChange={(e) => setN(e.target.value.replace(/\D/g, "").slice(0, 5))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              apply();
-            }
-          }}
-        />
-        <Button size="sm" variant="outline" disabled={!n} onClick={apply}>
-          Select
-        </Button>
-      </span>
-      {children}
     </div>
   );
 }

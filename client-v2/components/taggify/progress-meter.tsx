@@ -38,7 +38,7 @@ export function ProgressBar({ value, max, tone = "auto", label, className }: { v
       aria-valuemin={0}
       aria-valuemax={max}
       aria-valuenow={value}
-      className={cn("h-1.5 w-full overflow-hidden rounded-pill bg-muted ring-1 ring-inset ring-border", className)}
+      className={cn("budget-track w-full overflow-hidden rounded-pill bg-muted ring-1 ring-inset ring-border", className)}
     >
       <div
         className={cn("h-full rounded-pill bg-gradient-to-r transition-[width] duration-drawer ease-out motion-reduce:transition-none", FILL[key])}
@@ -57,26 +57,16 @@ export function SpendMeter({ spent, cap, label, className }: { spent: number; ca
   const pct = cap > 0 ? Math.round((spent / cap) * 100) : 0;
   const key = autoTone(spent, cap);
   return (
-    <div className={cn("flex min-w-44 flex-col gap-2", className)}>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate">
-          <Money value={spent} className="text-body-strong text-foreground" />
-          <span className="text-caption text-fg-muted">
-            {" "}
-            of <Money value={cap} />
-          </span>
-        </span>
-        {spent === 0 ? (
-          <span className="shrink-0 text-caption text-fg-muted">Not started</span>
-        ) : over ? (
-          <span className="shrink-0 text-caption font-semibold text-danger-fg">
-            Over by <Money value={spent - cap} />
-          </span>
-        ) : (
-          <span className={cn("num shrink-0 text-caption font-semibold", key === "warning" ? "text-warning-fg" : "text-fg-muted")}>{pct}%</span>
-        )}
+    <div className={cn("spend-meter", className)}>
+      <div className="spend-meter-heading">
+        <span className="spend-meter-amount"><span className="spend-meter-label">Spent</span><Money value={spent} /></span>
+        <span className={cn("spend-meter-percent", over ? "text-danger-fg bg-danger-soft" : key === "warning" ? "text-warning-fg bg-warning-soft" : "text-brand-ink bg-brand-soft")}>{spent === 0 ? "Not started" : `${pct}% used`}</span>
       </div>
       <ProgressBar value={spent} max={cap} label={label ?? "Spend against budget"} />
+      <div className="spend-meter-footer">
+        <span>Budget <Money value={cap} /></span>
+        {over && <span className="text-danger-fg">Over by <Money value={Math.round(Math.round(spent * 100) - Math.round(cap * 100)) / 100} /></span>}
+      </div>
     </div>
   );
 }

@@ -34,7 +34,7 @@ export const ChartContainer = React.forwardRef<
         ref={ref}
         data-chart={chartId}
         className={cn(
-          "flex aspect-video justify-center text-label [&_.recharts-cartesian-axis-tick_text]:fill-chart-axis [&_.recharts-cartesian-grid_line]:stroke-chart-grid [&_.recharts-rectangle.recharts-tooltip-cursor]:fill-muted [&_.recharts-surface]:outline-none",
+          "analytics-chart flex aspect-video justify-center text-label [&_.recharts-cartesian-axis-tick_text]:fill-chart-axis [&_.recharts-cartesian-grid_line]:stroke-chart-grid [&_.recharts-rectangle.recharts-tooltip-cursor]:fill-muted [&_.recharts-surface]:outline-none",
           className
         )}
         style={{ ...vars, ...style }}

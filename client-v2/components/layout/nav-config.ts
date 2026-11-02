@@ -66,7 +66,7 @@ export const NAV: NavItem[] = [
     href: "/approvals",
     built: true,
     roles: ["ADMIN"],
-    permissionKeysAny: ["links.approve", "inventory.approve", "plans.approve", "finance.pay"],
+    permissionKeysAny: ["links.approve", "inventory.approve", "plans.approve", "finance.pay", "campaigns.edit"],
   },
   { key: "plans", label: "Plans", icon: ClipboardCheck, href: "/plans", built: true, roles: ["ADMIN", "PLAN_MAKER"], permissionKey: "plans.view", bareRoles: ["PLAN_MAKER"], ownKey: "plans.view" },
   {

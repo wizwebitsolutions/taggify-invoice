@@ -1,7 +1,8 @@
 /*
  * Taggify — tokens sampled from the approved reference
  * ux/design-ref/Taggify Vendor Payout - FINAL.png (see ux/design-ref-analysis.md
- * and ux/mockups/vendor-payout-final.html). Light is the Phase 1 theme.
+ * and ux/mockups/vendor-payout-final.html). Light was refined on 1 Nov 2026;
+ * see ux/design-system.md for the current workspace direction.
  *
  * Semantic colours are RGB channels ("109 93 251") so Tailwind can add opacity
  * (`bg-primary/90`). tailwind.config.ts wraps each one in rgb(var(--x) / <alpha>).
@@ -42,11 +43,103 @@
   --neutral-800: #222222;
   --neutral-900: #121212;
 
+
+  /* Global sizing and typography: edit here to restyle every consumer. */
+  --chart-height: 288px;
+  --meter-height: 8px;
+  --detail-sheet-width: 520px;
+  --space-unit: 4px;
+  --weight-thin: 100;
+  --weight-extralight: 200;
+  --weight-light: 300;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-heading: 650;
+  --weight-bold: 700;
+  --weight-extrabold: 800;
+  --weight-black: 900;
+  --focus-width: 1px;
+  --emphasis-width: 3px;
+  --duration-enter: 200ms;
+  --enter-slide: 24px;
+  --enter-rise: 8px;
+  --control-height: 38px;
+  --control-height-sm: 32px;
+  --control-height-lg: 44px;
+  --pill-height: 24px;
+  --text-display-xl: 48px;
+  --leading-display-xl: 56px;
+  --tracking-display-xl: -0.02em;
+  --weight-display-xl: 700;
+  --text-h1: 32px;
+  --leading-h1: 40px;
+  --tracking-h1: -0.02em;
+  --weight-h1: 700;
+  --text-h2: 24px;
+  --leading-h2: 32px;
+  --tracking-h2: -0.02em;
+  --weight-h2: 650;
+  --text-h3: 20px;
+  --leading-h3: 28px;
+  --tracking-h3: -0.02em;
+  --weight-h3: 650;
+  --text-h4: 16px;
+  --leading-h4: 24px;
+  --tracking-h4: -0.01em;
+  --weight-h4: 650;
+  --text-body-lg: 16px;
+  --leading-body-lg: 24px;
+  --text-body: 14px;
+  --leading-body: 21px;
+  --text-small: 13px;
+  --leading-small: 18px;
+  --text-caption: 12px;
+  --leading-caption: 16px;
+  --weight-caption: 500;
+  --text-micro: 11px;
+  --leading-micro: 14px;
+  --weight-micro: 500;
+  --text-kpi: 28px;
+  --leading-kpi: 32px;
+  --tracking-kpi: -0.02em;
+  --weight-kpi: 700;
+  --text-display: 32px;
+  --leading-display: 38px;
+  --tracking-display: -0.03em;
+  --weight-display: 700;
+  --text-section: 20px;
+  --leading-section: 28px;
+  --tracking-section: -0.02em;
+  --weight-section: 650;
+  --text-card-title: 16px;
+  --leading-card-title: 24px;
+  --tracking-card-title: -0.01em;
+  --weight-card-title: 600;
+  --text-body-strong: 14px;
+  --leading-body-strong: 21px;
+  --weight-body-strong: 600;
+  --text-th: 11px;
+  --leading-th: 16px;
+  --tracking-th: 0.04em;
+  --weight-th: 600;
+  --text-wordmark: 28px;
+  --leading-wordmark: 28px;
+  --tracking-wordmark: -0.045em;
+  --weight-wordmark: 800;
+  --text-label: 12px;
+  --leading-label: 16px;
+  --weight-label: 500;
+  --text-nav-label: 11px;
+  --leading-nav-label: 14px;
+  --tracking-nav-label: 0.08em;
+  --weight-nav-label: 600;
+
   /* Theme-independent scales */
-  --radius: 10px; /* shadcn base radius = buttons, inputs, filter chips */
+  --radius: 8px; /* shared control radius */
   --radius-xs: 5px; /* checkboxes */
   --radius-sm: 7px; /* status pills */
-  --radius-md: 10px;
+  --radius-md: 8px;
   --radius-lg: 12px;
   --radius-card: 16px; /* cards, tiles, page cards, table card */
   --radius-xl: 18px;
@@ -90,10 +183,10 @@
   --brand-200: #fbd5c4;
   --brand-300: #f8b59a;
 
-  --background: 251 249 247; /* canvas #FBF9F7 */
-  --foreground: 20 20 20; /* #141414 */
+  --background: 247 245 241;
+  --foreground: 32 35 31;
   --card: 255 255 255;
-  --card-foreground: 20 20 20;
+  --card-foreground: 32 35 31;
   --popover: 255 255 255;
   --popover-foreground: 20 20 20;
   --elevated: 255 255 255;
@@ -123,16 +216,16 @@
   --secondary: 255 255 255; /* outline button: white + border */
   --secondary-foreground: 20 20 20;
   --muted: 245 243 240; /* #F5F3F0: search field, soft tags */
-  --muted-foreground: 92 92 92; /* #5C5C5C */
-  --accent: 253 252 251; /* row hover #FDFCFB */
+  --muted-foreground: 101 104 95;
+  --accent: 246 247 242;
   --accent-foreground: 20 20 20;
   --destructive: 220 38 38;
   --destructive-hover: 185 28 28;
   --destructive-foreground: 255 255 255;
 
-  --border: 240 236 232; /* #F0ECE8 card edges */
-  --input: 230 225 219; /* #E6E1DB controls */
-  --divider: 243 240 236; /* #F3F0EC table rows */
+  --border: 229 229 222;
+  --input: 213 215 206;
+  --divider: 238 239 232;
   --ring: 244 81 30; /* focus = brand */
   --ring-soft: 253 228 216; /* focus halo */
 
@@ -172,7 +265,7 @@
   --tile-mint-icon: 221 245 231;
   --tile-mint-fg: 22 163 74;
 
-  --sidebar: 255 255 255; /* light sidebar */
+  --sidebar: 252 252 249;
   --sidebar-foreground: 34 34 34;
   --sidebar-label: 142 142 142;
   --sidebar-badge: 244 81 30;
@@ -180,15 +273,15 @@
   --avatar: 18 18 18; /* account initial circle */
   --avatar-foreground: 255 255 255;
 
-  --chart-primary: 244 81 30;
-  --chart-muted: 251 213 196;
+  --chart-primary: 167 139 250;
+  --chart-muted: 224 216 249;
   --chart-grid: 243 240 236;
   --chart-axis: 142 142 142;
 
   --overlay: 20 20 20;
   /* Canvas gradient (13 Oct): warm peach edges, a near-white light that follows the cursor (components/layout/canvas-glow.tsx). */
-  --canvas-tint-1: 252 216 196; /* peach, brand-100/200 family */
-  --canvas-tint-2: 254 230 212; /* softer warm */
+  --canvas-tint-1: 238 239 229;
+  --canvas-tint-2: 245 239 229;
   --canvas-light: 255 255 255; /* the moving light in the middle */
 
   --shadow-1: 0 1px 2px rgba(20, 20, 20, 0.04);
@@ -301,8 +394,8 @@
   --avatar: 17 28 36;
   --avatar-foreground: 236 241 245;
 
-  --chart-primary: 100 235 214;
-  --chart-muted: 20 70 66;
+  --chart-primary: 184 161 255;
+  --chart-muted: 64 59 89;
   --chart-grid: 26 39 49;
   --chart-axis: 110 125 138;
 

@@ -33,7 +33,7 @@ export function Topbar({ active }: { active: string }) {
   const canSearchPayouts = hasAccess(user, "finance.pay");
 
   return (
-    <header className="sticky top-0 z-30 flex h-topbar shrink-0 items-center gap-3 bg-background/60 px-4 backdrop-blur md:gap-5 md:px-8">
+    <header className="workspace-topbar sticky top-0 z-30 flex h-topbar shrink-0 items-center gap-3 bg-background/60 px-4 backdrop-blur md:gap-5 md:px-8">
       <button type="button" className="grid h-10 w-10 place-items-center rounded-md text-foreground hover:bg-muted md:hidden" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
         <Menu className="h-6 w-6" />
       </button>

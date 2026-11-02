@@ -5,7 +5,7 @@ import { mockApi, shot, signIn, type MockRole } from "./fixtures";
 /** Top-bar sun/moon toggle: swaps every token on <html data-theme>, survives a reload, and follows the OS until chosen. API fully mocked. */
 
 const DARK_CANVAS = "rgb(14, 26, 35)"; // --background in dark (#0E1A23)
-const LIGHT_CANVAS = "rgb(251, 249, 247)"; // --background in light (#FBF9F7)
+const LIGHT_CANVAS = "rgb(247, 245, 241)"; // --background in light (#F7F5F1)
 const bodyBg = (page: import("@playwright/test").Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
 for (const role of ["ADMIN", "CREATOR"] as MockRole[]) {

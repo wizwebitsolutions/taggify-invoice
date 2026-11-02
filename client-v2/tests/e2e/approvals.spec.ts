@@ -30,7 +30,7 @@ async function approvalsApi(page: Page) {
     const req = route.request();
     const path = new URL(req.url()).pathname.replace(/^\/api\/links/, "");
     calls.requested.add("links");
-    if (req.method() === "GET") return route.fulfill({ json: { items: [link("l1", "Diwali Thali Hacks", "PENDING_SCREENSHOT_REVIEW", 50), link("l2", "Goa Budget Tips", "INSIGHTS_PENDING", 5)], total: 2, page: 1, pageSize: 100 } });
+    if (req.method() === "GET") return route.fulfill({ json: { items: [link("l1", "Diwali Thali Hacks", "PENDING_SCREENSHOT_REVIEW", 50), link("l2", "Goa Budget Tips", "INSIGHTS_PENDING", 5)], total: new URL(req.url()).searchParams.get("status")?.includes(",") ? 2 : 1, page: 1, pageSize: 100 } });
     const review = path.match(/^\/([^/]+)\/review-screenshot$/);
     if (review) {
       calls.reviews.push({ id: review[1], ...req.postDataJSON() });
@@ -75,12 +75,20 @@ async function approvalsApi(page: Page) {
 test.describe("Approvals", () => {
   test.use({ viewport: { width: 1536, height: 1000 } });
 
-  test("admin: every kind in one queue; a rejected proof needs a reason; Approve & next moves on", async ({ page }) => {
+  test("admin: Approvals opens on category cards; a rejected proof needs a reason; Approve & next moves on", async ({ page }) => {
     await signIn(page, "ADMIN");
     const calls = await approvalsApi(page);
     await page.goto("/approvals");
+    const cards = page.getByRole("list", { name: "Approval categories" });
+    await expect(cards.getByRole("link", { name: /Posts/ })).toContainText("2 waiting");
+    await expect(cards.getByRole("link", { name: /Inventory/ })).toContainText("3 waiting");
+    await expect(cards.getByRole("link", { name: /Users/ })).toContainText("1 waiting");
+    await expect(cards.getByRole("link", { name: /Plans/ })).toContainText("All clear");
+    await shot(page, "approvals-categories");
+
+    await cards.getByRole("link", { name: /Posts/ }).click();
     const queue = page.getByRole("list", { name: "Queue" });
-    await expect(queue.getByRole("button")).toHaveCount(6); // proof, insights, 3 pages, bank details
+    await expect(queue.getByRole("button")).toHaveCount(2); // proof, insights
     // Oldest first: the proof (50h) is selected.
     await expect(page.getByRole("heading", { name: "Diwali Thali Hacks" })).toBeVisible();
     // The mocked screenshot URL doesn't resolve, so the fallback shows with a direct link.
@@ -94,15 +102,17 @@ test.describe("Approvals", () => {
     await dialog.getByRole("button", { name: "Reject" }).click();
     await expect.poll(() => calls.reviews).toEqual([{ id: "l1", approved: false, note: "Screenshot is cut off" }]);
 
-    // Moved on to the next item (bank details, 30h).
-    await expect(page.getByRole("heading", { name: "Kabir Malhotra" })).toBeVisible();
-    // Kinds sit under categories (1 Nov): Posts → Insights.
-    await page.getByRole("radio", { name: /Posts/ }).click();
+    // Moved on to the next item.
+    await expect(page.getByRole("heading", { name: "Goa Budget Tips" })).toBeVisible();
     await page.getByRole("radio", { name: /Insights/ }).click();
     await expect(page.getByText("41,200")).toBeVisible();
     await expect(page.getByRole("button", { name: "Reject…" })).toHaveCount(0);
     await page.getByRole("button", { name: "Approve & next" }).click();
     await expect.poll(() => calls.insights).toEqual(["l2"]);
+
+    // Back up to the cards.
+    await page.getByRole("link", { name: "Back to Approvals" }).click();
+    await expect(page.getByRole("list", { name: "Approval categories" })).toBeVisible();
   });
 
   // 16 Oct: no rate is mandatory. A page with no rates shows "None yet (optional)" and can be approved; the card still opens the page editor.
@@ -115,7 +125,7 @@ test.describe("Approvals", () => {
       return route.fulfill({ json: { id: "a-arjun", approvalStatus: "approved" } });
     });
     await page.route(`${API_URL}/assets/*/profile-pic`, (route) => route.fulfill({ status: 404, body: "" }));
-    await page.goto("/approvals");
+    await page.goto("/approvals?category=inventory&by=pm1");
     await page.getByRole("list", { name: "Queue" }).getByRole("button", { name: /arjun\.fits/ }).click();
     const evidence = page.getByRole("region", { name: "Evidence" });
     await expect(evidence.getByText("None yet (optional)")).toBeVisible();
@@ -130,48 +140,96 @@ test.describe("Approvals", () => {
     await expect.poll(() => approvals).toHaveLength(1);
   });
 
-  // 1 Nov: Inventory → New page groups the waiting pages by who added them; a whole group (or single pages) can be approved at once.
-  test("admin: new pages are grouped by who added them and a group can be approved in one go", async ({ page }) => {
+  // 2 Nov: Inventory opens on the people with pages waiting; a person's page offers select all, first N or single pages.
+  test("admin: Inventory lists who sent pages; open a name and approve the first N of their pages", async ({ page }) => {
     await signIn(page, "ADMIN");
     const calls = await approvalsApi(page);
     await page.route(`${API_URL}/assets/*/profile-pic`, (route) => route.fulfill({ status: 404, body: "" }));
     await page.goto("/approvals");
-    await page.getByRole("radio", { name: /Inventory/ }).click();
-    await page.getByRole("radio", { name: /New page/ }).click();
-    const priya = page.getByRole("group", { name: "Priya Planner" });
-    await expect(priya).toContainText("Plan maker");
-    await expect(priya).toContainText("2 pages");
-    await expect(page.getByRole("group", { name: "Added before tracking" })).toBeVisible();
-    // The focused page's context says who added it.
-    await expect(page.getByRole("region", { name: "Context" })).toContainText("Added by · Plan maker");
-    await shot(page, "approvals-pages-grouped");
+    await page.getByRole("list", { name: "Approval categories" }).getByRole("link", { name: /Inventory/ }).click();
 
-    await page.getByRole("checkbox", { name: "Select all from Priya Planner" }).click();
-    const bar = page.getByRole("region", { name: "Selected pages" });
-    await expect(bar).toContainText("2 pages selected");
-    // Untick one and tick the untracked page: any mix works.
+    const people = page.getByRole("table", { name: "People with inventory waiting" });
+    await expect(people.getByRole("row")).toHaveCount(3); // header + Priya + untracked
+    await expect(people.getByRole("row").nth(1)).toContainText("Priya Planner");
+    await expect(people.getByRole("row").nth(1)).toContainText("Plan maker");
+    await expect(people.getByRole("row").nth(2)).toContainText("Added before tracking");
+    await shot(page, "approvals-inventory-people");
+
+    await people.getByRole("link", { name: /Priya Planner/ }).click();
+    await expect(page.getByRole("heading", { name: "Priya Planner" })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Queue" }).getByRole("button")).toHaveCount(2);
+    await expect(page.getByRole("complementary", { name: "Context" })).toContainText("Added by · Plan maker");
+    await shot(page, "approvals-person-pages");
+
+    // First N, in the queue's order (oldest first).
+    await page.getByLabel("Number of pages to select (out of 2)").fill("1");
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await expect(page.getByTestId("selection-bar")).toContainText("1 of 2 selected");
+    await expect(page.getByRole("checkbox", { name: "Select arjun.fits" })).toBeChecked();
+    // Single pages can be ticked too.
     await page.getByRole("checkbox", { name: "Select arjun.eats" }).click();
-    await page.getByRole("checkbox", { name: "Select old.page" }).click();
-    await expect(bar).toContainText("2 pages selected");
-    await bar.getByRole("button", { name: "Approve selected" }).click();
-    await expect.poll(() => calls.bulk).toEqual([{ assetIds: ["a9", "a11"], approvalStatus: "approved" }]);
+    await expect(page.getByTestId("selection-bar")).toContainText("2 of 2 selected");
+    await page.getByRole("button", { name: "Approve 2 pages" }).click();
+    await expect.poll(() => calls.bulk).toEqual([{ assetIds: expect.arrayContaining(["a9", "a10"]), approvalStatus: "approved" }]);
     await expect(page.getByText("2 pages approved.")).toBeVisible();
+
+    // Browser Back returns to the list of people.
+    await page.goBack();
+    await expect(page.getByRole("table", { name: "People with inventory waiting" })).toBeVisible();
   });
 
-  test("a deep link to one kind lands on its category with that kind picked", async ({ page }) => {
+  test("admin: rejecting selected pages asks first", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    const calls = await approvalsApi(page);
+    await page.route(`${API_URL}/assets/*/profile-pic`, (route) => route.fulfill({ status: 404, body: "" }));
+    await page.goto("/approvals?category=inventory&by=pm1");
+    await page.getByRole("checkbox", { name: "Select all 2 pages" }).click();
+    await page.getByRole("region", { name: "Selected pages" }).getByRole("button", { name: "Reject…" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Keep them" }).click();
+    expect(calls.bulk).toEqual([]);
+    await page.getByRole("region", { name: "Selected pages" }).getByRole("button", { name: "Reject…" }).click();
+    await dialog.getByRole("button", { name: "Reject 2 pages" }).click();
+    await expect.poll(() => calls.bulk).toEqual([{ assetIds: expect.arrayContaining(["a9", "a10"]), approvalStatus: "rejected" }]);
+  });
+
+  test("a kind running out says so, keeps the pills, and never claims the person is all done", async ({ page }) => {
     await signIn(page, "ADMIN");
     await approvalsApi(page);
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ json: [{ id: "a9", ownerId: "o9", platform: "instagram", handle: "arjun.fits", followers: 1, approvalStatus: "approved", createdAt: ago(9), rateCards: [], engagement: {}, owner: { name: "Arjun Nair" }, pendingEdit: { grade: "A" }, pendingEditAt: ago(9), pendingEditBy: { id: "pm1", name: "Priya Planner", role: "PLAN_MAKER" } }] }));
+    await page.route(`${API_URL}/assets/*/profile-pic`, (route) => route.fulfill({ status: 404, body: "" }));
+    await page.goto("/approvals?category=inventory&by=pm1&type=page");
+    await expect(page.getByText("No new page waiting")).toBeVisible();
+    await expect(page.getByText("All done here")).toHaveCount(0);
+    await page.getByRole("radio", { name: /Page edit/ }).click();
+    await expect(page.getByTestId("page-edit-diff")).toBeVisible();
+  });
+
+  test("a list that failed to load never reads as all clear", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await approvalsApi(page);
+    await page.route(`${API_URL}/assets`, (route) => route.fulfill({ status: 500, json: { error: { code: "X", message: "Down" } } }));
+    await page.goto("/approvals");
+    await expect(page.getByRole("list", { name: "Approval categories" }).getByRole("link", { name: /Inventory/ })).toContainText("load", { timeout: 15000 });
+  });
+
+  test("deep links land on the right category", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await approvalsApi(page);
+    await page.route(`${API_URL}/assets/*/profile-pic`, (route) => route.fulfill({ status: 404, body: "" }));
     await page.goto("/approvals?type=page");
-    await expect(page.getByRole("radio", { name: /Inventory/ })).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByRole("radio", { name: /New page/ })).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByRole("group", { name: "Priya Planner" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "People with inventory waiting" })).toBeVisible();
+    await page.goto("/approvals?type=insights");
+    await expect(page.getByRole("radio", { name: /Insights/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("heading", { name: "Goa Budget Tips" })).toBeVisible();
   });
 
   test("finance only sees bank-detail approvals and approves one", async ({ page }) => {
     await signIn(page, "FINANCE");
     const calls = await approvalsApi(page);
     await page.goto("/approvals");
-    await expect(page.getByRole("radio", { name: /Bank details/ })).toBeVisible();
+    // One category only: straight to the queue, with no cards and no way "back" to them.
+    await expect(page.getByRole("link", { name: "Back to Approvals" })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Proof/ })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Kabir Malhotra" })).toBeVisible();
     await page.getByRole("button", { name: "Approve", exact: true }).click();
@@ -195,7 +253,10 @@ test.describe("Approvals", () => {
     await expect(page.getByText("Diwali Food Stories").first()).toBeVisible();
     // Client-side navigation keeps the Plans list in the query cache.
     await page.getByRole("link", { name: "Approvals" }).first().click();
-    await expect(page.getByRole("list", { name: "Queue" }).getByRole("button")).toHaveCount(3); // proof, insights, bank details — never the plan
-    await expect(page.getByRole("list", { name: "Queue" }).getByText(/Plan A/)).toHaveCount(0);
+    const cards = page.getByRole("list", { name: "Approval categories" });
+    await expect(cards.getByRole("link", { name: /Posts/ })).toContainText("2 waiting");
+    await expect(cards.getByRole("link", { name: /Users/ })).toContainText("1 waiting");
+    await expect(cards.getByRole("link", { name: /Plans/ })).toHaveCount(0);
+    await expect(page.getByText(/Plan A/)).toHaveCount(0);
   });
 });

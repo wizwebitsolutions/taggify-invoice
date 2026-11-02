@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
 /**
@@ -9,7 +10,7 @@ export type StatusTone = "success" | "warning" | "danger" | "info" | "neutral";
 
 export function StatusPill({ tone = "neutral", children, className }: { tone?: StatusTone; children: React.ReactNode; className?: string }) {
   return (
-    <Badge variant={tone} className={className}>
+    <Badge variant={tone} className={cn("status-pill", className)}>
       {children}
     </Badge>
   );

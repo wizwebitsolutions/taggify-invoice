@@ -60,7 +60,7 @@ export async function listAssets(user) {
   // Who proposed each pending edit (16 Oct) — one lookup for the whole list.
   const proposerIds = [...new Set(assets.map((a) => a.pendingEditById).filter(Boolean))];
   const [proposers, engagementByAsset] = await Promise.all([
-    proposerIds.length ? prisma.user.findMany({ where: { id: { in: proposerIds } }, select: { id: true, name: true, email: true } }) : [],
+    proposerIds.length ? prisma.user.findMany({ where: { id: { in: proposerIds } }, select: { id: true, name: true, email: true, role: true } }) : [],
     getAvgEngagementForAssets(assets),
   ]);
   const proposerById = new Map(proposers.map((u) => [u.id, u]));

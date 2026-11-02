@@ -34,7 +34,7 @@ export function MetricTile({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-start gap-4 rounded-card border p-5", TONE[tone].card, className)}>
+    <div className={cn("metric-tile flex items-start gap-4 rounded-card border p-5", TONE[tone].card, className)}>
       <span className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-lg", TONE[tone].icon)}>
         <Icon className="h-6 w-6" strokeWidth={1.8} aria-hidden />
       </span>

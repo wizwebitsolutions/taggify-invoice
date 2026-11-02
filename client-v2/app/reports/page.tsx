@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Bar, BarChart, CartesianGrid, Cell, LabelList, XAxis, YAxis } from "recharts";
 import { CalendarDays, Download } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
@@ -16,7 +15,7 @@ import { Illustration } from "@/components/taggify/illustration";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
+import { PayoutChart } from "@/components/taggify/payout-chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FilterSelect } from "@/components/taggify/filter-select";
@@ -27,7 +26,6 @@ import { displayHandle, PageAvatar } from "@/components/finance/identity";
 import { LoadError, NoAccess } from "@/components/finance/states";
 import { Rows, SectionCard } from "@/components/home/staff-home";
 
-const rupeesShort = (n: number) => `₹${compactNumber(n)}`;
 
 /** Same rule as the server's campaign spend (campaigns/service.js countsTowardCampaign): rejected proofs, broken links and posts beyond the booking don't count. */
 const countsAsWork = (l: Pick<Post, "status" | "overQuota">) => l.status !== "SCREENSHOT_REJECTED" && l.status !== "INVALID" && !l.overQuota;
@@ -87,8 +85,6 @@ function Reports() {
   );
 }
 
-const payoutsChart = { paid: { label: "Paid to creators", color: "rgb(var(--chart-muted))" }, current: { label: "Paid to creators", color: "rgb(var(--chart-primary))" } } satisfies ChartConfig;
-
 function PayoutsByMonth() {
   const { accessToken } = useAuth();
   const [range, setRange] = useState("6");
@@ -137,21 +133,7 @@ function PayoutsByMonth() {
           </div>
         ) : (
           <div className="p-5">
-            <ChartContainer config={payoutsChart} className="h-64 w-full" aria-label={`Bar chart of payouts per month. ${data.map((d) => `${d.long}: ${money(d.paid)}`).join("; ")}`} role="img">
-              {/* The container is the accessible image; recharts' own keyboard layer would be a hidden widget inside it. */}
-              <BarChart data={data} margin={{ top: 20, right: 8, left: 8, bottom: 0 }} accessibilityLayer={false}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="month" tickLine={false} axisLine={false} tickMargin={8} />
-                <YAxis tickLine={false} axisLine={false} width={56} tickFormatter={(v: number) => rupeesShort(v)} />
-                <ChartTooltip cursor content={<ChartTooltipContent labelKey="long" formatter={(v) => money(v)} />} />
-                <Bar dataKey="paid" radius={6} maxBarSize={48} fill="var(--color-paid)">
-                  <LabelList dataKey="paid" position="top" className="fill-foreground" formatter={(v: unknown) => (Number(v) ? rupeesShort(Number(v)) : "")} />
-                  {data.map((d) => (
-                    <Cell key={d.key} fill={d.key === now ? "var(--color-current)" : "var(--color-paid)"} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ChartContainer>
+            <PayoutChart data={data} currentMonth={now} total={money(total)} />
             <div className="mt-3 flex flex-wrap gap-4 text-small text-muted-foreground">
               <span className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-sm bg-chart-muted" aria-hidden />
@@ -190,17 +172,17 @@ function SpendVsBudget() {
           const body = (
             <>
               <span className="min-w-0 flex-1 truncate text-body-strong">{c.title}</span>
-              <SpendMeter spent={spent} cap={cap} label={`${c.title} spend against budget`} className="w-64 shrink-0" />
+              <SpendMeter spent={spent} cap={cap} label={`${c.title} spend against budget`} className="w-full min-w-0 sm:w-64" />
             </>
           );
           return (
             <li key={c.id}>
               {toCampaign ? (
-                <Link href={`/campaigns/${c.id}`} className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground">
+                <Link href={`/campaigns/${c.id}`} className="listing-row flex-col items-stretch sm:flex-row sm:items-center">
                   {body}
                 </Link>
               ) : (
-                <div className="flex items-center gap-3 px-5 py-3">{body}</div>
+                <div className="listing-row flex-col items-stretch sm:flex-row sm:items-center">{body}</div>
               )}
             </li>
           );

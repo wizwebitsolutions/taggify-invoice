@@ -41,7 +41,7 @@ export function KpiCard({
 }) {
   return (
     <motion.div variants={staggerItem} className={className}>
-      <Card className="flex h-full flex-col gap-2 p-5">
+      <Card className="workspace-kpi flex h-full flex-col gap-2 p-5">
         <span className="text-label uppercase text-muted-foreground">{label}</span>
         <span className="text-kpi text-foreground">
           {typeof value === "number" ? <CountUp value={value} asMoney={asMoney} /> : value}

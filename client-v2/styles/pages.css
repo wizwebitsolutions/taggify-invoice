@@ -1,3 +1,37 @@
+/* Shared workspace compositions. Visual values are defined in tokens.css. */
+.workspace-sidebar.workspace-sidebar {
+  @apply border-divider;
+}
+
+.workspace-topbar.workspace-topbar {
+  @apply border-b border-divider bg-card/80;
+}
+
+.workspace-main.workspace-main {
+  @apply mx-auto;
+}
+
+.workspace-nav-item.workspace-nav-item {
+  @apply font-medium;
+}
+
+.workspace-nav-item[aria-current="page"] {
+  @apply font-semibold shadow-1;
+}
+
+.workspace-promo.workspace-promo {
+  @apply border-brand-line bg-peach shadow-none;
+}
+
+.workspace-kpi.workspace-kpi {
+  @apply relative gap-3 border-border p-6 shadow-1;
+}
+
+.workspace-kpi::before {
+  @apply absolute left-6 top-0 h-1 w-8 rounded-b-sm bg-brand;
+  content: "";
+}
+
 /* Page compositions. Tune the app's visual treatment here; all values use
  the Taggify tokens. Selectors are opt-in so dialogs and embedded views keep
  their own layout and behaviour. Repeated selectors intentionally outrank
@@ -7,7 +41,7 @@
 }
 
 .page-heading {
-  @apply flex min-w-0 flex-wrap items-start gap-4 border-b border-input pb-6;
+  @apply flex min-w-0 flex-wrap items-start gap-4 border-b border-border pb-6;
 }
 
 .page-heading-copy {
@@ -31,7 +65,7 @@
 }
 
 .dashboard-hero.dashboard-hero {
-  @apply relative isolate flex items-center gap-6 overflow-hidden border-brand-line bg-peach p-6 shadow-2 md:p-8;
+  @apply relative isolate flex items-center gap-6 overflow-hidden border-border bg-card p-6 shadow-1 md:p-8;
 }
 
 .dashboard-hero::before {
@@ -52,7 +86,7 @@
 }
 
 .dashboard-art {
-  @apply relative hidden w-64 shrink-0 items-center justify-center self-stretch rounded-card bg-card/60 p-4 lg:flex;
+  @apply relative hidden w-64 shrink-0 items-center justify-center self-stretch rounded-card border border-brand-line bg-peach p-4 lg:flex;
 }
 
 .section-heading {
@@ -77,7 +111,7 @@
 }
 
 .panel-heading {
-  @apply flex flex-wrap items-center gap-3 border-b border-divider bg-muted/40 px-5 py-5 md:px-6;
+  @apply flex flex-wrap items-center gap-3 border-b border-divider bg-card px-5 py-5 md:px-6;
 }
 
 .dashboard-row {
@@ -85,7 +119,7 @@
 }
 
 .ledger-panel.ledger-panel {
-  @apply min-w-0 overflow-hidden border-input shadow-2;
+  @apply min-w-0 overflow-hidden border-border shadow-1;
 }
 
 .ledger-panel thead {
@@ -174,4 +208,223 @@
 
 .settings-identity {
   @apply flex items-center gap-4 rounded-md bg-muted/60 p-4;
+}
+
+
+/* Strong analytics + listings: shared by dashboard, finance and reports. */
+.dashboard-intro.dashboard-intro {
+  @apply relative flex flex-wrap items-center gap-6 overflow-hidden rounded-none border-0 border-b border-divider bg-transparent px-0 pb-8 pt-2 shadow-none;
+}
+.dashboard-intro::before {
+  @apply absolute bottom-0 left-0 h-1 w-16 rounded-pill bg-brand;
+  content: "";
+}
+.decision-tile {
+  @apply flex h-full items-center gap-4 rounded-card border border-brand-line bg-gradient-to-br from-brand-soft to-card p-6 text-foreground shadow-1 transition-colors hover:border-brand hover:text-foreground focus-visible:ring-focus focus-visible:ring-ring;
+}
+.listing-panel.listing-panel,
+.analytics-panel.analytics-panel {
+  @apply min-w-0 overflow-hidden border-border bg-card shadow-2;
+}
+.listing-heading {
+  @apply flex flex-wrap items-center gap-4 border-b border-divider px-6 py-5;
+}
+.listing-heading > h2 {
+  @apply text-section;
+}
+.listing-stack {
+  @apply flex flex-col gap-3 bg-muted/30 p-4;
+}
+.listing-row {
+  @apply flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4 text-foreground shadow-1 transition-colors hover:border-brand-line hover:bg-brand-soft/30 hover:text-foreground;
+}
+.listing-row > span:nth-child(2) {
+  @apply basis-32;
+}
+.analytics-body {
+  @apply p-4 sm:p-6;
+}
+.analytics-summary {
+  @apply mb-6 flex flex-wrap items-end justify-between gap-4;
+}
+.analytics-period {
+  @apply rounded-pill border border-border bg-muted px-3 py-2 text-label text-muted-foreground;
+}
+.payout-plot.payout-plot {
+  @apply aspect-auto w-full rounded-lg border border-divider bg-muted/30 p-3;
+  height: var(--chart-height);
+}
+.analytics-facts {
+  @apply mt-6 grid grid-cols-1 gap-4 border-t border-divider pt-5 sm:grid-cols-3;
+}
+.analytics-facts dt {
+  @apply text-small text-muted-foreground;
+}
+.analytics-facts dd {
+  @apply num mt-2 text-body-strong;
+}
+.analytics-empty {
+  @apply flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-input bg-muted/30 p-6 text-center;
+  min-height: var(--chart-height);
+}
+.budget-track {
+  height: var(--meter-height);
+}
+.metric-tile.metric-tile {
+  @apply relative flex-col gap-6 p-6 shadow-2;
+}
+.metric-tile > span:first-child {
+  @apply h-10 w-10 rounded-pill;
+}
+.workspace-table thead {
+  @apply bg-muted/60;
+}
+.workspace-table th {
+  @apply border-b border-input py-4;
+}
+.workspace-table tbody td {
+  @apply py-4;
+}
+.analytics-chart .recharts-cartesian-axis-tick text {
+  font-size: var(--text-label);
+}
+
+
+
+/* Readable records: horizontal content, deliberate emphasis, compact actions. */
+.workspace-table th,
+.workspace-table td {
+  @apply whitespace-nowrap;
+}
+.workspace-table td {
+  @apply text-body;
+}
+.workspace-table th {
+  @apply text-label normal-case tracking-normal;
+}
+.inventory-rate {
+  @apply inline-flex flex-nowrap items-center gap-3 whitespace-nowrap;
+}
+/* Page cell: avatar, then handle (+ WhatsApp chip) over the profile name. */
+.inventory-identity {
+  @apply flex min-w-0 items-center gap-3;
+}
+.inventory-identity-text {
+  @apply flex min-w-0 flex-col gap-1;
+}
+.inventory-identity-line {
+  @apply flex min-w-0 flex-nowrap items-center gap-2 whitespace-nowrap;
+}
+.inventory-identity-name {
+  @apply max-w-56 truncate text-small text-fg-muted;
+}
+.whatsapp-chip {
+  @apply inline-flex shrink-0 items-center gap-1 rounded-pill bg-success-soft px-2 py-0.5 text-micro font-semibold text-success-fg ring-1 ring-inset ring-success/30 transition-colors hover:bg-success/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-success;
+}
+.listing-row.listing-row {
+  @apply flex-nowrap gap-4 rounded-md border-0 border-b border-divider bg-transparent px-4 py-4 shadow-none;
+}
+.listing-stack.listing-stack {
+  @apply gap-0 bg-transparent p-2;
+}
+.listing-stack > li:last-child > .listing-row {
+  @apply border-b-0;
+}
+.listing-row > span:nth-child(2) {
+  @apply flex min-w-0 items-center gap-3;
+  flex-basis: auto;
+}
+.content-record.content-record {
+  @apply relative border-l-3 border-l-transparent hover:border-l-brand hover:bg-brand-soft/30;
+}
+.content-record > span:nth-child(2) {
+  @apply flex min-w-0 flex-row items-center gap-3;
+}
+.content-record > span:nth-child(2) > span:first-child {
+  @apply text-card-title;
+}
+.spend-meter {
+  @apply flex min-w-44 flex-col gap-2;
+}
+.spend-meter-heading {
+  @apply flex items-center justify-between gap-3 whitespace-nowrap;
+}
+.spend-meter-amount {
+  @apply inline-flex items-baseline gap-2 text-body-strong;
+}
+.spend-meter-label {
+  @apply text-label font-normal text-muted-foreground;
+}
+.spend-meter-percent {
+  @apply rounded-sm px-2 py-1 text-label font-semibold;
+}
+.spend-meter-footer {
+  @apply flex flex-wrap justify-between gap-2 text-label text-muted-foreground;
+}
+.page-detail-sheet.page-detail-sheet {
+  max-width: min(100vw, var(--detail-sheet-width));
+}
+.detail-profile-header {
+  @apply gap-4 border-b border-divider bg-muted/30 p-6 text-left;
+}
+.detail-profile-body {
+  @apply flex flex-1 flex-col gap-6 p-6;
+}
+.detail-availability {
+  @apply flex items-center gap-4 rounded-lg border border-brand-line bg-brand-soft/30 p-4;
+}
+.detail-audience {
+  @apply rounded-lg border border-border bg-card p-5;
+}
+.detail-section-title {
+  @apply mb-3 text-label font-semibold uppercase tracking-wide text-muted-foreground;
+}
+.detail-metrics {
+  @apply grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2;
+}
+.detail-metrics > div:nth-child(-n+2) dd {
+  @apply num mt-2 text-display text-foreground;
+}
+.detail-metrics > div:nth-child(n+3) {
+  @apply border-t border-divider pt-4;
+}
+.detail-metrics > div:nth-child(n+3) dd {
+  @apply num mt-1 text-card-title text-fg-strong;
+}
+.detail-source {
+  @apply -mt-3 text-label text-muted-foreground;
+}
+.detail-key-values {
+  @apply flex flex-col divide-y divide-divider rounded-lg border border-border px-4;
+}
+.detail-key-value {
+  @apply flex min-w-0 items-baseline justify-between gap-4 py-3;
+}
+.detail-key-value dt {
+  @apply shrink-0 text-small text-muted-foreground;
+}
+.detail-key-value dd {
+  @apply min-w-0 text-right text-body-strong;
+}
+
+.detail-metrics > div:first-child dd {
+  @apply text-brand-ink;
+}
+
+.content-record > span:nth-child(2) > span:first-child {
+  @apply max-w-48 shrink-0;
+}
+.status-pill.status-pill {
+  @apply h-pill gap-2 rounded-pill px-2 font-medium;
+}
+.status-pill::before {
+  @apply h-1 w-1 shrink-0 rounded-pill bg-current;
+  content: "";
+}
+
+.listing-row {
+  @apply whitespace-nowrap;
+}
+.listing-row > span:nth-child(2) > span {
+  @apply min-w-0 truncate;
 }

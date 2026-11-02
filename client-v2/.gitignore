@@ -5,3 +5,6 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 tokens-preview.png
+
+.next-ui-check/
+.next-dev-ui/

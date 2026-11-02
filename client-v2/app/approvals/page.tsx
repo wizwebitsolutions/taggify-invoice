@@ -1,14 +1,14 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowRight, ClipboardCheck, CreditCard, ExternalLink, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronRight, ClipboardCheck, CreditCard, ExternalLink, FileSpreadsheet, Image as ImageIcon, Landmark, LayoutGrid, Users, type LucideIcon } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
-import { useApprovalSources } from "@/lib/queries/approvals";
+import { approvalCounts, useApprovalSources } from "@/lib/queries/approvals";
 import {
   ApiError,
   assets as assetsApi,
@@ -31,12 +31,14 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FilterSelect } from "@/components/taggify/filter-select";
 import { SegmentedFilter } from "@/components/taggify/segmented-filter";
+import { SelectionBar } from "@/components/taggify/selection-bar";
 import { EmptyState } from "@/components/taggify/illustration";
 import { Money } from "@/components/taggify/money";
 import { PlatformIcon } from "@/components/taggify/platform-icon";
@@ -48,19 +50,40 @@ import { PageSheet } from "@/components/creators/page-sheet";
 
 type Kind = "proof" | "insights" | "plan" | "people" | "page" | "page-edit" | "billing";
 const KIND: Record<Kind, string> = { proof: "Proof", insights: "Insights", plan: "Plan", people: "Sheet rows", page: "New page", "page-edit": "Page edit", billing: "Bank details" };
-// The queue is filtered by category first (1 Nov — "categorize the approval page"), then by kind within it.
-type Category = "posts" | "inventory" | "plans" | "sheet" | "bank";
-const CATEGORY: Record<Category, { label: string; kinds: Kind[] }> = {
-  posts: { label: "Posts", kinds: ["proof", "insights"] },
-  inventory: { label: "Inventory", kinds: ["page", "page-edit"] },
-  plans: { label: "Plans", kinds: ["plan"] },
-  sheet: { label: "Sheet rows", kinds: ["people"] },
-  bank: { label: "Bank details", kinds: ["billing"] },
+// Approvals opens on these cards (2 Nov — "category wise: posts, inventory, user"); a card opens that category's queue.
+type Category = "posts" | "inventory" | "users" | "plans" | "sheet";
+const CATEGORY: Record<Category, { label: string; blurb: string; icon: LucideIcon; tile: string; kinds: Kind[] }> = {
+  posts: { label: "Posts", blurb: "Proof screenshots and insights to check.", icon: ImageIcon, tile: "bg-tile-coral-icon text-tile-coral-fg", kinds: ["proof", "insights"] },
+  inventory: { label: "Inventory", blurb: "New pages and page edits, by who sent them.", icon: LayoutGrid, tile: "bg-tile-amber-icon text-tile-amber-fg", kinds: ["page", "page-edit"] },
+  users: { label: "Users", blurb: "Bank details Finance will pay into.", icon: Landmark, tile: "bg-tile-mint-icon text-tile-mint-fg", kinds: ["billing"] },
+  plans: { label: "Plans", blurb: "Plans waiting for a decision.", icon: ClipboardCheck, tile: "bg-tile-coral-icon text-tile-coral-fg", kinds: ["plan"] },
+  sheet: { label: "Sheet rows", blurb: "Campaign sheet pages to match to a page.", icon: FileSpreadsheet, tile: "bg-tile-amber-icon text-tile-amber-fg", kinds: ["people"] },
 };
 const CATEGORIES = Object.keys(CATEGORY) as Category[];
-const categoryOf = (k: Kind): Category => CATEGORIES.find((c) => CATEGORY[c].kinds.includes(k))!;
-/** New pages are grouped by who added them; pages from before that was recorded share one group. */
+const categoryOf = (k: Kind): Category | undefined => CATEGORIES.find((c) => CATEGORY[c].kinds.includes(k));
+/** Pages are listed under who sent them; pages from before that was recorded share one last entry. */
 const UNTRACKED = "untracked";
+type PageItem = Extract<Item, { kind: "page" }>;
+type EditItem = Extract<Item, { kind: "page-edit" }>;
+/** One person with Inventory work waiting: the pages they added and the edits they suggested. */
+type Person = { key: string; label: string; role: string; pages: PageItem[]; edits: EditItem[]; since: string };
+
+function peopleFrom(items: Item[]): Person[] {
+  const byKey = new Map<string, Person>();
+  const entry = (who: { id: string; name: string | null; email?: string | null; role?: string } | null | undefined, since: string) => {
+    const key = who?.id ?? UNTRACKED;
+    const p = byKey.get(key) ?? { key, label: who ? personLabel(who) : "Added before tracking", role: who?.role ? roleLabel(who.role) : "", pages: [], edits: [], since };
+    if (new Date(since) < new Date(p.since)) p.since = since;
+    byKey.set(key, p);
+    return p;
+  };
+  for (const i of items) {
+    if (i.kind === "page") entry(i.asset.createdBy, i.since).pages.push(i);
+    else if (i.kind === "page-edit") entry(i.asset.pendingEditBy, i.since).edits.push(i);
+  }
+  // Waiting longest first; pages nobody recorded an adder for go last.
+  return [...byKey.values()].sort((a, b) => (a.key === UNTRACKED ? 1 : b.key === UNTRACKED ? -1 : new Date(a.since).getTime() - new Date(b.since).getTime()));
+}
 
 type Item =
   | { kind: "proof" | "insights"; id: string; title: string; sub: string; since: string; post: Post }
@@ -88,28 +111,55 @@ export default function ApprovalsPage() {
 }
 
 /**
- * Approvals inbox: queue on the left, the evidence in the middle, context on
- * the right. Each kind is its own permission (links.approve, plans.approve,
- * inventory.approve, finance.pay), so someone holding just one gets a working
- * queue for that kind and never sees the rest. "Approve & next" keeps you in flow.
+ * Approvals: category cards → a category's queue (queue on the left, the
+ * evidence in the middle, context on the right). Inventory has one more step,
+ * the people with work waiting, because pages are decided person by person, in
+ * bulk. Each kind is its own permission (links.approve, plans.approve,
+ * inventory.approve, finance.pay), so someone holding just one goes straight to
+ * that queue and never sees the rest. Where you are lives in the URL
+ * (?category, ?by, ?type), so the browser's Back button walks back up.
  */
 function Approvals() {
   const { user, accessToken } = useAuth();
   const params = useSearchParams();
+  const router = useRouter();
   const qc = useQueryClient();
-  const { can, linksQ, plansQ, assetsQ, billingQ, campaignsQ } = useApprovalSources();
+  const sources = useApprovalSources();
+  const { can, linksQ, plansQ, assetsQ, billingQ, campaignsQ } = sources;
   const token = accessToken ?? "";
 
+  const kinds = (Object.keys(KIND) as Kind[]).filter((k) => (k === "proof" || k === "insights" ? can.links : k === "people" ? can.people : k === "plan" ? can.plans : k === "page" || k === "page-edit" ? can.pages : can.billing));
+  const available = CATEGORIES.filter((c) => CATEGORY[c].kinds.some((k) => kinds.includes(k)));
   // ?type=<kind> deep links (home, content, finance) land on that kind's category with the kind picked.
-  const initial = params.get("type") as Kind | null;
-  const initialKind = initial && initial in KIND ? initial : null;
-  const [filter, setFilter] = useState<"all" | Category>(initialKind ? categoryOf(initialKind) : "all");
-  const [sub, setSub] = useState<"all" | Kind>(initialKind ?? "all");
+  const typeParam = params.get("type") as Kind | null;
+  const categoryParam = params.get("category") as Category | null;
+  const requested = categoryParam && available.includes(categoryParam) ? categoryParam : typeParam && typeParam in KIND ? categoryOf(typeParam) : undefined;
+  // With only one category to choose from, a page of one card is just a click in the way.
+  const category: Category | null = requested && available.includes(requested) ? requested : available.length === 1 ? available[0] : null;
+  const sub: "all" | Kind = typeParam && category && CATEGORY[category].kinds.includes(typeParam) ? typeParam : "all";
+  const by = category === "inventory" ? params.get("by") : null;
+  const hrefFor = (to: { category?: Category; by?: string | null; type?: Kind | "all" }) => {
+    const q = new URLSearchParams();
+    if (to.category) q.set("category", to.category);
+    if (to.by) q.set("by", to.by);
+    if (to.type && to.type !== "all") q.set("type", to.type);
+    const s = q.toString();
+    return s ? `/approvals?${s}` : "/approvals";
+  };
+
   const [sort, setSort] = useState("oldest");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reject, setReject] = useState<Item | null>(null);
   // Ticked new pages for "Approve selected" (1 Nov).
   const [bulk, setBulk] = useState<Set<string>>(new Set());
+  const [confirmBulkReject, setConfirmBulkReject] = useState(false);
+  // Moving anywhere else (including the browser's Back button) drops the selection.
+  useEffect(() => {
+    setSelectedId(null);
+    setBulk(new Set());
+    setConfirmBulkReject(false);
+    setReject(null);
+  }, [category, by, sub]);
   // A page opened from its approval card to set missing rates (the live row, so the sheet shows saved changes).
   const [ratesPageId, setRatesPageId] = useState<string | null>(null);
   const ratesPage = (assetsQ.data ?? []).find((a) => a.id === ratesPageId) ?? null;
@@ -123,7 +173,7 @@ function Approvals() {
     }
     for (const p of (plansQ.data ?? []).filter(isDecidable)) out.push({ kind: "plan", id: `p:${p.id}`, title: `${p.name} (${p.variantLabel})`, sub: `${p.createdBy?.name ?? "—"} · ${p.clientName}`, since: p.updatedAt, plan: p });
     for (const c of (campaignsQ.data ?? []).filter((c) => (c.pendingAssignmentCount ?? 0) > 0)) out.push({ kind: "people", id: `c:${c.id}`, title: `${plural(c.pendingAssignmentCount ?? 0, "page")} to match`, sub: c.title, since: c.createdAt, campaign: c });
-    for (const a of (assetsQ.data ?? []).filter((a) => a.approvalStatus === "pending")) out.push({ kind: "page", id: `a:${a.id}`, title: displayHandle(a.handle, a.platform), sub: `Added by ${personLabel(a.createdBy, "—")} · ${a.owner?.name ?? "—"} · ${audienceLabel(a.followers, a.platform)}`, since: a.createdAt, asset: a });
+    for (const a of (assetsQ.data ?? []).filter((a) => a.approvalStatus === "pending")) out.push({ kind: "page", id: `a:${a.id}`, title: displayHandle(a.handle, a.platform), sub: `${a.owner?.name ?? "—"} · ${audienceLabel(a.followers, a.platform)}`, since: a.createdAt, asset: a });
     for (const a of (assetsQ.data ?? []).filter((a) => a.pendingEdit && typeof a.pendingEdit === "object")) out.push({ kind: "page-edit", id: `e:${a.id}`, title: `${displayHandle(a.handle, a.platform)} · suggested edit`, sub: `by ${a.pendingEditBy?.name ?? a.pendingEditBy?.email ?? "a planner"}`, since: a.pendingEditAt ?? a.createdAt, asset: a });
     for (const b of (billingQ.data ?? []).filter((b) => b.approvalStatus === "pending")) out.push({ kind: "billing", id: `b:${b.id}`, title: b.user?.name ?? b.name, sub: `•••• ${b.bankAccountNumber.slice(-4)} · ${b.ifscCode}`, since: b.createdAt, profile: b });
     return out;
@@ -135,14 +185,27 @@ function Approvals() {
     return c;
   }, [items]);
 
+  const people = useMemo(() => peopleFrom(items), [items]);
+  const person = by ? (people.find((p) => p.key === by) ?? null) : null;
+  // Their name stays in the heading after their last item is decided.
+  const lastPerson = useRef<{ key: string; label: string } | null>(null);
+  if (person) lastPerson.current = { key: person.key, label: person.label };
+  const personName = person?.label ?? (lastPerson.current?.key === by ? lastPerson.current?.label : null);
   const visible = useMemo(() => {
-    const rows = filter === "all" ? items : items.filter((i) => categoryOf(i.kind) === filter && (sub === "all" || i.kind === sub));
+    if (!category) return [];
+    const inCategory = items.filter((i) => categoryOf(i.kind) === category);
+    // Inventory's queue is one person's work.
+    const scoped = category === "inventory" ? (person ? [...person.pages, ...person.edits] : []) : inCategory;
+    const rows = sub === "all" ? scoped : scoped.filter((i) => i.kind === sub);
     return [...rows].sort((a, b) => (sort === "oldest" ? 1 : -1) * (new Date(a.since).getTime() - new Date(b.since).getTime()));
-  }, [items, filter, sub, sort]);
+  }, [items, category, person, sub, sort]);
   const selected = visible.find((i) => i.id === selectedId) ?? visible[0] ?? null;
-  // New pages on their own: grouped by who added them, with tick boxes for a bulk decision.
-  const grouped = filter === "inventory" && sub === "page";
-  const pageItems = useMemo(() => (grouped ? visible.filter((i): i is Extract<Item, { kind: "page" }> => i.kind === "page") : []), [grouped, visible]);
+  // Anything left here under any kind: a kind running out must not read as "all done".
+  const scopeHasWork = category === "inventory" ? !!person : !!category && items.some((i) => categoryOf(i.kind) === category);
+  // New pages can be decided in bulk, in the order the queue shows them.
+  const pageItems = useMemo(() => visible.filter((i): i is PageItem => i.kind === "page"), [visible]);
+  // Only pages still in the queue count: one approved on its own stops being selected.
+  const ticked = pageItems.filter((i) => bulk.has(i.asset.id)).map((i) => i.asset.id);
 
   function next() {
     const idx = visible.findIndex((i) => i.id === selected?.id);
@@ -181,86 +244,224 @@ function Approvals() {
     onError: (e) => toast.error(errText(e, "That decision didn't go through. Try again.")),
   });
   const bulkDecide = useMutation({
-    mutationFn: (status: "approved" | "rejected") => assetsApi.setApprovalMany(token, [...bulk], status),
+    mutationFn: (status: "approved" | "rejected") => assetsApi.setApprovalMany(token, ticked, status),
     onSuccess: async (r, status) => {
       setBulk(new Set());
       setSelectedId(null);
-      toast.success(`${plural(r.updated.length, "page")} ${status}${r.skipped.length ? `, ${r.skipped.length} skipped` : ""}.`);
+      setConfirmBulkReject(false);
+      const done = `${plural(r.updated.length, "page")} ${status}`;
+      if (r.skipped.length) toast.warning(`${done}. ${plural(r.skipped.length, "page")} skipped: ${r.skipped[0].reason}`);
+      else toast.success(`${done}.`);
       await refresh();
     },
-    onError: (e) => toast.error(errText(e, "That didn't go through. Try again.")),
+    onError: async (e) => {
+      setConfirmBulkReject(false);
+      // The server decides pages one by one, so a failure part-way may still have decided some.
+      await refresh();
+      toast.error(errText(e, "That didn't go through. Try again."));
+    },
   });
 
-  if (!can.links && !can.plans && !can.pages && !can.billing) return <NoAccess what="approvals" />;
-  const loading = linksQ.isLoading || plansQ.isLoading || assetsQ.isLoading || billingQ.isLoading;
+  if (!can.links && !can.plans && !can.pages && !can.billing && !can.people) return <NoAccess what="approvals" />;
+  const loading = linksQ.isLoading || plansQ.isLoading || assetsQ.isLoading || billingQ.isLoading || campaignsQ.isLoading;
+  const sourceOf: Record<Category, { isLoading: boolean; isError: boolean }> = { posts: linksQ, inventory: assetsQ, users: billingQ, plans: plansQ, sheet: campaignsQ };
+  const categoryFailed = !!category && sourceOf[category].isError;
   const failed = [linksQ, plansQ, assetsQ, billingQ, campaignsQ].find((q) => q.isError);
-  const kinds = (Object.keys(KIND) as Kind[]).filter((k) => (k === "proof" || k === "insights" ? can.links : k === "people" ? can.people : k === "plan" ? can.plans : k === "page" || k === "page-edit" ? can.pages : can.billing));
-  const categoryCount = (c: Category) => CATEGORY[c].kinds.reduce((n, k) => n + counts[k], 0);
-  const categories = CATEGORIES.filter((c) => CATEGORY[c].kinds.some((k) => kinds.includes(k)) && (categoryCount(c) > 0 || filter === c));
-  const subKinds = filter === "all" ? [] : CATEGORY[filter].kinds.filter((k) => kinds.includes(k));
-  const emptyLabel = filter === "all" ? "All clear" : `No ${(sub !== "all" ? KIND[sub] : CATEGORY[filter].label).toLowerCase()} waiting`;
+  const totals = approvalCounts(sources);
+  const categoryCount = (c: Category) => CATEGORY[c].kinds.reduce((n, k) => n + totals[k], 0);
+  const oldest = (c: Category) => items.filter((i) => categoryOf(i.kind) === c).reduce<string | null>((o, i) => (!o || new Date(i.since) < new Date(o) ? i.since : o), null);
+  // What this person's queue offers: pills only when they have both kinds.
+  const subKinds = category === "inventory" ? (person ? (["page", "page-edit"] as Kind[]).filter((k) => (k === "page" ? person.pages.length : person.edits.length) > 0) : []) : category ? CATEGORY[category].kinds.filter((k) => kinds.includes(k)) : [];
+  const subCount = (k: Kind) => (person ? (k === "page" ? person.pages.length : person.edits.length) : counts[k]);
+  const view = !category ? "cards" : category === "inventory" && !by ? "people" : "queue";
+  const backHref = by ? hrefFor({ category: "inventory" }) : "/approvals";
+  const backLabel = by ? "Back to Inventory" : "Back to Approvals";
+  const canGoBack = by || available.length > 1;
 
   return (
     <div className="workspace-page">
-      <div className="page-heading">
-        <div className="page-heading-copy">
-          <h1 className="text-display">Approvals</h1>
-          <p className="mt-1 text-body text-muted-foreground">Clear the queue one item at a time. Approve &amp; next moves straight on.</p>
-        </div>
-        <FilterSelect
-          className="ml-auto"
-          label="Sort"
-          value={sort}
-          onValueChange={setSort}
-          options={[
-            { value: "oldest", label: "Waiting longest" },
-            { value: "newest", label: "Newest" },
-          ]}
-        />
-      </div>
-
-      <SegmentedFilter
-        variant="pills"
-        label="Show approvals"
-        value={filter}
-        onChange={(c) => {
-          setFilter(c);
-          setSub("all");
-          setSelectedId(null);
-          setBulk(new Set());
-        }}
-        options={(["all", ...categories] as ("all" | Category)[]).map((c) => ({ value: c, label: c === "all" ? "All" : CATEGORY[c].label, count: c === "all" ? items.length : categoryCount(c) }))}
-      />
-      {subKinds.length > 1 && filter !== "all" && (
-        <SegmentedFilter
-          label={`Show ${CATEGORY[filter].label.toLowerCase()}`}
-          value={sub}
-          onChange={(k) => {
-            setSub(k);
-            setSelectedId(null);
-            setBulk(new Set());
-          }}
-          options={(["all", ...subKinds] as ("all" | Kind)[]).map((k) => ({ value: k, label: k === "all" ? "All" : KIND[k], count: k === "all" ? categoryCount(filter) : counts[k] }))}
-        />
+      {category && canGoBack && (
+        <Link href={backHref} className="inline-flex items-center gap-2 self-start text-body-strong text-foreground hover:text-brand-ink">
+          <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
+          {backLabel}
+        </Link>
       )}
+      <div className="page-heading">
+        {by ? (
+          <div className="page-heading-copy flex items-center gap-4">
+            <UserAvatar name={personName ?? "?"} />
+            <div className="min-w-0">
+              <h1 className="truncate text-display">{personName ?? (loading ? <Skeleton className="h-control w-48" /> : "Inventory")}</h1>
+              {person && <p className="mt-1 text-body text-muted-foreground">{[person.role, person.pages.length ? plural(person.pages.length, "new page") : "", person.edits.length ? plural(person.edits.length, "page edit") : ""].filter(Boolean).join(" · ")}</p>}
+            </div>
+          </div>
+        ) : (
+          <div className="page-heading-copy">
+            <h1 className="text-display">{category ? CATEGORY[category].label : "Approvals"}</h1>
+            <p className="mt-1 text-body text-muted-foreground">{view === "cards" ? "Pick what you want to review." : view === "people" ? "Everyone with pages waiting. Open a name to approve their pages." : "Clear the queue one item at a time. Approve & next moves straight on."}</p>
+          </div>
+        )}
+        {view === "queue" && visible.length > 0 && (
+          <FilterSelect
+            className="ml-auto"
+            label="Sort"
+            value={sort}
+            onValueChange={setSort}
+            options={[
+              { value: "oldest", label: "Waiting longest" },
+              { value: "newest", label: "Newest" },
+            ]}
+          />
+        )}
+      </div>
 
       {failed && <LoadError onRetry={() => failed.refetch()} what="part of the queue" />}
 
-      {grouped && bulk.size > 0 && (
-        <div role="region" aria-label="Selected pages" className="flex flex-wrap items-center gap-2 rounded-card border bg-card px-4 py-2 text-small">
-          <span className="font-semibold">{plural(bulk.size, "page")} selected</span>
-          <Button size="sm" variant="success" disabled={bulkDecide.isPending} onClick={() => bulkDecide.mutate("approved")}>
-            {bulkDecide.isPending ? "Working…" : "Approve selected"}
-          </Button>
-          <Button size="sm" variant="outline" className="text-danger-fg" disabled={bulkDecide.isPending} onClick={() => bulkDecide.mutate("rejected")}>
-            Reject selected
-          </Button>
-          <Button size="sm" variant="ghost" disabled={bulkDecide.isPending} onClick={() => setBulk(new Set())}>
-            Clear
-          </Button>
-        </div>
+      {view === "cards" && (
+        <ul aria-label="Approval categories" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {available.map((c) => {
+            const { label, blurb, icon: Icon, tile } = CATEGORY[c];
+            const n = categoryCount(c);
+            const since = oldest(c);
+            return (
+              <li key={c}>
+                <Link href={hrefFor({ category: c })} className="group flex h-full items-start gap-4 rounded-card border border-input bg-card p-5 text-foreground shadow-2 transition-colors hover:border-brand hover:text-foreground focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft">
+                  <span className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-lg", tile)}>
+                    <Icon className="h-6 w-6" strokeWidth={1.8} aria-hidden />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-card-title">{label}</span>
+                    <span className="mt-1 block text-small text-muted-foreground">{blurb}</span>
+                    <span className="mt-4 flex flex-wrap items-center gap-2">
+                      {sourceOf[c].isLoading ? (
+                        <Skeleton className="h-control-sm w-24" />
+                      ) : sourceOf[c].isError ? (
+                        <StatusPill tone="neutral">Couldn&apos;t load</StatusPill>
+                      ) : n > 0 ? (
+                        <>
+                          <StatusPill tone="warning">{n} waiting</StatusPill>
+                          {since && <span className="text-small text-fg-muted">Oldest {waited(since)}</span>}
+                        </>
+                      ) : (
+                        <StatusPill tone="success">All clear</StatusPill>
+                      )}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-5 w-5 shrink-0 text-fg-muted transition-transform group-hover:translate-x-1" aria-hidden />
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
+      {view === "people" && !categoryFailed && (
+        <Card className="ledger-panel overflow-hidden">
+          {loading ? (
+            <div className="flex flex-col gap-3 p-5">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-control w-full" />
+              ))}
+            </div>
+          ) : people.length === 0 ? (
+            <EmptyState name="payout-success" title="No inventory waiting">
+              Nothing needs your decision right now.
+            </EmptyState>
+          ) : (
+            <Table aria-label="People with inventory waiting">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Sent by</TableHead>
+                  <TableHead>Pages</TableHead>
+                  <TableHead className="text-right">New pages</TableHead>
+                  <TableHead className="text-right">Page edits</TableHead>
+                  <TableHead>Waiting</TableHead>
+                  <TableHead>
+                    <span className="sr-only">Open</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {people.map((p) => (
+                  <TableRow key={p.key} className="relative hover:bg-accent">
+                    <TableCell>
+                      {/* The link covers the whole row, so the row is one click target and one tab stop. */}
+                      <Link href={hrefFor({ category: "inventory", by: p.key })} className="flex items-center gap-3 text-foreground after:absolute after:inset-0 hover:text-foreground focus-visible:outline-none focus-visible:after:ring-focus focus-visible:after:ring-inset focus-visible:after:ring-ring-soft">
+                        <UserAvatar name={p.label} />
+                        <span className="min-w-0">
+                          <span className="block truncate text-body-strong">{p.label}</span>
+                          {p.role && <span className="block text-small text-fg-muted">{p.role}</span>}
+                        </span>
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <PageAvatarStack className="pointer-events-none" pages={[...new Map([...p.pages, ...p.edits].map((i) => [i.asset.id, { id: i.asset.id, handle: i.asset.handle, platform: i.asset.platform }])).values()]} max={4} />
+                    </TableCell>
+                    <TableCell className="num text-right">{p.pages.length || "—"}</TableCell>
+                    <TableCell className="num text-right">{p.edits.length || "—"}</TableCell>
+                    <TableCell>
+                      <StatusPill tone="warning">{waited(p.since)}</StatusPill>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <ChevronRight className="ml-auto h-5 w-5 text-fg-muted" aria-hidden />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Card>
+      )}
+
+      {view === "queue" && !loading && !categoryFailed && visible.length === 0 && (
+        <Card className="ledger-panel flex flex-col items-center pb-6">
+          <EmptyState name="payout-success" title={by && !scopeHasWork ? "All done here" : `No ${(sub !== "all" ? KIND[sub] : CATEGORY[category!].label).toLowerCase()} waiting`}>
+            {scopeHasWork ? "There is still other work here. Pick it above." : by ? "Nothing from this person is waiting any more." : "Nothing needs your decision right now."}
+          </EmptyState>
+          {canGoBack && !scopeHasWork && (
+            <Button asChild variant="outline">
+              <Link href={backHref}>{backLabel}</Link>
+            </Button>
+          )}
+        </Card>
+      )}
+
+      {view === "queue" && (loading || scopeHasWork) && (subKinds.length > 1 || sub !== "all") && (
+        <SegmentedFilter
+          label={`Show ${CATEGORY[category!].label.toLowerCase()}`}
+          value={sub}
+          onChange={(k) => router.replace(hrefFor({ category: category!, by, type: k }), { scroll: false })}
+          options={(["all", ...new Set([...subKinds, ...(sub !== "all" ? [sub] : [])])] as ("all" | Kind)[]).map((k) => ({ value: k, label: k === "all" ? "All" : KIND[k], count: k === "all" ? subKinds.reduce((n, s) => n + subCount(s), 0) : subCount(k) }))}
+        />
+      )}
+
+      {by && pageItems.length > 0 && (
+        <Card className="overflow-hidden">
+          <SelectionBar
+            className="border-t-0"
+            total={pageItems.length}
+            selectedCount={ticked.length}
+            onToggleAll={() => setBulk(ticked.length === pageItems.length ? new Set() : new Set(pageItems.map((i) => i.asset.id)))}
+            onSelectFirst={(n) => setBulk(new Set(pageItems.slice(0, n).map((i) => i.asset.id)))}
+          >
+            {ticked.length > 0 && (
+              <span role="region" aria-label="Selected pages" className="flex flex-wrap items-center gap-2 sm:ml-auto">
+                <Button size="sm" variant="success" disabled={bulkDecide.isPending} onClick={() => bulkDecide.mutate("approved")}>
+                  {bulkDecide.isPending ? "Working…" : `Approve ${plural(ticked.length, "page")}`}
+                </Button>
+                <Button size="sm" variant="outline" className="text-danger-fg" disabled={bulkDecide.isPending} onClick={() => setConfirmBulkReject(true)}>
+                  Reject…
+                </Button>
+                <Button size="sm" variant="ghost" disabled={bulkDecide.isPending} onClick={() => setBulk(new Set())}>
+                  Clear
+                </Button>
+              </span>
+            )}
+          </SelectionBar>
+        </Card>
+      )}
+
+      {view === "queue" && (loading || visible.length > 0) && (
       <Card className="approval-workspace grid min-h-[560px] overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <ol aria-label="Queue" className="approval-queue flex max-h-[720px] flex-col overflow-y-auto border-b lg:border-b-0 lg:border-r">
           {loading
@@ -269,20 +470,27 @@ function Approvals() {
                   <Skeleton className="h-10 w-full" />
                 </li>
               ))
-            : grouped
-              ? <PageGroups items={pageItems} selectedId={selected?.id ?? null} onSelect={setSelectedId} bulk={bulk} setBulk={setBulk} />
-              : visible.map((i) => (
-                  <li key={i.id}>
-                    <QueueRow item={i} current={selected?.id === i.id} onSelect={() => setSelectedId(i.id)} />
-                  </li>
-                ))}
-          {!loading && visible.length === 0 && (
-            <li>
-              <EmptyState name="payout-success" title={emptyLabel}>
-                Nothing needs your decision right now.
-              </EmptyState>
-            </li>
-          )}
+            : visible.map((i) => (
+                <li key={i.id} className={cn(by && "flex items-center")}>
+                  {/* The tick box sits beside the row's button, never inside it. Only new pages are decided in bulk. */}
+                  {by && (i.kind === "page" ? (
+                    <Checkbox
+                      className="ml-4 shrink-0"
+                      aria-label={`Select ${i.title}`}
+                      checked={bulk.has(i.asset.id)}
+                      onCheckedChange={(v) => {
+                        const next = new Set(bulk);
+                        if (v === true) next.add(i.asset.id);
+                        else next.delete(i.asset.id);
+                        setBulk(next);
+                      }}
+                    />
+                  ) : (
+                    <span className="ml-4 h-4 w-4 shrink-0" aria-hidden />
+                  ))}
+                  <QueueRow item={i} current={selected?.id === i.id} onSelect={() => setSelectedId(i.id)} className={cn(by && "min-w-0 flex-1")} />
+                </li>
+              ))}
         </ol>
 
         {selected ? (
@@ -309,6 +517,24 @@ function Approvals() {
           !loading && <div className="hidden lg:block" />
         )}
       </Card>
+      )}
+
+      <Dialog open={confirmBulkReject && ticked.length > 0} onOpenChange={(o) => !o && !bulkDecide.isPending && setConfirmBulkReject(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject {plural(ticked.length, "page")}?</DialogTitle>
+            <DialogDescription>They can&apos;t be booked until they&apos;re added again.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={bulkDecide.isPending} onClick={() => setConfirmBulkReject(false)}>
+              Keep them
+            </Button>
+            <Button variant="destructive" disabled={bulkDecide.isPending} onClick={() => bulkDecide.mutate("rejected")}>
+              {bulkDecide.isPending ? "Rejecting…" : `Reject ${plural(ticked.length, "page")}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <PageSheet page={ratesPage} startEditing onClose={() => setRatesPageId(null)} />
       <RejectDialog item={reject} busy={decide.isPending} onClose={() => setReject(null)} onReject={(note) => reject && decide.mutate({ item: reject, approve: false, note, andNext: true })} />
@@ -333,67 +559,6 @@ function QueueRow({ item, current, onSelect, className }: { item: Item; current:
       </span>
       <span className="text-small text-fg-muted">{waited(item.since)}</span>
     </button>
-  );
-}
-
-type PageItem = Extract<Item, { kind: "page" }>;
-
-/**
- * New pages grouped by who added them (1 Nov): "this plan maker added these
- * pages", tick the whole group or single pages, then "Approve selected" above
- * the queue. Pages from before the adder was recorded share one last group.
- * The tick box sits beside the row's button, never inside it.
- */
-function PageGroups({ items, selectedId, onSelect, bulk, setBulk }: { items: PageItem[]; selectedId: string | null; onSelect: (id: string) => void; bulk: Set<string>; setBulk: (next: Set<string>) => void }) {
-  const groups = useMemo(() => {
-    const byAdder = new Map<string, { key: string; label: string; role: string; items: PageItem[] }>();
-    for (const i of items) {
-      const by = i.asset.createdBy;
-      const key = by?.id ?? UNTRACKED;
-      const g = byAdder.get(key) ?? { key, label: by ? personLabel(by) : "Added before tracking", role: by ? roleLabel(by.role) : "", items: [] };
-      g.items.push(i);
-      byAdder.set(key, g);
-    }
-    return [...byAdder.values()].sort((a, b) => (a.key === UNTRACKED ? 1 : b.key === UNTRACKED ? -1 : a.label.localeCompare(b.label)));
-  }, [items]);
-
-  const toggle = (ids: string[], on: boolean) => {
-    const next = new Set(bulk);
-    for (const id of ids) {
-      if (on) next.add(id);
-      else next.delete(id);
-    }
-    setBulk(next);
-  };
-
-  return (
-    <>
-      {groups.map((g) => {
-        const ids = g.items.map((i) => i.asset.id);
-        const ticked = ids.filter((id) => bulk.has(id)).length;
-        return (
-          <li key={g.key}>
-            <div role="group" aria-label={g.label} className="sticky top-0 z-10 flex items-center gap-3 border-b bg-muted px-4 py-2 text-small">
-              <Checkbox aria-label={`Select all from ${g.label}`} checked={ticked === ids.length ? true : ticked > 0 ? "indeterminate" : false} onCheckedChange={(v) => toggle(ids, v === true)} />
-              <span className="min-w-0 flex-1 truncate">
-                <span className="font-semibold">{g.label}</span>
-                <span className="text-fg-muted">
-                  {g.role ? ` · ${g.role}` : ""} · {plural(ids.length, "page")}
-                </span>
-              </span>
-            </div>
-            <ol>
-              {g.items.map((i) => (
-                <li key={i.id} className="flex items-center">
-                  <Checkbox className="ml-4" aria-label={`Select ${i.title}`} checked={bulk.has(i.asset.id)} onCheckedChange={(v) => toggle([i.asset.id], v === true)} />
-                  <QueueRow item={i} current={selectedId === i.id} onSelect={() => onSelect(i.id)} className="min-w-0 flex-1" />
-                </li>
-              ))}
-            </ol>
-          </li>
-        );
-      })}
-    </>
   );
 }
 
@@ -766,7 +931,13 @@ function RejectDialog({ item, busy, onClose, onReject }: { item: Item | null; bu
           </div>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setNote("");
+              onClose();
+            }}
+          >
             Keep it
           </Button>
           <Button

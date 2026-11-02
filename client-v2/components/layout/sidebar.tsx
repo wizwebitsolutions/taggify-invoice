@@ -21,7 +21,7 @@ export function Sidebar({ active, collapsed, onToggle }: { active: string; colla
   return (
     <aside
       className={cn(
-        "sticky top-0 hidden h-screen shrink-0 flex-col gap-4 border-r border-border bg-sidebar pb-4 pt-6 transition-[width] duration-drawer ease-out md:flex",
+        "workspace-sidebar sticky top-0 hidden h-screen shrink-0 flex-col gap-4 border-r border-border bg-sidebar pb-4 pt-6 transition-[width] duration-drawer ease-out md:flex",
         collapsed ? "w-rail px-3" : "w-sidebar px-5"
       )}
     >
@@ -72,7 +72,7 @@ export function NavList({ active, collapsed = false, onNavigate }: { active: str
 function NavRow({ item, sub, current, highlighted, collapsed, onNavigate }: { item: NavItem; sub?: boolean; current: boolean; highlighted: boolean; collapsed?: boolean; onNavigate?: () => void }) {
   const Icon = item.icon;
   const cls = cn(
-    "relative flex items-center rounded-md text-body transition-colors duration-hover ease-out",
+    "workspace-nav-item relative flex items-center rounded-md text-body transition-colors duration-hover ease-out",
     sub ? "h-10 pl-14 text-body" : "h-11 gap-4 px-3",
     collapsed && "justify-center px-0",
     highlighted ? "bg-brand-soft font-semibold text-brand-ink ring-1 ring-inset ring-brand-line" : item.built ? "text-fg-strong hover:bg-muted" : "cursor-default text-fg-strong/45",
@@ -105,7 +105,7 @@ function NavRow({ item, sub, current, highlighted, collapsed, onNavigate }: { it
 
 function PromoCard() {
   return (
-    <div className="relative mt-auto shrink-0 overflow-hidden rounded-card border bg-card px-4 pt-4 shadow-2">
+    <div className="workspace-promo relative mt-auto shrink-0 overflow-hidden rounded-card border bg-card px-4 pt-4 shadow-2">
       <p className="text-body font-bold">
         Creators create.
         <br />

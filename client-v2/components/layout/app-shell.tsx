@@ -61,7 +61,7 @@ export function AppShell({ active, children, hideEmailVerifyBanner }: { active: 
         <Sidebar active={active} collapsed={collapsed} onToggle={toggle} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar active={active} />
-          <main className={cn("relative w-full max-w-content flex-1 px-4 pb-10 pt-6 md:px-8 md:pt-8", creatorSide && "pb-24 md:pb-10")}>
+          <main className={cn("workspace-main relative w-full max-w-content flex-1 px-4 pb-10 pt-6 md:px-8 md:pt-8", creatorSide && "pb-24 md:pb-10")}>
             <EmailVerifyBanner hidden={hideEmailVerifyBanner} />
             <div className="animate-fade-in">{children}</div>
           </main>

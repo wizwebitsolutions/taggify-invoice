@@ -39,5 +39,20 @@ export function PlatformIcon({ platform, size = 18, className, always }: { platf
       </svg>
     );
   }
+  if (p === "whatsapp") return <WhatsAppIcon size={size} className={className} />;
   return <span role="img" aria-label={platform} className={cn("inline-block shrink-0 rounded-full bg-fg-muted", className)} style={{ width: size * 0.5, height: size * 0.5 }} />;
+}
+
+/** WhatsApp's mark (green bubble, white handset), for page group links. Decorative: the link text says "WhatsApp". */
+export function WhatsAppIcon({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" className={cn("shrink-0", className)}>
+      <path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2z" fill="#25D366" />
+      <path
+        transform="translate(6.6 6.6) scale(0.45)"
+        d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"
+        fill="#fff"
+      />
+    </svg>
+  );
 }

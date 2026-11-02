@@ -377,7 +377,7 @@ export interface Asset {
   groupLink?: string | null;
   /** A planner's suggested edit waiting for an admin (16 Oct). The live fields stay as they are until it's applied. */
   pendingEdit?: PendingAssetEdit | null;
-  pendingEditBy?: { id: string; name: string | null; email?: string | null } | null;
+  pendingEditBy?: { id: string; name: string | null; email?: string | null; role?: Role } | null;
   pendingEditAt?: string | null;
   /** Plan form's Instagram check (17 Oct): when the page was last confirmed to exist, and whether it came back missing. */
   profileCheckedAt?: string | null;

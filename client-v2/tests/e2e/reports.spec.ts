@@ -63,6 +63,8 @@ test.describe("Reports", () => {
     // Most of the budget used first; over-budget shows by how much; unbudgeted campaigns are counted, not listed.
     await expect(spend.getByRole("link").first()).toContainText("Diwali Food Stories");
     await expect(spend.getByText(/Over by ₹12,000/)).toBeVisible();
+    await expect(spend.getByText("112% used", { exact: true })).toBeVisible();
+    await expect(spend.locator(".spend-meter-label").first()).toHaveText("Spent");
     await expect(spend.getByText("1 campaign without a budget isn't shown.")).toBeVisible();
 
     const pages = page.getByRole("region", { name: "Pages by posts submitted" });

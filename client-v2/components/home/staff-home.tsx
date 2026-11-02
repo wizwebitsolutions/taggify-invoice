@@ -57,6 +57,7 @@ import {
 import { usePlans } from "@/lib/queries/plans";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PayoutActivity } from "@/components/finance/payout-activity";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Illustration,
@@ -224,11 +225,11 @@ export function StaffHome() {
     sources.can.billing;
 
   return (
-    <div className="flex flex-col gap-6 pt-2">
-      <Card className="flex items-center gap-4 overflow-hidden p-5 md:p-6">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+    <div className="workspace-page">
+      <Card className="dashboard-intro">
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
           <div>
-            <p className="text-body text-muted-foreground">
+            <p className="page-eyebrow">
               {greeting()}, {personLabel(user, "there").split(" ")[0]}
             </p>
             <h1 className="text-display">
@@ -262,7 +263,7 @@ export function StaffHome() {
         </div>
         <Illustration
           name={illustration}
-          className="hidden h-36 w-auto sm:block"
+          className="hidden h-24 w-auto lg:block"
         />
       </Card>
 
@@ -298,13 +299,13 @@ export function StaffHome() {
               <li key={a.key}>
                 <Link
                   href={a.href}
-                  className="flex items-center gap-3 rounded-card border bg-card p-4 text-foreground shadow-2 transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring-soft"
+                  className="decision-tile"
                 >
                   <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-tile-coral-icon text-tile-coral-fg">
                     <a.icon className="h-5 w-5" aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="num block text-section">{a.count}</span>
+                    <span className="num block text-display">{a.count}</span>
                     <span className="block text-small text-fg-muted">
                       {a.label}
                     </span>
@@ -316,6 +317,8 @@ export function StaffHome() {
           </ul>
         )}
       </section>
+
+      {canPay && <PayoutActivity />}
 
       <div className="grid items-start gap-6 xl:grid-cols-2">
         {canUse(user, "campaigns.view") && (
@@ -344,8 +347,8 @@ export function SectionCard({
   const id = `home-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
     <section aria-labelledby={id}>
-      <Card className="overflow-hidden">
-        <div className="flex items-center gap-3 border-b px-5 py-4">
+      <Card className="listing-panel">
+        <div className="listing-heading">
           <h2 id={id} className="text-card-title">
             {title}
           </h2>
@@ -393,7 +396,7 @@ export function Rows({
     return (
       <p className="px-5 py-6 text-small text-muted-foreground">{empty}</p>
     );
-  return <ul className="divide-y">{children}</ul>;
+  return <ul className="listing-stack">{children}</ul>;
 }
 
 function CampaignBadge({ c }: { c: Campaign }) {
@@ -457,7 +460,7 @@ function ActiveCampaigns({ planner }: { planner: boolean }) {
             <li key={c.id}>
               <Link
                 href={`/campaigns/${c.id}`}
-                className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground"
+                className="listing-row"
               >
                 <CampaignBadge c={c} />
                 <span className="min-w-0 flex-1">
@@ -514,7 +517,7 @@ export function VendorsToPay() {
           <li key={r.id}>
             <Link
               href={`/finance/payouts/${r.id}`}
-              className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground"
+              className="listing-row"
             >
               <UserAvatar name={personLabel(r.owner, "Vendor")} size="sm" />
               <span className="min-w-0 flex-1">
@@ -561,7 +564,7 @@ function MyPlans() {
           <li key={p.id}>
             <Link
               href={`/plans/${p.id}`}
-              className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground"
+              className="listing-row"
             >
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-sm bg-tile-amber-icon text-tile-amber-fg">
                 <ListChecks className="h-5 w-5" aria-hidden />
@@ -613,21 +616,21 @@ function RecentContent() {
               <Link
                 href={toCampaign ? `/campaigns/${l.campaignId}` : l.url}
                 {...(toCampaign ? {} : { target: "_blank", rel: "noreferrer" })}
-                className="flex items-center gap-3 px-5 py-3 text-foreground hover:bg-accent hover:text-foreground"
+                className="listing-row content-record"
               >
                 <ContentThumb src={postThumbSrc(l)} format={l.format} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-body-strong">
-                    {captionTitle(snap?.caption) ?? formatLabel(l.format)}
+                  <span className="block truncate text-body-strong" title={captionTitle(snap?.caption) ?? formatLabel(l.format)}>
+                    {displayHandle(l.asset?.handle ?? "—", l.asset?.platform)}
                   </span>
-                  <span className="block truncate text-small text-fg-muted">
-                    {displayHandle(l.asset?.handle ?? "—", l.asset?.platform)} ·{" "}
-                    {l.campaign?.title ?? "—"}
+                  <span className="block truncate text-small text-muted-foreground">
+                    {formatLabel(l.format)} · {captionTitle(snap?.caption) ? `${captionTitle(snap?.caption)} · ` : ""}{l.campaign?.title ?? "—"}
                   </span>
                 </span>
                 <span className="shrink-0">
                   <StatusPill tone={st.tone}>{st.label}</StatusPill>
                 </span>
+                <ArrowRight className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
               </Link>
             </li>
           );

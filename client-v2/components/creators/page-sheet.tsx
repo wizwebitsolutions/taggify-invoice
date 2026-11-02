@@ -35,7 +35,7 @@ const profileUrl = (a: Asset) => (a.platform.toLowerCase() === "youtube" ? `http
 export function PageSheet({ page, onClose, startEditing = false }: { page: Asset | null; onClose: () => void; startEditing?: boolean }) {
   return (
     <Sheet open={!!page} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">{page && <PageDetails key={page.id} page={page} onClose={onClose} startEditing={startEditing} />}</SheetContent>
+      <SheetContent className="page-detail-sheet flex w-full flex-col gap-0 overflow-y-auto p-0">{page && <PageDetails key={page.id} page={page} onClose={onClose} startEditing={startEditing} />}</SheetContent>
     </Sheet>
   );
 }
@@ -103,7 +103,7 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
 
   return (
     <>
-      <SheetHeader className="gap-3 border-b p-5 text-left">
+      <SheetHeader className="detail-profile-header">
         <div className="flex items-center gap-3">
           <PageAvatar assetId={page.id} handle={page.handle} size="lg" />
           <div className="min-w-0">
@@ -134,26 +134,26 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
       {editing ? (
         <EditForm page={page} propose={!editable && proposer} onDone={() => setEditing(false)} />
       ) : (
-        <div className="flex flex-1 flex-col gap-5 p-5">
+        <div className="detail-profile-body">
           {pending && <PendingEditCard page={page} pending={pending} canDecide={approvable} busy={decideEdit.isPending} onDecide={(d) => decideEdit.mutate(d)} />}
           {canSetPageActive(user) && (
-            <div className="flex items-center gap-3 rounded-card border p-4">
+            <div className="detail-availability">
               <div className="min-w-0 flex-1">
                 <Label htmlFor="page-active" className="text-body-strong">
-                  Active
+                  Available for new plans
                 </Label>
-                <p className="text-small text-muted-foreground">{active ? "Can be added to new plans." : "Inactive: can't be added to new plans. Everything else stays the same."}</p>
+                <p className="text-small text-muted-foreground">{active ? "This page can receive new bookings." : "Excluded from new plans. Existing campaigns stay available."}</p>
               </div>
               <Switch id="page-active" checked={active} disabled={setActive.isPending} onCheckedChange={(on) => setActive.mutate(on)} />
             </div>
           )}
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-card border p-4">
+          <section aria-labelledby="audience-title" className="detail-audience"><h3 id="audience-title" className="detail-section-title">Audience & engagement</h3><dl className="detail-metrics">
             <Stat label={page.platform.toLowerCase() === "youtube" ? "Subscribers" : "Followers"} value={count(page.followers)} />
             <Stat label="Avg views" value={count(page.engagement.avgViews)} manual={page.engagement.manual?.avgViews} />
             <Stat label="Avg likes" value={count(page.engagement.avgLikes)} manual={page.engagement.manual?.avgLikes} />
             <Stat label="Avg comments" value={count(page.engagement.avgComments)} manual={page.engagement.manual?.avgComments} />
-          </dl>
-          <p className="-mt-3 text-small text-muted-foreground">
+          </dl></section>
+          <p className="detail-source">
             {scrape === "fetching"
               ? `Fetching the latest numbers from ${source(page)}…`
               : scrape === "failed"
@@ -165,27 +165,27 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
           </p>
 
           <section aria-labelledby="details-title" className="flex flex-col gap-2">
-            <h3 id="details-title" className="text-card-title">
+            <h3 id="details-title" className="detail-section-title">
               Details
             </h3>
-            <dl className="grid grid-cols-2 gap-2">
-              <div className="rounded-md bg-muted px-3 py-2">
+            <dl className="detail-key-values">
+              <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Category</dt>
                 <dd className="text-body-strong">{page.category ?? "Not set"}</dd>
               </div>
-              <div className="rounded-md bg-muted px-3 py-2">
+              <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Grade</dt>
                 <dd className="text-body-strong">{page.grade ? `Grade ${page.grade}` : "Not graded"}</dd>
               </div>
-              <div className="rounded-md bg-muted px-3 py-2">
+              <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Vendor</dt>
                 <dd className="truncate text-body-strong">{personLabel(page.owner, "No vendor")}</dd>
               </div>
-              <div className="rounded-md bg-muted px-3 py-2">
+              <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Added by</dt>
                 <dd className="truncate text-body-strong">{page.createdBy ? `${personLabel(page.createdBy)} · ${roleLabel(page.createdBy.role)}` : <span className="font-normal text-muted-foreground">Before tracking</span>}</dd>
               </div>
-              <div className="col-span-2 rounded-md bg-muted px-3 py-2">
+              <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Group link</dt>
                 <dd className="truncate text-body-strong">
                   {page.groupLink ? (
@@ -203,15 +203,15 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
           </section>
 
           <section aria-labelledby="rates-title" className="flex flex-col gap-2">
-            <h3 id="rates-title" className="text-card-title">
+            <h3 id="rates-title" className="detail-section-title">
               Rates
             </h3>
             {/* Every format (1 Nov) — "—" where the page has no rate, so what's missing is visible too. */}
-            <dl className="grid grid-cols-2 gap-2">
+            <dl className="detail-key-values">
               {FORMATS.map((f) => {
                 const v = rateOf(page, f);
                 return (
-                  <div key={f} className="rounded-md bg-muted px-3 py-2">
+                  <div key={f} className="detail-key-value">
                     <dt className="text-label text-muted-foreground">{formatLabel(f)}</dt>
                     <dd className={v == null ? "text-body text-muted-foreground" : "text-body-strong"}>{v == null ? "—" : <Money value={v} />}</dd>
                   </div>
@@ -222,7 +222,7 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
           </section>
 
           <section aria-labelledby="camps-title" className="flex flex-col gap-2">
-            <h3 id="camps-title" className="text-card-title">
+            <h3 id="camps-title" className="detail-section-title">
               Campaigns ({page.campaigns?.length ?? 0})
             </h3>
             {(page.campaigns?.length ?? 0) === 0 ? (
