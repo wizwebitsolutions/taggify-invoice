@@ -1,7 +1,5 @@
 import "dotenv/config";
 import { clearStaleScrapeQueue } from "./modules/assets/service.js";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -28,20 +26,14 @@ import { startPostTrackerWorker } from "./modules/postTracker/worker.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { startKeepAlive } from "./modules/jobs/keepAlive.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// client/ builds to a static export (next.config.js: output: "export") that
-// this server hosts directly, so one Render service owns the whole app —
-// no separate Vercel deploy. See CLAUDE.md.
-const CLIENT_DIST = path.join(__dirname, "../../client/out");
+import { createFrontendHandler } from "./frontend.js";
 
 const app = express();
 
 // credentials: true + a reflected (non-"*") origin is required for the
 // browser to send/accept the trusted-device cookie (23 Sep — "skip OTP for
-// 7 days"). Production is same-origin already (client/out is served by
-// this same service — see render.yaml), so this only changes local dev,
+// 7 days"). Production is same-origin already (client-v2 is served by
+// this same service — see src/frontend.js), so this only changes local dev,
 // where the client (:3000) and API (:4000) are same-site but cross-origin.
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
@@ -78,18 +70,11 @@ apiRouter.use(notFoundHandler);
 apiRouter.use(errorHandler);
 app.use("/api", apiRouter);
 
-// Static frontend + SPA fallback. CSP off here only: Next's static export
-// ships inline hydration/theme-init scripts it can't hash/nonce per-request,
-// and helmet's default CSP would silently block them. `extensions: ["html"]`
-// lets a request for e.g. /campaigns/view resolve to the exported
-// campaigns/view.html.
+// Frontend: client-v2's built Next app, run in this process (src/frontend.js).
+// CSP off here only: Next ships inline hydration/theme-init scripts that
+// helmet's default CSP would silently block.
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.static(CLIENT_DIST, { extensions: ["html"] }));
-app.get("*", (req, res) => {
-  res.sendFile(path.join(CLIENT_DIST, "index.html"), (err) => {
-    if (err) res.status(500).send("Frontend build not found — run `npm run build` in client/ first.");
-  });
-});
+app.use(createFrontendHandler());
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

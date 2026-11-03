@@ -49,7 +49,7 @@ server/
 ```
 
 Both apps build independently but ship as **one deployable**: `server/src/app.js`
-serves `client/out` (the static export) for every non-`/api` path, so there is
+serves the built `client-v2` Next app (server/src/frontend.js; was `client/out` until 3 Nov 2026) for every non-`/api` path, so there is
 one Render service, one URL, one process. This is a deliberate simplification
 made mid-project (see commit "Merge frontend+backend into one Render service") —
 originally frontend and backend were separate deploys.

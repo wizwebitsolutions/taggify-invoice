@@ -19,13 +19,13 @@ services:
     # `@/...` import in the app fails to resolve at build time. Root-caused
     # and reproduced exactly (byte-for-byte) via a clean Linux container
     # build with NODE_ENV=production set, matching the Render deploy logs.
-    buildCommand: cd server && npm install --include=dev && npx prisma migrate deploy && cd ../client && npm install --include=dev && npm run build
+    buildCommand: cd server && npm install --include=dev && npx prisma migrate deploy && cd ../client-v2 && npm install --include=dev && NEXT_PUBLIC_API_URL=/api npm run build
     startCommand: cd server && npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
-      # Same-origin in production — server/src/app.js serves client/out and
+      # Same-origin in production — server/src/app.js serves client-v2 and
       # the /api/* routes from the one service, so this is a relative path,
       # not a host. (Local dev keeps client/.env.local pointed at
       # http://localhost:4000/api since `next dev` and the API run as two
