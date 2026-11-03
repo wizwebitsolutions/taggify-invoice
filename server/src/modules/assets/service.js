@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { refreshAssetMetrics, applyProfileMetrics } from "../scraping/service.js";
@@ -1313,6 +1314,41 @@ export async function fetchImportFollowers(handles) {
     profiles[handle] = metrics ? { followers: metrics.followers, avgViews: metrics.avgViews, avgLikes: metrics.avgLikes, avgComments: metrics.avgComments, fullName: metrics.fullName } : null;
   }
   return { profiles };
+}
+
+/**
+ * The follower check as a background job (3 Nov — 504 in production). One
+ * lookup can wait up to 240 s on Apify, but DigitalOcean's gateway closes a
+ * request after ~100 s, so the modal starts the job and polls for it instead
+ * of holding one request open. In memory, like previewScrapeCache: a restart
+ * loses running jobs and the modal shows the error so the user can re-check.
+ */
+const followerJobs = new Map();
+
+export function startImportFollowersJob(userId, handles) {
+  for (const [id, job] of followerJobs) if (Date.now() - job.at > PREVIEW_SCRAPE_TTL_MS) followerJobs.delete(id);
+  const jobId = randomUUID();
+  const job = { userId, at: Date.now(), status: "running", profiles: null, error: null };
+  followerJobs.set(jobId, job);
+  fetchImportFollowers(handles).then(
+    ({ profiles }) => {
+      job.status = "done";
+      job.profiles = profiles;
+    },
+    (err) => {
+      job.status = "failed";
+      job.error = err instanceof ApiError ? err : new ApiError(502, "FOLLOWERS_FETCH_FAILED", "Couldn't fetch follower counts from Instagram right now. Retry the check.");
+    }
+  );
+  return { jobId };
+}
+
+/** `{ status: "running" }` or `{ status: "done", profiles }`; a failed job throws its error. Only the user who started it can read it. */
+export function getImportFollowersJob(userId, jobId) {
+  const job = followerJobs.get(jobId);
+  if (!job || job.userId !== userId) throw new ApiError(404, "FOLLOWERS_JOB_NOT_FOUND", "This follower check has expired. Retry the check.");
+  if (job.status === "failed") throw job.error;
+  return job.status === "done" ? { status: "done", profiles: job.profiles } : { status: "running" };
 }
 
 /** `undefined` = never checked (or expired); `null` = Instagram said not found; else the metrics. */

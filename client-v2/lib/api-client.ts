@@ -910,9 +910,13 @@ export const assets = {
     requestWithFile<ImportPreview>("/assets/import/preview", token, file),
   // Step 1, from a pasted Google Sheet share link (fetched server-side as CSV).
   previewImportUrl: (token: string, url: string) => request<ImportPreview>("/assets/import/preview-url", { method: "POST", token, body: { url } }),
-  // Live follower counts / avg views for previewed handles (≤100 per call; one Apify run). A null entry = private/missing profile.
-  importFollowers: (token: string, handles: string[]) =>
-    request<{ profiles: Record<string, ImportScrapedProfile | null> }>("/assets/import/followers", { method: "POST", token, body: { handles } }),
+  // Live follower counts / avg views for previewed handles (≤100 per call). Started as a job and polled with
+  // importFollowersJob (3 Nov): the Instagram lookup outlasts the production gateway's request timeout.
+  startImportFollowers: (token: string, handles: string[]) =>
+    request<{ jobId: string }>("/assets/import/followers", { method: "POST", token, body: { handles } }),
+  // A null entry in `profiles` = private/missing profile; a handle left out = unknown (its lookup timed out).
+  importFollowersJob: (token: string, jobId: string) =>
+    request<{ status: "running" } | { status: "done"; profiles: Record<string, ImportScrapedProfile | null> }>(`/assets/import/followers/${encodeURIComponent(jobId)}`, { token }),
   // Step 2: create exactly the rows the admin confirmed.
   import: (token: string, rows: ImportAssetRow[]) =>
     request<ImportResult>("/assets/import", { method: "POST", token, body: { rows } }),

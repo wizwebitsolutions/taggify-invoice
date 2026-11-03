@@ -257,9 +257,19 @@ router.post("/import/preview-url", requireAccess("inventory.edit", "CREATOR", "P
 // Step 1½: live follower counts / avg views for the previewed handles, one
 // Apify run for the batch (user request, 14 Sep). Slow-ish (a minute or
 // so) and optional — the modal shows the rows first and fills these in.
-router.post("/import/followers", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), validateBody(importFollowersSchema), async (req, res, next) => {
+// Started as a job and polled (3 Nov): the Instagram lookup can outlast the
+// production gateway's ~100 s request timeout (504) — see startImportFollowersJob.
+router.post("/import/followers", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), validateBody(importFollowersSchema), (req, res, next) => {
   try {
-    res.json(await assetsService.fetchImportFollowers(req.body.handles));
+    res.status(202).json(assetsService.startImportFollowersJob(req.user.id, req.body.handles));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/import/followers/:jobId", requireAccess("inventory.edit", "CREATOR", "PLAN_MAKER"), (req, res, next) => {
+  try {
+    res.json(assetsService.getImportFollowersJob(req.user.id, req.params.jobId));
   } catch (err) {
     next(err);
   }

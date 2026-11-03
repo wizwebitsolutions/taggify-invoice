@@ -42,7 +42,11 @@ Each folder under `src/modules/` is `schemas.js` (zod validation) + `service.js`
   original name in `X-File-Name`; returns a per-row preview with the resolved
   account and status — nothing written), `POST /assets/import/preview-url`
   (`{ url }` of a link-shared Google Sheet, fetched server-side as CSV, same
-  preview), `POST /assets/import/followers` (`{ handles }` ≤100 — one Apify
+  preview), `POST /assets/import/followers` (`{ handles }` ≤100 — starts a
+  background job and answers 202 `{ jobId }` at once, because the lookup can
+  outlast DigitalOcean's ~100 s gateway timeout; poll
+  `GET /assets/import/followers/:jobId` → `{ status: "running" }` or
+  `{ status: "done", profiles }`, only by the user who started it. One Apify
   run per 25 handles for live followers/avg views shown in the preview; a
   handle whose run didn't finish is omitted = unknown, `null` = not on
   Instagram; both answers cached 30 min) and `POST /assets/import` (creates the

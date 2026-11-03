@@ -25,7 +25,7 @@ vi.mock("../../lib/cloudinaryClient.js", () => ({ uploadProfilePic: vi.fn(async 
 // must be confirmed on Instagram before it's stored).
 const found = (over = {}) => ({ followers: 4321, mediaCount: 3, avgViews: null, avgLikes: null, avgComments: null, sampleSize: 0, fullName: null, biography: null, profilePicUrl: null, ...over });
 
-const { previewImport, importAssets, importEditDiff, resolveOwnerRef, previewImportFromSheetUrl, fetchImportFollowers } = await import("./service.js");
+const { previewImport, importAssets, importEditDiff, resolveOwnerRef, previewImportFromSheetUrl, fetchImportFollowers, startImportFollowersJob, getImportFollowersJob } = await import("./service.js");
 const { ApiError } = await import("../../middleware/errorHandler.js");
 const { refreshAssetMetrics } = await import("../scraping/service.js");
 
@@ -716,5 +716,34 @@ describe("importAssets — rows already in Inventory are edits (1 Nov)", () => {
     expect(result.skipped).toEqual([{ handle: "known.page", reason: "Already registered under Priya Creator." }]);
     expect(result.updated).toEqual([]);
     expect(mockPrisma.asset.update).not.toHaveBeenCalled();
+  });
+});
+
+// 3 Nov — 504 in production: the lookup runs in the background and the modal polls it.
+describe("startImportFollowersJob / getImportFollowersJob", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("answers at once while the lookup runs, then hands back the profiles", async () => {
+    let finish;
+    getAccountMetricsBatch.mockImplementation(() => new Promise((r) => (finish = r)));
+    const { jobId } = startImportFollowersJob("user-1", ["slow.page"]);
+    expect(getImportFollowersJob("user-1", jobId)).toEqual({ status: "running" });
+    finish({ "slow.page": found({ followers: 99 }) });
+    await settle();
+    expect(getImportFollowersJob("user-1", jobId)).toEqual({ status: "done", profiles: { "slow.page": expect.objectContaining({ followers: 99 }) } });
+  });
+
+  it("a failed lookup is returned as the 502 the modal shows", async () => {
+    getAccountMetricsBatch.mockRejectedValue(new Error("Apify down"));
+    const { jobId } = startImportFollowersJob("user-1", ["x.page"]);
+    await settle();
+    expect(() => getImportFollowersJob("user-1", jobId)).toThrow(expect.objectContaining({ statusCode: 502, code: "FOLLOWERS_FETCH_FAILED" }));
+  });
+
+  it("another user, or an unknown id, gets a 404", async () => {
+    const { jobId } = startImportFollowersJob("user-1", ["x.page"]);
+    await settle();
+    expect(() => getImportFollowersJob("user-2", jobId)).toThrow(expect.objectContaining({ statusCode: 404, code: "FOLLOWERS_JOB_NOT_FOUND" }));
+    expect(() => getImportFollowersJob("user-1", "nope")).toThrow(expect.objectContaining({ statusCode: 404 }));
   });
 });

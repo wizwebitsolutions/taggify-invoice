@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Check, Copy, Download, FileSpreadsheet, RefreshCw, Upload, UserPlus } from "lucide-react";
@@ -39,6 +39,9 @@ const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e in
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const FOLLOWERS_CHUNK = 100;
+// The lookup runs as a server job (3 Nov); the server's own Apify wait is 240 s, so give up a little after that.
+const FOLLOWERS_POLL_MS = 3000;
+const FOLLOWERS_POLL_LIMIT_MS = 5 * 60 * 1000;
 /** Select items can't carry "", so "keep what the sheet / the all-pages picker says" uses these. */
 const SHEET = "__sheet";
 const DEFAULT = "__default";
@@ -177,6 +180,10 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   const [result, setResult] = useState<ImportResult | null>(null);
   // A slow read or lookup for a sheet that was already replaced must not paint the new one.
   const latest = useRef<File | string | null>(null);
+  // Closing the dialog stops any follower-check polling still running for its sheet.
+  useEffect(() => () => {
+    latest.current = null;
+  }, []);
 
   const template = useMutation({
     mutationFn: () => assetsApi.downloadImportTemplate(accessToken!),
@@ -186,9 +193,20 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   const lookup = useMutation({
     mutationFn: async ({ handles, src }: { handles: string[]; src: File | string }) => {
       for (let i = 0; i < handles.length; i += FOLLOWERS_CHUNK) {
-        const { profiles } = await assetsApi.importFollowers(accessToken!, handles.slice(i, i + FOLLOWERS_CHUNK));
+        const { jobId } = await assetsApi.startImportFollowers(accessToken!, handles.slice(i, i + FOLLOWERS_CHUNK));
         if (latest.current !== src) return;
-        setLive((prev) => ({ ...prev, ...profiles }));
+        const deadline = Date.now() + FOLLOWERS_POLL_LIMIT_MS;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, FOLLOWERS_POLL_MS));
+          if (latest.current !== src) return;
+          const job = await assetsApi.importFollowersJob(accessToken!, jobId);
+          if (latest.current !== src) return;
+          if (job.status === "done") {
+            setLive((prev) => ({ ...prev, ...job.profiles }));
+            break;
+          }
+          if (Date.now() > deadline) throw new Error("Instagram is taking too long to answer. Retry the check.");
+        }
       }
     },
     onError: (e, { src }) => {

@@ -63,11 +63,19 @@ async function importApi(page: Page, role: MockRole, { preview = PREVIEW as obje
     calls.urls.push(r.request().postDataJSON().url);
     return r.fulfill({ json: { ...PREVIEW, rows: PREVIEW.rows.slice(0, 1), totalRows: 1 } });
   });
+  // The follower check is a job the dialog polls (3 Nov): POST starts it, GET …/:jobId answers once it's done.
+  const jobs = new Map<string, Record<string, ReturnType<typeof PROFILE> | null>>();
   await page.route(`${API_URL}/assets/import/followers`, (r) => {
     const { handles } = r.request().postDataJSON();
     calls.lookups.push(handles);
     const known: Record<string, ReturnType<typeof PROFILE> | null> = { "riya.eats": PROFILE(500000), "newpage.official": PROFILE(91000), "broken.link": null, "chai.diaries": PROFILE(42000), "chai.tales": PROFILE(30000), "meme.house": PROFILE(120000) };
-    return r.fulfill({ json: { profiles: Object.fromEntries(handles.map((h: string) => [h, known[h] ?? null])) } });
+    const jobId = `job-${jobs.size + 1}`;
+    jobs.set(jobId, Object.fromEntries(handles.map((h: string) => [h, known[h] ?? null])));
+    return r.fulfill({ status: 202, json: { jobId } });
+  });
+  await page.route(`${API_URL}/assets/import/followers/*`, (r) => {
+    const profiles = jobs.get(r.request().url().split("/").pop()!);
+    return r.fulfill(profiles ? { json: { status: "done", profiles } } : { status: 404, json: { error: { code: "FOLLOWERS_JOB_NOT_FOUND", message: "This follower check has expired. Retry the check." } } });
   });
   await page.route(`${API_URL}/assets/import`, (r) => {
     const { rows } = r.request().postDataJSON();
