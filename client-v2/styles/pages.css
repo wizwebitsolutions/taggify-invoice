@@ -318,8 +318,89 @@
 .inventory-identity-name {
   @apply max-w-56 truncate text-small text-fg-muted;
 }
-.whatsapp-chip {
-  @apply inline-flex shrink-0 items-center gap-1 rounded-pill bg-success-soft px-2 py-0.5 text-micro font-semibold text-success-fg ring-1 ring-inset ring-success/30 transition-colors hover:bg-success/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-success;
+/* Inventory declutter (3 Nov) ------------------------------------------- */
+/* WhatsApp group: a small round icon next to the handle. */
+.whatsapp-dot {
+  @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-pill bg-success-soft transition-colors hover:bg-success/25 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-success;
+}
+/* Tab counts as small badges instead of "(210)". */
+.tab-count {
+  @apply ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-pill bg-muted px-2 text-micro font-semibold text-muted-foreground;
+}
+[data-state="active"] > .tab-count {
+  @apply bg-brand-soft text-brand-ink;
+}
+.tab-count.tab-count-attention {
+  @apply bg-warning-soft text-warning-fg;
+}
+/* Active filter, removable. */
+.filter-chip {
+  @apply inline-flex h-8 items-center gap-1 rounded-pill border border-brand-line bg-brand-soft pl-3 pr-1 text-small font-medium text-brand-ink;
+}
+.filter-chip > button {
+  @apply inline-flex h-6 w-6 items-center justify-center rounded-pill transition-colors hover:bg-brand/15 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+}
+/* Number over its caption (Reach, Rate). */
+.inventory-stack {
+  @apply inline-flex flex-col items-end gap-0.5 whitespace-nowrap;
+}
+/* Grade as one coloured letter. */
+.grade-mark {
+  @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-small font-bold;
+}
+/* One status per row: a dot and a word; extra flags sit underneath, small. */
+.status-dot {
+  @apply inline-flex items-center gap-2 whitespace-nowrap text-small font-medium;
+}
+.status-dot::before {
+  content: "";
+  @apply h-2 w-2 shrink-0 rounded-pill bg-current;
+}
+.inventory-row-inactive .inventory-identity {
+  @apply opacity-60;
+}
+/* Header checkbox split with a chevron menu. */
+.select-menu {
+  @apply inline-flex items-center gap-1 rounded-md border border-input bg-card py-1 pl-2 pr-0.5;
+}
+.select-menu-trigger {
+  @apply inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+}
+/* Bulk actions: only while rows are ticked, floating at the bottom. */
+.floating-action-bar {
+  @apply fixed inset-x-4 bottom-6 z-40 mx-auto flex w-fit max-w-full flex-wrap items-center gap-2 rounded-xl border bg-popover p-2 text-popover-foreground shadow-modal animate-in fade-in slide-in-from-bottom-4 duration-200;
+}
+.floating-action-count {
+  @apply inline-flex h-6 min-w-6 items-center justify-center rounded-pill bg-brand px-2 text-small font-bold text-brand-foreground;
+}
+.floating-action-clear {
+  @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+}
+/* List footer + one joined pager bar. */
+.pager-footer {
+  @apply flex flex-wrap items-center justify-between gap-3 border-t px-5 py-4;
+}
+.pager-group {
+  @apply ml-auto inline-flex items-center overflow-hidden rounded-md border border-input bg-card;
+}
+.pager-group .pager-step {
+  @apply h-control-sm rounded-none px-3;
+}
+.pager-group .pager-step:first-child {
+  @apply border-r border-input;
+}
+.pager-group .pager-step:last-child {
+  @apply border-l border-input;
+}
+.pager-num {
+  @apply inline-flex h-control-sm min-w-control-sm items-center justify-center px-1 text-small font-semibold text-fg-strong transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring;
+}
+.pager-num-current,
+.pager-num-current:hover {
+  @apply bg-brand text-brand-foreground;
+}
+.pager-gap {
+  @apply inline-flex h-control-sm w-7 items-center justify-center text-small text-fg-muted;
 }
 .listing-row.listing-row {
   @apply flex-nowrap gap-4 rounded-md border-0 border-b border-divider bg-transparent px-4 py-4 shadow-none;

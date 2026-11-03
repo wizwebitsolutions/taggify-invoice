@@ -5,43 +5,74 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ClipboardList, Eye, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ArrowUpDown, CircleCheck, ClipboardList, Eye, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, hasAccess, type Asset } from "@/lib/api-client";
-import { canAddForOwner, canApprovePages, canDeletePage, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, PAGE_APPROVAL, rateOf, scrapeState } from "@/lib/creators";
+import { canAddForOwner, canApprovePages, canDeletePage, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, rateOf, scrapeState } from "@/lib/creators";
 import { money, personLabel, plural } from "@/lib/format";
 import { canEditPlan } from "@/lib/plans";
 import { FORMATS, formatLabel } from "@/lib/formats";
 import { invalidatePages, useAllPages } from "@/lib/queries/creators";
+import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/taggify/illustration";
-import { FilterSelect } from "@/components/taggify/filter-select";
+import { ActionBarDivider, FloatingActionBar } from "@/components/taggify/floating-action-bar";
 import { Money } from "@/components/taggify/money";
-import { PlatformIcon } from "@/components/taggify/platform-icon";
+import { PlatformIcon, WhatsAppIcon } from "@/components/taggify/platform-icon";
 import { SearchField } from "@/components/taggify/search-field";
-import { SelectionBar } from "@/components/taggify/selection-bar";
+import { SelectMenu } from "@/components/taggify/select-menu";
 import { StatusPill } from "@/components/taggify/status-pill";
 import { UserAvatar } from "@/components/taggify/user-avatar";
 import { audienceLabel, displayHandle, PageAvatar, PageAvatarStack } from "@/components/finance/identity";
 import { Pager, PER_PAGE } from "@/components/finance/pager";
-import { WhatsAppIcon } from "@/components/taggify/platform-icon";
 import { LoadError, NoAccess } from "@/components/finance/states";
 import { AddPageDialog } from "@/components/creators/add-page-dialog";
 import { ImportPagesDialog } from "@/components/creators/import-pages-dialog";
-import { GradeBadge, PageSheet } from "@/components/creators/page-sheet";
+import { GradeMark, PageSheet } from "@/components/creators/page-sheet";
 
 type Tab = "pages" | "vendors" | "waiting";
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 const count = (n: number | null | undefined) => (n == null ? "—" : audienceLabel(n, null, true));
+
+const PLATFORMS = [
+  { value: "all", label: "All" },
+  { value: "instagram", label: "Instagram" },
+  { value: "youtube", label: "YouTube" },
+];
+const SORTS = [
+  { value: "followers", label: "Most followers" },
+  { value: "newest", label: "Newest" },
+  { value: "handle", label: "A–Z" },
+];
+
+/** One status per row (3 Nov): Inactive wins, else the approval state; colour plus the word. */
+function rowStatus(p: Asset) {
+  if (p.isActive === false) return { label: "Inactive", className: "text-fg-muted" };
+  if (p.approvalStatus === "approved") return { label: "Approved", className: "text-success-fg" };
+  if (p.approvalStatus === "rejected") return { label: "Rejected", className: "text-danger-fg" };
+  return { label: "Waiting for approval", className: "text-warning-fg" };
+}
 
 export default function CreatorsPage() {
   return (
@@ -56,6 +87,11 @@ export default function CreatorsPage() {
 /**
  * Creators = vendors and the pages they own (v1 Inventory; prototype "Creators").
  * A vendor is paid once for all their pages, so the Vendors tab groups by owner.
+ *
+ * Declutter (3 Nov, approved mockup): one quiet toolbar (search, a Filters menu
+ * with removable chips, a small sort), selection from the header checkbox's
+ * menu, bulk actions in a floating bar only while rows are ticked, one status
+ * per row, and a "⋯" menu per row.
  */
 function Creators() {
   const { user, accessToken } = useAuth();
@@ -71,11 +107,13 @@ function Creators() {
   const [grade, setGrade] = useState("all");
   const [sort, setSort] = useState("followers");
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(PER_PAGE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Asset | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // Pages awaiting the remove confirmation: the selection (bulk) or one row from its "⋯" menu.
+  const [removing, setRemoving] = useState<{ ids: string[]; bulk: boolean } | null>(null);
 
   const editable = canEditPages(user);
   const deletable = canDeletePage(user);
@@ -102,20 +140,30 @@ function Creators() {
     .filter((v) => v.pages.some(matches))
     .sort((a, b) => (sort === "handle" ? personLabel(a.owner).localeCompare(personLabel(b.owner)) : sort === "newest" ? Math.max(...b.pages.map((p) => +new Date(p.createdAt))) - Math.max(...a.pages.map((p) => +new Date(p.createdAt))) : b.followers - a.followers));
   const rowsCount = tab === "vendors" ? vendorRows.length : pageRows.length;
-  const pageCount = Math.max(1, Math.ceil(rowsCount / PER_PAGE));
+  const pageCount = Math.max(1, Math.ceil(rowsCount / perPage));
   const current = Math.min(page, pageCount);
-  const slice = <T,>(rows: T[]) => rows.slice((current - 1) * PER_PAGE, current * PER_PAGE);
+  const slice = <T,>(rows: T[]) => rows.slice((current - 1) * perPage, current * perPage);
   const shownPages = slice(pageRows);
   // The selection spans every pager page of the current filter (a filter or tab change clears it).
   const selectedRows = pageRows.filter((p) => selected.has(p.id));
   const visibleSelected = shownPages.filter((p) => selected.has(p.id));
   const selectFirst = (n: number) => setSelected(new Set(pageRows.slice(0, Math.max(0, n)).map((p) => p.id)));
+  const toggleShown = (on: boolean) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      for (const p of shownPages) {
+        if (on) n.add(p.id);
+        else n.delete(p.id);
+      }
+      return n;
+    });
   const createPlan = () => router.push(`/plans/new?assetIds=${selectedRows.map((p) => encodeURIComponent(p.id)).join(",")}`);
 
+  // `bulk`: the ids are the ticked selection (floating bar) rather than one row's "⋯" menu, which leaves the ticks alone.
   const refreshMany = useMutation({
-    mutationFn: (ids: string[]) => assetsApi.refreshProfiles(accessToken!, ids),
-    onSuccess: async (r) => {
-      setSelected(new Set());
+    mutationFn: ({ ids }: { ids: string[]; bulk: boolean }) => assetsApi.refreshProfiles(accessToken!, ids),
+    onSuccess: async (r, v) => {
+      if (v.bulk) setSelected(new Set());
       await invalidatePages(qc);
       toast.success(`Fetching ${plural(r.queued, "page")} from Instagram. Numbers update in a few minutes.`);
     },
@@ -123,17 +171,24 @@ function Creators() {
   });
   // Bulk delete (19 Oct, v1 parity): pages the server refuses (posts on record / approved plan) stay ticked so they can be switched to Inactive.
   const removeMany = useMutation({
-    mutationFn: (ids: string[]) => assetsApi.removeMany(accessToken!, ids),
-    onSuccess: async ({ deleted, skipped }) => {
-      setSelected(new Set(skipped.map((s) => s.id)));
-      setConfirmDelete(false);
+    mutationFn: ({ ids }: { ids: string[]; bulk: boolean }) => assetsApi.removeMany(accessToken!, ids),
+    onSuccess: async ({ deleted, skipped }, v) => {
+      // Bulk: what the server kept stays ticked (switch it to Inactive instead). One row: just drop it from the ticks if it went.
+      if (v.bulk) setSelected(new Set(skipped.map((s) => s.id)));
+      else
+        setSelected((s) => {
+          const n = new Set(s);
+          for (const id of deleted) n.delete(id);
+          return n;
+        });
+      setRemoving(null);
       await invalidatePages(qc);
       await qc.invalidateQueries({ queryKey: ["plans"] });
       if (skipped.length === 0) toast.success(`${plural(deleted.length, "page")} removed from Inventory.`);
       else toast.warning(`${plural(deleted.length, "page")} removed. ${plural(skipped.length, "page")} couldn't be (usually posts on record or an approved plan). They're still selected; switch them to Inactive instead.`);
     },
     onError: async (e) => {
-      setConfirmDelete(false);
+      setRemoving(null);
       // The server removes pages one by one, so a failure part-way may still have removed some.
       await invalidatePages(qc);
       await qc.invalidateQueries({ queryKey: ["plans"] });
@@ -155,17 +210,29 @@ function Creators() {
     setPage(1);
     setSelected(new Set());
   };
-  const filtering = !!needle || platform !== "all" || category !== "all" || grade !== "all";
+  const setFilter = (set: (v: string) => void) => (v: string) => {
+    set(v);
+    resetPage();
+  };
+  const activeFilters = [
+    platform !== "all" && { key: "platform", label: `Platform: ${PLATFORMS.find((o) => o.value === platform)?.label ?? platform}`, clear: () => setFilter(setPlatform)("all") },
+    category !== "all" && { key: "category", label: `Category: ${category}`, clear: () => setFilter(setCategory)("all") },
+    grade !== "all" && { key: "grade", label: grade === "none" ? "Not graded" : `Grade ${grade}`, clear: () => setFilter(setGrade)("all") },
+  ].filter((f): f is { key: string; label: string; clear: () => void } => !!f);
+  const filtering = !!needle || activeFilters.length > 0;
   const adder = canAddForOwner(user);
   // The page panel always reads the latest copy of the page after a save.
   const openPage = open ? (all.find((p) => p.id === open.id) ?? open) : null;
+  const removingCount = removing?.ids.length ?? 0;
+  const showWaitingTab = waiting.length > 0 || tab === "waiting";
+  const selecting = canSelect && tab !== "vendors" && selectedRows.length > 0;
 
   return (
-    <div className="workspace-page">
+    <div className={cn("workspace-page", selecting && "pb-24")}>
       <div className="page-heading">
         <div className="page-heading-copy">
           <h1 className="text-display">Inventory</h1>
-          <p className="mt-1 text-body text-muted-foreground">Vendors and the pages they own. A vendor is paid once for all their pages.</p>
+          <p className="mt-1 text-body text-muted-foreground">Pages and the vendors who own them.</p>
         </div>
         {(adder || canImportPages(user)) && (
           <div className="ml-auto flex flex-wrap gap-2">
@@ -191,106 +258,89 @@ function Creators() {
           onValueChange={(v) => {
             setTab(v as Tab);
             resetPage();
-            setSelected(new Set());
           }}
         >
-          <div className="tab-shelf flex items-end gap-4">
+          <div className="tab-shelf flex items-center gap-4">
             <TabsList className="flex-1 border-b-0">
-              <TabsTrigger value="pages">Pages ({all.length})</TabsTrigger>
-              <TabsTrigger value="vendors">Vendors ({vendors.length})</TabsTrigger>
-              <TabsTrigger value="waiting">Waiting for approval ({waiting.length})</TabsTrigger>
+              <TabsTrigger value="pages" aria-label={`Pages (${all.length})`}>
+                Pages<span className="tab-count">{all.length}</span>
+              </TabsTrigger>
+              <TabsTrigger value="vendors" aria-label={`Vendors (${vendors.length})`}>
+                Vendors<span className="tab-count">{vendors.length}</span>
+              </TabsTrigger>
+              {showWaitingTab && (
+                <TabsTrigger value="waiting" aria-label={`Waiting for approval (${waiting.length})`}>
+                  Waiting for approval<span className="tab-count tab-count-attention">{waiting.length}</span>
+                </TabsTrigger>
+              )}
             </TabsList>
+            {!showWaitingTab && approvable && !pages.isLoading && (
+              <span className="hidden items-center gap-2 text-small text-muted-foreground sm:inline-flex">
+                <CircleCheck className="h-4 w-4 text-success" aria-hidden />
+                No approvals waiting
+              </span>
+            )}
           </div>
         </Tabs>
+
         <div className="filter-bar">
           <SearchField
             label="Search creators"
             placeholder="Search page, vendor or category..."
-            className="w-full sm:w-72"
+            className="w-full sm:w-80"
             value={q}
             onChange={(e) => {
               setQ(e.target.value);
               resetPage();
             }}
           />
-          <FilterSelect
-            label="Platform"
-            value={platform}
-            onValueChange={(v) => {
-              setPlatform(v);
-              resetPage();
-            }}
-            options={[
-              { value: "all", label: "All" },
-              { value: "instagram", label: "Instagram" },
-              { value: "youtube", label: "YouTube" },
-            ]}
-          />
-          <FilterSelect
-            label="Category"
-            value={category}
-            onValueChange={(v) => {
-              setCategory(v);
-              resetPage();
-            }}
-            options={[{ value: "all", label: "All" }, ...categories.map((c) => ({ value: c, label: c }))]}
-          />
-          <FilterSelect
-            label="Grade"
-            value={grade}
-            onValueChange={(v) => {
-              setGrade(v);
-              resetPage();
-            }}
-            options={[{ value: "all", label: "All" }, ...GRADES.map((g) => ({ value: g, label: `Grade ${g}` })), { value: "none", label: "Not graded" }]}
-          />
-          <FilterSelect
-            className="sm:ml-auto"
-            label="Sort by"
-            value={sort}
-            onValueChange={setSort}
-            options={[
-              { value: "followers", label: "Followers" },
-              { value: "newest", label: "Newest" },
-              { value: "handle", label: tab === "vendors" ? "Name" : "Handle" },
-            ]}
-          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <SlidersHorizontal />
+                Filters
+                {activeFilters.length > 0 && <span className="floating-action-count">{activeFilters.length}</span>}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <FilterSub label="Platform" value={platform} onChange={setFilter(setPlatform)} options={PLATFORMS} />
+              <FilterSub label="Category" value={category} onChange={setFilter(setCategory)} options={[{ value: "all", label: "All" }, ...categories.map((c) => ({ value: c, label: c }))]} />
+              <FilterSub label="Grade" value={grade} onChange={setFilter(setGrade)} options={[{ value: "all", label: "All" }, ...GRADES.map((g) => ({ value: g, label: `Grade ${g}` })), { value: "none", label: "Not graded" }]} />
+              {activeFilters.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => activeFilters.forEach((f) => f.clear())}>Clear filters</DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {activeFilters.map((f) => (
+            <span key={f.key} className="filter-chip">
+              {f.label}
+              <button type="button" aria-label={`Remove filter ${f.label}`} onClick={f.clear}>
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </span>
+          ))}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="text-muted-foreground sm:ml-auto" aria-label={`Sort: ${SORTS.find((s) => s.value === sort)?.label}`}>
+                <ArrowUpDown />
+                {tab === "vendors" && sort === "handle" ? "Name A–Z" : SORTS.find((s) => s.value === sort)?.label}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
+                {SORTS.map((s) => (
+                  <DropdownMenuRadioItem key={s.value} value={s.value}>
+                    {tab === "vendors" && s.value === "handle" ? "Name A–Z" : s.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-
-        {canSelect && tab !== "vendors" && pageRows.length > 0 && !pages.isLoading && (
-          <SelectionBar
-            total={pageRows.length}
-            selectedCount={selectedRows.length}
-            onToggleAll={() => setSelected(selectedRows.length === pageRows.length ? new Set() : new Set(pageRows.map((p) => p.id)))}
-            onSelectFirst={selectFirst}
-          >
-            {selectedRows.length > 0 && (
-              <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
-                {editable && (
-                  <Button size="sm" variant="outline" disabled={refreshMany.isPending} onClick={() => refreshMany.mutate(selectedRows.map((p) => p.id))}>
-                    <RefreshCw />
-                    Refresh from Instagram
-                  </Button>
-                )}
-                {canPlan && (
-                  <Button size="sm" onClick={createPlan}>
-                    <ClipboardList />
-                    Create plan ({selectedRows.length})
-                  </Button>
-                )}
-                {deletable && (
-                  <Button size="sm" variant="ghost" className="text-danger-fg hover:text-danger-fg" onClick={() => setConfirmDelete(true)}>
-                    <Trash2 />
-                    Remove ({selectedRows.length})
-                  </Button>
-                )}
-                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-                  Clear
-                </Button>
-              </span>
-            )}
-          </SelectionBar>
-        )}
 
         {pages.isError ? (
           <LoadError onRetry={() => pages.refetch()} what="creators" />
@@ -360,61 +410,60 @@ function Creators() {
             <TableHeader>
               <TableRow>
                 {canSelect && (
-                  <TableHead className="w-10">
-                    <Checkbox
-                      aria-label="Select all pages on this page"
-                      checked={visibleSelected.length === 0 ? false : visibleSelected.length === shownPages.length ? true : "indeterminate"}
-                      onCheckedChange={(v) =>
-                        setSelected((s) => {
-                          const n = new Set(s);
-                          for (const p of shownPages) {
-                            if (v === true) n.add(p.id);
-                            else n.delete(p.id);
-                          }
-                          return n;
-                        })
-                      }
+                  <TableHead className="w-20">
+                    <SelectMenu
+                      total={pageRows.length}
+                      shown={shownPages.length}
+                      shownSelected={visibleSelected.length}
+                      selectedCount={selectedRows.length}
+                      onToggleShown={toggleShown}
+                      onSelectFirst={selectFirst}
+                      onClear={() => setSelected(new Set())}
                     />
                   </TableHead>
                 )}
                 <TableHead>Page</TableHead>
                 <TableHead>Vendor</TableHead>
                 <TableHead>Category</TableHead>
-                <TableHead>Grade</TableHead>
-                <TableHead className="text-right">Followers</TableHead>
-                <TableHead className="text-right">Avg views</TableHead>
-                <TableHead className="text-right">Rates</TableHead>
+                <TableHead className="text-center">Grade</TableHead>
+                <TableHead className="text-right">Reach</TableHead>
+                <TableHead className="text-right">Rate</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">
-                  <span className="sr-only">Action</span>
+                  <span className="sr-only">Actions</span>
                 </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {shownPages.map((p) => {
-                const st = PAGE_APPROVAL[p.approvalStatus] ?? PAGE_APPROVAL.pending;
+                const status = rowStatus(p);
                 const scrape = scrapeState(p);
+                const handle = displayHandle(p.handle, p.platform);
                 const reel = rateOf(p, "reel");
-                // Every priced format, in the app's order; the row shows Reel and how many more.
+                // Every priced format, in the app's order; the row shows Reel (or the first priced one) and how many more.
                 const priced = FORMATS.filter((f) => rateOf(p, f) != null);
-                const others = priced.filter((f) => f !== "reel");
+                const lead = reel != null ? "reel" : priced[0];
+                const more = priced.length - (lead ? 1 : 0);
                 const allRates = priced.map((f) => `${formatLabel(f)}: ${money(rateOf(p, f)!)}`).join(" · ") || "No rates yet";
+                const editSuggested = !!p.pendingEdit && typeof p.pendingEdit === "object" && Object.keys(p.pendingEdit).length > 0;
                 return (
-                  <TableRow key={p.id} data-state={selected.has(p.id) ? "selected" : undefined}>
+                  <TableRow key={p.id} data-state={selected.has(p.id) ? "selected" : undefined} className={cn(p.isActive === false && "inventory-row-inactive")}>
                     {canSelect && (
                       <TableCell>
-                        <Checkbox
-                          aria-label={`Select ${displayHandle(p.handle, p.platform)}`}
-                          checked={selected.has(p.id)}
-                          onCheckedChange={(v) =>
-                            setSelected((s) => {
-                              const n = new Set(s);
-                              if (v === true) n.add(p.id);
-                              else n.delete(p.id);
-                              return n;
-                            })
-                          }
-                        />
+                        <span className="inline-flex pl-2">
+                          <Checkbox
+                            aria-label={`Select ${handle}`}
+                            checked={selected.has(p.id)}
+                            onCheckedChange={(v) =>
+                              setSelected((s) => {
+                                const n = new Set(s);
+                                if (v === true) n.add(p.id);
+                                else n.delete(p.id);
+                                return n;
+                              })
+                            }
+                          />
+                        </span>
                       </TableCell>
                     )}
                     <TableCell>
@@ -424,14 +473,13 @@ function Creators() {
                         </button>
                         <div className="inventory-identity-text">
                           <div className="inventory-identity-line">
-                            <button type="button" onClick={() => setOpen(p)} className="inline-flex min-w-0 items-center gap-2 rounded-md text-left text-body-strong text-foreground hover:text-brand-ink">
+                            <button type="button" aria-label={`View ${handle}`} title={proposer ? "View / suggest changes" : "View details"} onClick={() => setOpen(p)} className="inline-flex min-w-0 items-center gap-2 rounded-md text-left text-body-strong text-foreground hover:text-brand-ink">
                               <PlatformIcon platform={p.platform} size={16} />
-                              <span className="truncate">{displayHandle(p.handle, p.platform)}</span>
+                              <span className="truncate">{handle}</span>
                             </button>
                             {p.groupLink && (
-                              <a href={p.groupLink} target="_blank" rel="noreferrer" className="whatsapp-chip" title={`Open WhatsApp group: ${p.groupLink}`} aria-label={`WhatsApp group for ${displayHandle(p.handle, p.platform)}`}>
+                              <a href={p.groupLink} target="_blank" rel="noreferrer" className="whatsapp-dot" title={`WhatsApp group: ${p.groupLink}`} aria-label={`WhatsApp group for ${handle}`}>
                                 <WhatsAppIcon size={14} />
-                                WhatsApp
                               </a>
                             )}
                           </div>
@@ -439,35 +487,43 @@ function Creators() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{personLabel(p.owner, "—")}</TableCell>
-                    <TableCell>{p.category ? <Badge variant="tag">{p.category}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
-                    <TableCell>{p.grade ? <GradeBadge grade={p.grade} /> : <span className="text-muted-foreground">—</span>}</TableCell>
-                    <TableCell className="text-right">{count(p.followers)}</TableCell>
-                    <TableCell className="text-right">{count(p.engagement.avgViews)}</TableCell>
-                    <TableCell className="text-right" title={allRates}>
-                      <span className="inventory-rate">
-                      <span className="font-semibold">{reel != null ? <>Reel <Money value={reel} /></> : priced.length ? <>{formatLabel(priced[0])} <Money value={rateOf(p, priced[0])!} /></> : <span className="font-normal text-muted-foreground">No rates</span>}</span>
-                      {others.length > 0 && <span className="text-small text-fg-muted">{reel != null ? `+${others.length} more` : others.length > 1 ? `+${others.length - 1} more` : ""}</span>}
+                    <TableCell className="whitespace-nowrap text-fg-strong">{personLabel(p.owner, "—")}</TableCell>
+                    <TableCell className={cn("whitespace-nowrap", p.category ? "text-fg-strong" : "text-fg-muted")}>{p.category ?? "Not set"}</TableCell>
+                    <TableCell className="text-center">{p.grade ? <GradeMark grade={p.grade} /> : <span className="text-fg-muted">–</span>}</TableCell>
+                    <TableCell className="text-right">
+                      <span className="inventory-stack">
+                        <span className="font-semibold">{count(p.followers)}</span>
+                        <span className="text-small text-fg-muted">{p.engagement.avgViews != null ? `${count(p.engagement.avgViews)} avg views` : "No views yet"}</span>
                       </span>
                     </TableCell>
+                    <TableCell className="text-right" title={allRates}>
+                      {lead ? (
+                        <span className="inventory-stack">
+                          <span className="font-semibold">
+                            <Money value={rateOf(p, lead)!} />
+                          </span>
+                          <span className="text-small text-fg-muted">
+                            {formatLabel(lead)}
+                            {more > 0 && ` · +${plural(more, "format")}`}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-fg-muted">No rates</span>
+                      )}
+                    </TableCell>
                     <TableCell>
-                      <span className="inline-flex flex-nowrap items-center gap-2">
-                        <StatusPill tone={st.tone}>{st.label}</StatusPill>
-                        {p.isActive === false && <StatusPill tone="neutral">Inactive</StatusPill>}
+                      <span className="flex flex-col gap-1">
+                        <span className={cn("status-dot", status.className)}>{status.label}</span>
                         {p.profileBroken && (
-                          <span title={p.lastScrapeError ?? "Not found on Instagram"}>
-                            <StatusPill tone="danger">Not on Instagram</StatusPill>
+                          <span className="text-micro text-danger-fg" title={p.lastScrapeError ?? "Not found on Instagram"}>
+                            Not on Instagram
                           </span>
                         )}
-                        {p.pendingEdit && typeof p.pendingEdit === "object" && Object.keys(p.pendingEdit).length > 0 && <StatusPill tone="info">Edit suggested</StatusPill>}
+                        {editSuggested && <span className="text-micro text-fg-secondary">Edit suggested</span>}
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      {/* Every row opens the page's full details, all rates included (1 Nov) — pending ones too. */}
                       <span className="inline-flex items-center gap-2">
-                        <Button size="icon-sm" variant="ghost" aria-label={`View ${displayHandle(p.handle, p.platform)}`} title={proposer ? "View / suggest changes" : "View details"} onClick={() => setOpen(p)}>
-                          <Eye />
-                        </Button>
                         {approvable && p.approvalStatus === "pending" && (
                           <>
                             <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate({ id: p.id, status: "rejected", handle: p.handle })}>
@@ -478,6 +534,34 @@ function Creators() {
                             </Button>
                           </>
                         )}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon-sm" variant="ghost" aria-label={`More actions for ${handle}`}>
+                              <MoreHorizontal />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => setOpen(p)}>
+                              <Eye />
+                              {proposer ? "View / suggest changes" : "View details"}
+                            </DropdownMenuItem>
+                            {editable && (
+                              <DropdownMenuItem disabled={refreshMany.isPending} onSelect={() => refreshMany.mutate({ ids: [p.id], bulk: false })}>
+                                <RefreshCw />
+                                Refresh from Instagram
+                              </DropdownMenuItem>
+                            )}
+                            {deletable && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem className="text-danger-fg focus:text-danger-fg" onSelect={() => setRemoving({ ids: [p.id], bulk: false })}>
+                                  <Trash2 />
+                                  Remove…
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </span>
                     </TableCell>
                   </TableRow>
@@ -486,28 +570,90 @@ function Creators() {
             </TableBody>
           </Table>
         )}
-        {rowsCount > 0 && <Pager total={rowsCount} page={current} pages={pageCount} noun={tab === "vendors" ? "vendors" : "pages"} onPage={setPage} />}
+        {rowsCount > 0 && (
+          <Pager
+            total={rowsCount}
+            page={current}
+            pages={pageCount}
+            noun={tab === "vendors" ? "vendors" : "pages"}
+            onPage={setPage}
+            perPage={perPage}
+            onPerPage={(n) => {
+              setPerPage(n);
+              setPage(1);
+            }}
+          />
+        )}
       </Card>
+
+      {selecting && (
+        <FloatingActionBar count={selectedRows.length} total={pageRows.length} onClear={() => setSelected(new Set())}>
+          {editable && (
+            <Button size="sm" variant="ghost" disabled={refreshMany.isPending} onClick={() => refreshMany.mutate({ ids: selectedRows.map((p) => p.id), bulk: true })}>
+              <RefreshCw />
+              Refresh from Instagram
+            </Button>
+          )}
+          {canPlan && (
+            <Button size="sm" aria-label={`Create plan (${selectedRows.length})`} onClick={createPlan}>
+              <ClipboardList />
+              Create plan
+            </Button>
+          )}
+          {deletable && (
+            <>
+              <ActionBarDivider />
+              <Button size="icon-sm" variant="ghost" className="text-danger-fg hover:bg-danger-soft hover:text-danger-fg" aria-label={`Remove (${selectedRows.length})`} title="Remove selected pages" onClick={() => setRemoving({ ids: selectedRows.map((p) => p.id), bulk: true })}>
+                <Trash2 />
+              </Button>
+            </>
+          )}
+        </FloatingActionBar>
+      )}
 
       <PageSheet page={openPage} onClose={() => setOpen(null)} />
       <AddPageDialog open={adding} onOpenChange={setAdding} />
       <ImportPagesDialog open={importing} onOpenChange={setImporting} />
-      <Dialog open={confirmDelete} onOpenChange={(o) => !o && !removeMany.isPending && setConfirmDelete(false)}>
+      <Dialog open={removing != null} onOpenChange={(o) => !o && !removeMany.isPending && setRemoving(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove {plural(selectedRows.length, "page")}?</DialogTitle>
-            <DialogDescription>They leave Inventory and any draft plans they are on. A page with posts on record or on an approved plan can&apos;t be removed; it stays selected so you can switch it to Inactive instead.</DialogDescription>
+            <DialogTitle>Remove {plural(removingCount, "page")}?</DialogTitle>
+            <DialogDescription>
+              {removingCount === 1 ? "It leaves" : "They leave"} Inventory and any draft plans {removingCount === 1 ? "it is" : "they are"} on. A page with posts on record or on an approved plan can&apos;t be removed{removing?.bulk ? "; it stays selected so you can switch it to Inactive instead" : "; switch it to Inactive instead"}.
+            </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" disabled={removeMany.isPending} onClick={() => setConfirmDelete(false)}>
-              Keep them
+            <Button variant="outline" disabled={removeMany.isPending} onClick={() => setRemoving(null)}>
+              {removingCount === 1 ? "Keep it" : "Keep them"}
             </Button>
-            <Button variant="destructive" disabled={removeMany.isPending || selectedRows.length === 0} onClick={() => removeMany.mutate(selectedRows.map((p) => p.id))}>
-              {removeMany.isPending ? "Removing…" : `Remove ${plural(selectedRows.length, "page")}`}
+            <Button variant="destructive" disabled={removeMany.isPending || removingCount === 0} onClick={() => removing && removeMany.mutate(removing)}>
+              {removeMany.isPending ? "Removing…" : `Remove ${plural(removingCount, "page")}`}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** One filter inside the Filters menu: "Platform · All ›" opening its choices. */
+function FilterSub({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+  const current = options.find((o) => o.value === value)?.label ?? value;
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        {label}
+        <span className={cn("ml-auto pl-4 text-small", value === "all" ? "text-fg-muted" : "font-semibold text-brand-ink")}>{current}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          {options.map((o) => (
+            <DropdownMenuRadioItem key={o.value} value={o.value}>
+              {o.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

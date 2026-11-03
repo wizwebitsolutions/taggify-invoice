@@ -48,7 +48,7 @@ export function NavList({ active, collapsed = false, onNavigate }: { active: str
   const items = visibleNav(user);
   return (
     <TooltipProvider delayDuration={200}>
-      <nav aria-label="Main" className="thin-scroll flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      <nav aria-label="Main" className="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
         {items.map((item) => {
           const open = isActiveItem(item, active);
           return (

@@ -328,6 +328,22 @@ export function GradeBadge({ grade, className }: { grade: string; className?: st
   );
 }
 
+const GRADE_TONE: Record<string, string> = {
+  A: "bg-success-soft text-success-fg",
+  B: "bg-brand-soft text-brand-ink",
+  C: "bg-warning-soft text-warning-fg",
+};
+
+/** Inventory rows (3 Nov): the grade as one coloured letter, so it doesn't read like the category tag beside it. */
+export function GradeMark({ grade }: { grade: string }) {
+  return (
+    <span title={`Grade ${grade}`} className={cn("grade-mark", GRADE_TONE[grade] ?? "bg-muted text-fg-strong")}>
+      <span aria-hidden>{grade}</span>
+      <span className="sr-only">Grade {grade}</span>
+    </span>
+  );
+}
+
 /** Grade A / B / C as three pill toggles (the same chip style as filters); the chosen one clicked again clears it. */
 export function GradeToggle({ value, onChange, label = "Grade" }: { value: Grade | ""; onChange: (g: Grade | "") => void; label?: string }) {
   return (

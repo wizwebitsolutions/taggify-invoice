@@ -107,18 +107,20 @@ test.describe("Inventory → Create plan", () => {
     const calls = await api(page);
     await page.goto("/creators");
     const bar = page.getByTestId("selection-bar");
-    await expect(bar).toContainText("Select all 12");
+    // Nothing ticked: no action bar (Inventory declutter, 3 Nov).
+    await expect(bar).toHaveCount(0);
 
-    // Select first 10, then the selection survives moving to the next pager page.
-    await bar.getByRole("button", { name: "10", exact: true }).click();
+    // Select this page (10) from the header menu; the selection survives moving to the next pager page.
+    await page.getByRole("button", { name: "Selection options" }).click();
+    await page.getByRole("menuitem", { name: /This page/ }).click();
     await expect(bar).toContainText("10 of 12 selected");
     await page.getByRole("button", { name: "Next page" }).click();
     await page.getByRole("checkbox", { name: "Select page.p11" }).click();
     await expect(bar).toContainText("11 of 12 selected");
     // No inventory.edit for a planner: no bulk Instagram refresh, but they can plan.
     await expect(bar.getByRole("button", { name: "Refresh from Instagram" })).toHaveCount(0);
-    await bar.getByRole("button", { name: "Clear" }).click();
-    await expect(bar).toContainText("Select all 12");
+    await bar.getByRole("button", { name: "Clear selection" }).click();
+    await expect(bar).toHaveCount(0);
 
     await page.getByRole("checkbox", { name: "Select page.p12" }).click();
     await page.getByRole("button", { name: "Previous page" }).click();
@@ -162,21 +164,24 @@ test.describe("Inventory → Create plan", () => {
     await api(page);
     await page.goto("/creators");
     const bar = page.getByTestId("selection-bar");
-    await bar.getByRole("checkbox", { name: "Select all 12 pages" }).click();
+    await page.getByRole("button", { name: "Selection options" }).click();
+    await page.getByRole("menuitem", { name: /All pages/ }).click();
     await expect(bar).toContainText("12 of 12 selected");
     await expect(bar.getByRole("button", { name: "Refresh from Instagram" })).toBeVisible();
-    await bar.getByRole("checkbox", { name: "Deselect all 12 pages" }).click();
-    await expect(bar).toContainText("Select all 12");
+    await page.getByRole("button", { name: "Selection options" }).click();
+    await page.getByRole("menuitem", { name: "Clear selection" }).click();
+    await expect(bar).toHaveCount(0);
 
-    await bar.getByLabel("Number of pages to select (out of 12)").fill("11");
-    await bar.getByRole("button", { name: "Select", exact: true }).click();
+    await page.getByRole("button", { name: "Selection options" }).click();
+    await page.getByLabel("Number of pages to select (out of 12)").fill("11");
+    await page.getByRole("menu").getByRole("button", { name: "Select", exact: true }).click();
     await expect(bar).toContainText("11 of 12 selected");
     await page.getByRole("button", { name: "Next page" }).click();
     await expect(page.getByRole("checkbox", { name: "Select page.p11" })).toBeChecked();
     await expect(page.getByRole("checkbox", { name: "Select page.p12" })).not.toBeChecked();
     // A filter change clears the selection, so nothing hidden stays ticked.
     await page.getByRole("searchbox", { name: "Search creators" }).fill("p0");
-    await expect(bar).toContainText("Select all 9");
+    await expect(bar).toHaveCount(0);
     await page.getByRole("checkbox", { name: "Select page.p03" }).click();
     await bar.getByRole("button", { name: "Create plan (1)" }).click();
     await expect(page).toHaveURL(/\/plans\/new\?assetIds=p03$/);

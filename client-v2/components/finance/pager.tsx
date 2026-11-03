@@ -1,8 +1,14 @@
+"use client";
+
+import { useId } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export const PER_PAGE = 10;
+export const PER_PAGE_OPTIONS = [10, 25, 50] as const;
 
 /**
  * Which page buttons to show: all of them up to 7, otherwise a window of 5
@@ -22,30 +28,75 @@ export function pageItems(page: number, pages: number): (number | "gap")[] {
   return out;
 }
 
-/** Reference pagination: "Showing 1–5 of 8 items" + square page buttons, current one solid orange. Client-side over the loaded rows. */
-export function Pager({ total, page, pages, noun, onPage, children }: { total: number; page: number; pages: number; noun: string; onPage: (p: number) => void; children?: React.ReactNode }) {
-  const from = total ? (page - 1) * PER_PAGE + 1 : 0;
-  const to = Math.min(total, page * PER_PAGE);
+/**
+ * List footer: "Showing 1–10 of 210 pages" (with an optional Rows picker) on
+ * the left, and one joined pager bar on the right: Prev · 1 2 3 4 5 … 21 · Next,
+ * the current page filled (Inventory declutter, 3 Nov). Client-side over the
+ * loaded rows. `perPage`/`onPerPage` are optional; without them it's 10 a page.
+ */
+export function Pager({
+  total,
+  page,
+  pages,
+  noun,
+  onPage,
+  perPage = PER_PAGE,
+  onPerPage,
+  children,
+}: {
+  total: number;
+  page: number;
+  pages: number;
+  noun: string;
+  onPage: (p: number) => void;
+  perPage?: number;
+  onPerPage?: (n: number) => void;
+  children?: React.ReactNode;
+}) {
+  const rowsId = useId();
+  const from = total ? (page - 1) * perPage + 1 : 0;
+  const to = Math.min(total, page * perPage);
   return (
-    <div className="flex flex-wrap items-center gap-3 border-t px-5 py-4">
-      <span className="text-small text-muted-foreground">{total ? `Showing ${from}–${to} of ${total} ${noun}` : `No ${noun}`}</span>
+    <div className="pager-footer">
+      <div className="flex flex-wrap items-center gap-4 text-small text-muted-foreground">
+        {onPerPage && total > PER_PAGE_OPTIONS[0] && (
+          <span className="flex items-center gap-2">
+            <span id={rowsId}>Rows</span>
+            <Select value={String(perPage)} onValueChange={(v) => onPerPage(Number(v))}>
+              <SelectTrigger aria-labelledby={rowsId} className="h-control-sm w-20">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PER_PAGE_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </span>
+        )}
+        <span>{total ? `Showing ${from}–${to} of ${total} ${noun}` : `No ${noun}`}</span>
+      </div>
       {pages > 1 && (
-        <nav aria-label="Pages" className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="icon" className="h-control-sm w-control-sm" aria-label="Previous page" disabled={page === 1} onClick={() => onPage(page - 1)}>
+        <nav aria-label="Pages" className="pager-group">
+          <Button variant="ghost" size="sm" className="pager-step" aria-label="Previous page" disabled={page === 1} onClick={() => onPage(page - 1)}>
             <ArrowLeft />
+            Prev
           </Button>
           {pageItems(page, pages).map((p, i) =>
             p === "gap" ? (
-              <span key={`gap-${i}`} className="inline-flex h-control-sm w-control-sm items-center justify-center text-small text-muted-foreground" aria-hidden>
+              <span key={`gap-${i}`} className="pager-gap" aria-hidden>
                 …
               </span>
             ) : (
-            <Button key={p} variant={p === page ? "brand" : "outline"} size="icon" className="h-control-sm w-control-sm text-small" aria-current={p === page ? "page" : undefined} onClick={() => onPage(p)}>
-              {p}
-            </Button>
+              <button key={p} type="button" className={cn("pager-num", p === page && "pager-num-current")} aria-current={p === page ? "page" : undefined} onClick={() => onPage(p)}>
+                {p}
+              </button>
             ),
           )}
-          <Button variant="outline" size="icon" className="h-control-sm w-control-sm" aria-label="Next page" disabled={page === pages} onClick={() => onPage(page + 1)}>
+          <Button variant="ghost" size="sm" className="pager-step" aria-label="Next page" disabled={page === pages} onClick={() => onPage(page + 1)}>
+            Next
             <ArrowRight />
           </Button>
         </nav>

@@ -199,6 +199,14 @@
   .thin-scroll:focus-within::-webkit-scrollbar-thumb {
     background: rgb(var(--input));
   }
+
+  /* Scrolls (wheel, trackpad, keyboard) but never draws a scrollbar: the sidebar menu (3 Nov). */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

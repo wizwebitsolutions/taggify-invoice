@@ -101,10 +101,11 @@ test.describe("Creators", () => {
     await page.goto("/creators");
     const row = page.getByRole("row", { name: /riya.eats/ });
     await expect(row.getByRole("cell", { name: "Test Creator Two With A Long Name", exact: true })).toHaveCSS("white-space", "nowrap");
-    const rate = row.locator(".inventory-rate");
-    await expect(rate).toHaveText(/Reel\s*₹25,000\s*\+1 more/);
-    await expect(rate).toHaveCSS("flex-wrap", "nowrap");
-    await expect(row.getByRole("cell", { name: /Reel.*₹25,000/ })).toHaveAttribute("title", /Story: ₹5,000/);
+    // 3 Nov declutter: the amount on top, "Reel · +1 format" under it, one line each.
+    const rate = row.locator(".inventory-stack").filter({ hasText: "₹25,000" });
+    await expect(rate).toHaveText(/₹25,000\s*Reel · \+1 format/);
+    await expect(rate).toHaveCSS("white-space", "nowrap");
+    await expect(row.getByRole("cell", { name: /₹25,000.*Reel/ })).toHaveAttribute("title", /Story: ₹5,000/);
   });
 
   test("page details prioritize audience values and keep rates in labelled rows", async ({ page }) => {
@@ -202,7 +203,7 @@ test.describe("Creators", () => {
     await expect(row.getByText("Not on Instagram")).toBeVisible();
     await expect(page.getByRole("row").filter({ hasText: "desi.memes" }).getByText("Not on Instagram")).toHaveCount(0);
     await shot(page, "creators-not-on-instagram");
-    await page.getByRole("button", { name: /riya\.eats/ }).click();
+    await page.getByRole("button", { name: "View riya.eats", exact: true }).click();
     await expect(page.getByRole("dialog").getByText("Not on Instagram")).toBeVisible();
   });
 
@@ -325,7 +326,8 @@ test.describe("Creators", () => {
     await page.getByRole("checkbox", { name: "Select riya.eats" }).click();
     await expect(page.getByRole("button", { name: "Create plan (1)" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Refresh from Instagram" })).toHaveCount(0);
-    await page.getByRole("button", { name: "Clear" }).click();
+    await page.getByTestId("selection-bar").getByRole("button", { name: "Clear selection" }).click();
+    await expect(page.getByTestId("selection-bar")).toHaveCount(0);
     await page.getByRole("button", { name: "Add page" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("radio", { name: "New creator" }).click();
@@ -411,7 +413,7 @@ test.describe("Creators", () => {
     await expect(page.getByRole("checkbox")).toHaveCount(0);
     await page.getByRole("tab", { name: /Waiting/ }).click();
     await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: /arjun\.fits/ }).click();
+    await page.getByRole("button", { name: "View arjun.fits", exact: true }).click();
     await expect(page.getByRole("dialog").getByRole("button", { name: "Edit details" })).toHaveCount(0);
   });
 
@@ -431,7 +433,7 @@ test.describe("Creators", () => {
     const calls = await creatorsApi(page, { assets: [...ASSETS.slice(0, 2), asset("a3", "desi.memes", DEV, 1200000, { isActive: false })] });
     await page.goto("/creators");
     await expect(page.getByRole("row", { name: /desi\.memes/ }).getByText("Inactive")).toBeVisible();
-    await page.getByRole("button", { name: /riya\.eats/ }).click();
+    await page.getByRole("button", { name: "View riya.eats", exact: true }).click();
     const panel = page.getByRole("dialog");
     await expect(panel.getByRole("switch", { name: "Available for new plans" })).toBeChecked();
     await panel.getByRole("switch", { name: "Available for new plans" }).click();
@@ -444,7 +446,7 @@ test.describe("Creators", () => {
       await signIn(page, role);
       await creatorsApi(page);
       await page.goto("/creators");
-      await page.getByRole("button", { name: /riya\.eats/ }).first().click();
+      await page.getByRole("button", { name: "View riya.eats", exact: true }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await expect(page.getByRole("dialog").getByRole("switch", { name: "Available for new plans" })).toHaveCount(0);
       await page.keyboard.press("Escape");
