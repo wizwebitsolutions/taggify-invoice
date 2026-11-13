@@ -99,6 +99,18 @@ export const proposeEditSchema = z
 
 export const decideEditSchema = z.object({ decision: z.enum(["approve", "reject"]) });
 
+// Vendor contact details from Inventory (13 Nov): an admin's direct edit and a
+// plan maker's suggestion take the same body. Email (the login) and bank
+// details stay in Settings → People. null clears a phone; the name can't be cleared.
+export const vendorEditSchema = z
+  .object({
+    name: z.string().trim().min(1, "Name can't be empty").max(100).optional(),
+    phoneNumber: z.string().regex(/^\+91\d{10}$/, "Phone must be +91 followed by 10 digits").nullable().optional(),
+    secondaryPhone: z.string().regex(/^\+91\d{10}$/, "WhatsApp number must be +91 followed by 10 digits").nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to change." });
+
 // Same shape as campaigns/plans' importSheetUrlSchema — a pasted Google Sheet link.
 export const importSheetUrlSchema = z.object({
   url: z.string().url().max(500),

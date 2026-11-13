@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -91,9 +92,11 @@ function Flow({ onClose }: { onClose: () => void }) {
           <DialogDescription>Name the plan and the client, then create it. Anything else the sheet left out is asked for on the plan.</DialogDescription>
         </DialogHeader>
         {empty ? (
-          <p className="rounded-md bg-danger-soft px-3 py-2 text-small text-danger-fg" role="alert">
-            Nothing readable in that sheet. Check the Details tab has “Field, Value” rows and the Pages tab has a header row starting with “Handle”.
-          </p>
+          <Notice tone="danger">
+            <p>
+              <strong>Nothing readable in that sheet.</strong> Check the Details tab has “Field, Value” rows and the Pages tab has a header row starting with “Handle”.
+            </p>
+          </Notice>
         ) : (
           <div className="flex flex-col gap-1 rounded-card border p-4 text-small">
             <p className="text-body-strong">

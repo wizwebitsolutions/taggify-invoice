@@ -359,6 +359,35 @@ export interface PendingAssetEdit {
   rateCards?: { format: string; amount: number }[];
 }
 
+/** A vendor's contact fields Inventory can change (13 Nov). Email and bank details stay in Settings → People. null clears a phone. */
+export interface VendorEdit {
+  name?: string;
+  phoneNumber?: string | null;
+  secondaryPhone?: string | null;
+}
+
+/** What PUT /assets/vendors/:id(/propose-edit|/edit-decision) returns. */
+export interface VendorContact {
+  id: string;
+  name: string | null;
+  phoneNumber: string | null;
+  secondaryPhone: string | null;
+  pendingVendorEdit: VendorEdit | null;
+  pendingVendorEditAt: string | null;
+}
+
+/** The vendor (owner) on an Inventory page, with a plan maker's waiting change, if any (13 Nov). */
+export interface AssetOwner {
+  id: string;
+  name: string | null;
+  phoneNumber: string | null;
+  email?: string | null;
+  secondaryPhone?: string | null;
+  pendingVendorEdit?: VendorEdit | null;
+  pendingVendorEditAt?: string | null;
+  pendingVendorEditBy?: { id: string; name: string | null; email?: string | null; role?: Role } | null;
+}
+
 export interface Asset {
   id: string;
   ownerId: string;
@@ -406,7 +435,7 @@ export interface Asset {
   /** Set while a profile scrape is queued/running for this page (create, import, bulk refresh); null once it finishes. */
   scrapeQueuedAt?: string | null;
   /** The creator this page belongs to — Inventory's owner filter (newTask.md, 9 Sep). */
-  owner?: { id: string; name: string | null; phoneNumber: string | null; email?: string | null } | null;
+  owner?: AssetOwner | null;
   /** Who added the page (1 Nov) — Approvals groups new pages by this. Null for pages from before it was recorded. */
   createdById?: string | null;
   createdBy?: { id: string; name: string | null; email?: string | null; role: Role } | null;
@@ -869,6 +898,10 @@ export const assets = {
   removeMany: (token: string, assetIds: string[]) =>
     request<{ deleted: string[]; skipped: { id: string; reason: string }[] }>("/assets/bulk-delete", { method: "POST", token, body: { assetIds } }),
   // A planner's suggested edit (16 Oct): parked on the row until an admin decides. Only the keys sent are proposed.
+  // Vendor contact details from Inventory (13 Nov): admin direct, plan maker suggests, inventory.approve decides.
+  editVendor: (token: string, vendorId: string, body: VendorEdit) => request<VendorContact>(`/assets/vendors/${vendorId}`, { method: "PUT", token, body }),
+  proposeVendorEdit: (token: string, vendorId: string, body: VendorEdit) => request<VendorContact>(`/assets/vendors/${vendorId}/propose-edit`, { method: "PUT", token, body }),
+  decideVendorEdit: (token: string, vendorId: string, decision: "approve" | "reject") => request<VendorContact>(`/assets/vendors/${vendorId}/edit-decision`, { method: "PUT", token, body: { decision } }),
   proposeEdit: (token: string, assetId: string, body: PendingAssetEdit) => request<Asset>(`/assets/${assetId}/propose-edit`, { method: "PUT", token, body }),
   decideEdit: (token: string, assetId: string, decision: "approve" | "reject") => request<Asset>(`/assets/${assetId}/edit-decision`, { method: "PUT", token, body: { decision } }),
   updateRateCard: (token: string, assetId: string, rateCards: { format: string; amount: number }[]) =>

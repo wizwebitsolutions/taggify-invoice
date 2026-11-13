@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -42,6 +43,8 @@ const FOLLOWERS_CHUNK = 100;
 // The lookup runs as a server job (3 Nov); the server's own Apify wait is 240 s, so give up a little after that.
 const FOLLOWERS_POLL_MS = 3000;
 const FOLLOWERS_POLL_LIMIT_MS = 5 * 60 * 1000;
+/** Failed polls in a row (gateway 5xx / network) tolerated before giving up. */
+const FOLLOWERS_POLL_MISSES = 5;
 /** Select items can't carry "", so "keep what the sheet / the all-pages picker says" uses these. */
 const SHEET = "__sheet";
 const DEFAULT = "__default";
@@ -196,10 +199,21 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
         const { jobId } = await assetsApi.startImportFollowers(accessToken!, handles.slice(i, i + FOLLOWERS_CHUNK));
         if (latest.current !== src) return;
         const deadline = Date.now() + FOLLOWERS_POLL_LIMIT_MS;
+        let misses = 0;
         for (;;) {
           await new Promise((r) => setTimeout(r, FOLLOWERS_POLL_MS));
           if (latest.current !== src) return;
-          const job = await assetsApi.importFollowersJob(accessToken!, jobId);
+          let job;
+          try {
+            job = await assetsApi.importFollowersJob(accessToken!, jobId);
+          } catch (e) {
+            // A gateway 5xx or a dropped connection on one poll is retried (3 Nov — production 504s);
+            // a real answer (expired job 404, Instagram failure 502 from the job itself) ends the check.
+            const transient = !(e instanceof ApiError) || (e.status >= 500 && e.code === "UNKNOWN");
+            if (!transient || ++misses > FOLLOWERS_POLL_MISSES || Date.now() > deadline) throw e;
+            continue;
+          }
+          misses = 0;
           if (latest.current !== src) return;
           if (job.status === "done") {
             setLive((prev) => ({ ...prev, ...job.profiles }));
@@ -389,9 +403,11 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
         )}
 
         {already.length > 0 && (
-          <div className="rounded-card bg-warning-soft px-4 py-3 text-small text-warning-fg">
-            <p className="text-body-strong">{already.length === 1 ? "1 page is already in Inventory and won't be imported:" : `${already.length} pages are already in Inventory and won't be imported:`}</p>
-            <ul className="mt-1 flex flex-col gap-0.5">
+          <Notice tone="warning">
+            <p>
+              <strong>{already.length === 1 ? "1 page is already in Inventory" : `${already.length} pages are already in Inventory`}</strong> and won&apos;t be imported:
+            </p>
+            <ul className="flex flex-col gap-0.5 text-muted-foreground">
               {already.map((r) => (
                 <li key={r.rowNumber}>
                   {/* For a conflict, `owner` is who the sheet meant; the reason names who it's really under. */}
@@ -399,12 +415,14 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                 </li>
               ))}
             </ul>
-          </div>
+          </Notice>
         )}
         {notFound > 0 && (
-          <p className="rounded-card bg-danger-soft px-4 py-3 text-small text-danger-fg" role="status">
-            {notFound === 1 ? "1 link is broken or its page isn't on Instagram. It" : `${notFound} links are broken or their pages aren't on Instagram. They`} won&apos;t be imported: fix {notFound === 1 ? "it" : "them"} in the sheet and import again.
-          </p>
+          <Notice tone="danger" role="status">
+            <p>
+              <strong>{notFound === 1 ? "1 link is broken or its page isn't on Instagram." : `${notFound} links are broken or their pages aren't on Instagram.`}</strong> {notFound === 1 ? "It" : "They"} won&apos;t be imported: fix {notFound === 1 ? "it" : "them"} in the sheet and import again.
+            </p>
+          </Notice>
         )}
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">

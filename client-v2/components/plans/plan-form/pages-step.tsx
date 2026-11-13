@@ -1,8 +1,9 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FileSpreadsheet, Info, Sparkles, TriangleAlert, Upload, X } from "lucide-react";
+import { ExternalLink, FileSpreadsheet, Sparkles, Upload, X } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, plans as plansApi, type Asset, type Plan } from "@/lib/api-client";
@@ -186,10 +187,11 @@ export function PagesStep({
             ))}
           </div>
           {message && (
-            <p role="status" className="mx-5 mb-3 flex items-center gap-2 rounded-md bg-warning-soft px-3 py-2 text-small text-warning-fg">
-              <Info className="h-4 w-4 shrink-0" aria-hidden />
-              {message}
-            </p>
+            <div className="px-5 pb-3">
+              <Notice tone="warning">
+                <p>{message}</p>
+              </Notice>
+            </div>
           )}
 
           <div className="grid grid-cols-[minmax(0,1fr)_auto] border-t bg-muted/50 px-5 py-2 text-th uppercase text-muted-foreground sm:grid-cols-[minmax(0,1fr)_90px_90px_110px]">
@@ -255,18 +257,21 @@ export function PagesStep({
             </div>
             {budgetNumber ? <BudgetMeter budget={budgetNumber} used={used} /> : <p className="rounded-md bg-muted px-3 py-2 text-small text-muted-foreground">Set the budget to start picking pages.</p>}
             {over > 0 && (
-              <p role="status" className="flex items-start gap-2 rounded-md bg-warning-soft px-3 py-2 text-small text-warning-fg" data-testid="over-budget-warning">
-                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                <span>
-                  Over budget by <Money value={over} />. You can carry on; the plan will show it as over budget.
-                </span>
-              </p>
+              <Notice tone="warning" data-testid="over-budget-warning">
+                <p>
+                  <strong>
+                    Over budget by <Money value={over} />
+                  </strong>
+                  . You can carry on; the plan will show it as over budget.
+                </p>
+              </Notice>
             )}
             {unpriced > 0 && (
-              <p role="status" className="flex items-start gap-2 rounded-md bg-warning-soft px-3 py-2 text-small text-warning-fg" data-testid="unpriced-lines-warning">
-                <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                <span>{unpriced === 1 ? "1 line has no cost yet" : `${unpriced} lines have no cost yet`}. Type it on the line before moving on.</span>
-              </p>
+              <Notice tone="warning" data-testid="unpriced-lines-warning">
+                <p>
+                  <strong>{unpriced === 1 ? "1 line has no cost yet" : `${unpriced} lines have no cost yet`}</strong>. Type it on the line before moving on.
+                </p>
+              </Notice>
             )}
             {items.length === 0 ? (
               <p className="py-4 text-center text-small text-muted-foreground">Pick pages from the list. They show up here with their posts and cost.</p>

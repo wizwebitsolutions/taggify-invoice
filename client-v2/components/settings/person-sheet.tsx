@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -231,7 +232,11 @@ function AccountSection({ person, onDeactivate, onDone }: { person: User; onDeac
       </h3>
       {since ? (
         <>
-          <p className="rounded-md bg-danger-soft px-3 py-2 text-small text-danger-fg">Deactivated on {since}. They can&apos;t sign in. Everything they&apos;re on stays as it was.</p>
+          <Notice tone="danger" role="status">
+            <p>
+              <strong>Deactivated on {since}.</strong> They can&apos;t sign in. Everything they&apos;re on stays as it was.
+            </p>
+          </Notice>
           <Button variant="outline" className="self-start" disabled={reactivate.isPending} onClick={() => reactivate.mutate()}>
             <UserCheck />
             {reactivate.isPending ? "Reactivating…" : "Reactivate account"}

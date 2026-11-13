@@ -475,10 +475,29 @@ describe("listAssets — owner name included for Inventory's owner filter (newTa
     ]);
     const admin = { id: "admin-1", role: "ADMIN" };
     const [asset] = await listAssets(admin);
-    expect(asset.owner).toEqual({ id: "creator-1", name: "Demo Creator", phoneNumber: "+919000000003" });
+    expect(asset.owner).toEqual({ id: "creator-1", name: "Demo Creator", phoneNumber: "+919000000003", pendingVendorEditBy: null });
     expect(mockPrisma.asset.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ include: expect.objectContaining({ owner: expect.anything() }) })
     );
+  });
+
+  it("names who suggested a vendor change (13 Nov — vendor edits from Inventory)", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([
+      { id: "asset-1", ownerId: "creator-1", owner: { id: "creator-1", name: "Demo Creator", pendingVendorEdit: { name: "New" }, pendingVendorEditById: "pm-1" } },
+    ]);
+    mockPrisma.user.findMany.mockResolvedValue([{ id: "pm-1", name: "Meera", email: null, role: "PLAN_MAKER" }]);
+    const [asset] = await listAssets({ id: "admin-1", role: "ADMIN" });
+    expect(asset.owner.pendingVendorEditBy).toEqual({ id: "pm-1", name: "Meera", email: null, role: "PLAN_MAKER" });
+    expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ["pm-1"] } } }));
+  });
+
+  it("a creator listing their own pages never gets a staff suggestion about them", async () => {
+    mockPrisma.asset.findMany.mockResolvedValue([
+      { id: "asset-1", ownerId: "creator-1", owner: { id: "creator-1", name: "Demo Creator", pendingVendorEdit: { name: "New" }, pendingVendorEditById: "pm-1", pendingVendorEditAt: new Date() } },
+    ]);
+    mockPrisma.user.findMany.mockResolvedValue([{ id: "pm-1", name: "Meera", email: "meera@x.test", role: "PLAN_MAKER" }]);
+    const [asset] = await listAssets({ id: "creator-1", role: "CREATOR" });
+    expect(asset.owner).toEqual({ id: "creator-1", name: "Demo Creator", pendingVendorEditBy: null });
   });
 
   it("scopes to the caller's own assets for a plain CREATOR", async () => {

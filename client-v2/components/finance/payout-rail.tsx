@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -338,10 +339,17 @@ export function PayoutRail({
           {billingError ? (
             <p className="rounded-lg bg-muted px-3 py-2 text-small text-muted-foreground">Couldn&apos;t load the bank details. Check them in Billing Details before you transfer.</p>
           ) : (!billingProfile || billingProfile.approvalStatus !== "approved") && (
-            <p className="flex gap-2 rounded-lg bg-warning-soft px-3 py-2 text-caption text-warning-fg">
-              <AlertTriangle className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden />
-              {billingProfile ? "These bank details aren't approved yet. Check them with the vendor before you transfer." : "This vendor has no bank details on file. Ask them to add a billing profile before you transfer."}
-            </p>
+            <Notice tone="warning">
+              {billingProfile ? (
+                <p>
+                  These bank details <strong>aren&apos;t approved yet</strong>. Check them with the vendor before you transfer.
+                </p>
+              ) : (
+                <p>
+                  This vendor has <strong>no bank details on file</strong>. Ask them to add a billing profile before you transfer.
+                </p>
+              )}
+            </Notice>
           )}
         </div>
         <div className="flex flex-col gap-2">

@@ -92,6 +92,24 @@ export const canDeletePage = canSetPageActive;
  */
 export const canProposeEdits = (u: U) => !!u && u.role === "PLAN_MAKER" && hasOwnAccess(u, "inventory.edit") && !canEditPages(u);
 
+/**
+ * Vendor contact details from Inventory (13 Nov). PUT /assets/vendors/:id is the ADMIN role +
+ * inventory.edit (applies at once); a plan maker with their Inventory switch on suggests instead
+ * (PUT …/propose-edit) and someone with inventory.approve applies or discards it.
+ */
+export const canEditVendors = canSetPageActive;
+export const canSuggestVendorEdits = (u: U) => !!u && u.role === "PLAN_MAKER" && hasOwnAccess(u, "inventory.edit");
+
+/** Vendors with a suggested change waiting, once each (the pages list repeats a vendor per page). */
+export function vendorsWithPendingEdit(pages: Pick<Asset, "owner">[]): NonNullable<Asset["owner"]>[] {
+  const byId = new Map<string, NonNullable<Asset["owner"]>>();
+  for (const p of pages) {
+    const o = p.owner;
+    if (o?.pendingVendorEdit && typeof o.pendingVendorEdit === "object" && Object.keys(o.pendingVendorEdit).length > 0 && !byId.has(o.id)) byId.set(o.id, o);
+  }
+  return [...byId.values()];
+}
+
 /** Page grade A / B / C (16 Oct) — set by hand, optional. */
 export const GRADES = ["A", "B", "C"] as const;
 export type Grade = (typeof GRADES)[number];

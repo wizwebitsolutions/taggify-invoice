@@ -16,6 +16,7 @@ import {
   links as linksApi,
   plans as plansApi,
   type Asset,
+  type AssetOwner,
   type BillingProfile,
   type Campaign,
   type Link as Post,
@@ -24,7 +25,7 @@ import {
 import { captionTitle, formatLabel, latestSnapshot, postThumbSrc } from "@/lib/finance";
 import { count, personLabel, plural, roleLabel } from "@/lib/format";
 import { isDecidable, margin, planPages, planValue } from "@/lib/plans";
-import { canEditPages, rateOf } from "@/lib/creators";
+import { canEditPages, rateOf, vendorsWithPendingEdit } from "@/lib/creators";
 import { FORMATS, formatLabel as rateLabel } from "@/lib/formats";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/layout/app-shell";
@@ -47,14 +48,15 @@ import { UserAvatar } from "@/components/taggify/user-avatar";
 import { audienceLabel, ContentThumb, displayHandle, PageAvatar, PageAvatarStack } from "@/components/finance/identity";
 import { LoadError, NoAccess } from "@/components/finance/states";
 import { PageSheet } from "@/components/creators/page-sheet";
+import { vendorEditRows } from "@/components/creators/vendor-edit";
 
-type Kind = "proof" | "insights" | "plan" | "people" | "page" | "page-edit" | "billing";
-const KIND: Record<Kind, string> = { proof: "Proof", insights: "Insights", plan: "Plan", people: "Sheet rows", page: "New page", "page-edit": "Page edit", billing: "Bank details" };
+type Kind = "proof" | "insights" | "plan" | "people" | "page" | "page-edit" | "vendor-edit" | "billing";
+const KIND: Record<Kind, string> = { proof: "Proof", insights: "Insights", plan: "Plan", people: "Sheet rows", page: "New page", "page-edit": "Page edit", "vendor-edit": "Vendor change", billing: "Bank details" };
 // Approvals opens on these cards (2 Nov — "category wise: posts, inventory, user"); a card opens that category's queue.
 type Category = "posts" | "inventory" | "users" | "plans" | "sheet";
 const CATEGORY: Record<Category, { label: string; blurb: string; icon: LucideIcon; tile: string; kinds: Kind[] }> = {
   posts: { label: "Posts", blurb: "Proof screenshots and insights to check.", icon: ImageIcon, tile: "bg-tile-coral-icon text-tile-coral-fg", kinds: ["proof", "insights"] },
-  inventory: { label: "Inventory", blurb: "New pages and page edits, by who sent them.", icon: LayoutGrid, tile: "bg-tile-amber-icon text-tile-amber-fg", kinds: ["page", "page-edit"] },
+  inventory: { label: "Inventory", blurb: "New pages, page edits and vendor changes, by who sent them.", icon: LayoutGrid, tile: "bg-tile-amber-icon text-tile-amber-fg", kinds: ["page", "page-edit", "vendor-edit"] },
   users: { label: "Users", blurb: "Bank details Finance will pay into.", icon: Landmark, tile: "bg-tile-mint-icon text-tile-mint-fg", kinds: ["billing"] },
   plans: { label: "Plans", blurb: "Plans waiting for a decision.", icon: ClipboardCheck, tile: "bg-tile-coral-icon text-tile-coral-fg", kinds: ["plan"] },
   sheet: { label: "Sheet rows", blurb: "Campaign sheet pages to match to a page.", icon: FileSpreadsheet, tile: "bg-tile-amber-icon text-tile-amber-fg", kinds: ["people"] },
@@ -65,14 +67,17 @@ const categoryOf = (k: Kind): Category | undefined => CATEGORIES.find((c) => CAT
 const UNTRACKED = "untracked";
 type PageItem = Extract<Item, { kind: "page" }>;
 type EditItem = Extract<Item, { kind: "page-edit" }>;
-/** One person with Inventory work waiting: the pages they added and the edits they suggested. */
-type Person = { key: string; label: string; role: string; pages: PageItem[]; edits: EditItem[]; since: string };
+type VendorItem = Extract<Item, { kind: "vendor-edit" }>;
+/** One person with Inventory work waiting: the pages they added, the page edits and the vendor changes they suggested. */
+type Person = { key: string; label: string; role: string; pages: PageItem[]; edits: EditItem[]; vendors: VendorItem[]; since: string };
+const INVENTORY_KINDS = ["page", "page-edit", "vendor-edit"] as const;
+const personCount = (p: Person, k: Kind) => (k === "page" ? p.pages.length : k === "page-edit" ? p.edits.length : k === "vendor-edit" ? p.vendors.length : 0);
 
 function peopleFrom(items: Item[]): Person[] {
   const byKey = new Map<string, Person>();
   const entry = (who: { id: string; name: string | null; email?: string | null; role?: string } | null | undefined, since: string) => {
     const key = who?.id ?? UNTRACKED;
-    const p = byKey.get(key) ?? { key, label: who ? personLabel(who) : "Added before tracking", role: who?.role ? roleLabel(who.role) : "", pages: [], edits: [], since };
+    const p = byKey.get(key) ?? { key, label: who ? personLabel(who) : "Added before tracking", role: who?.role ? roleLabel(who.role) : "", pages: [], edits: [], vendors: [], since };
     if (new Date(since) < new Date(p.since)) p.since = since;
     byKey.set(key, p);
     return p;
@@ -80,6 +85,7 @@ function peopleFrom(items: Item[]): Person[] {
   for (const i of items) {
     if (i.kind === "page") entry(i.asset.createdBy, i.since).pages.push(i);
     else if (i.kind === "page-edit") entry(i.asset.pendingEditBy, i.since).edits.push(i);
+    else if (i.kind === "vendor-edit") entry(i.owner.pendingVendorEditBy, i.since).vendors.push(i);
   }
   // Waiting longest first; pages nobody recorded an adder for go last.
   return [...byKey.values()].sort((a, b) => (a.key === UNTRACKED ? 1 : b.key === UNTRACKED ? -1 : new Date(a.since).getTime() - new Date(b.since).getTime()));
@@ -92,6 +98,8 @@ type Item =
   | { kind: "page"; id: string; title: string; sub: string; since: string; asset: Asset }
   // A planner's suggested edit to an existing page (16 Oct): apply or discard.
   | { kind: "page-edit"; id: string; title: string; sub: string; since: string; asset: Asset }
+  // A planner's suggested change to a vendor's contact details (13 Nov): apply or discard.
+  | { kind: "vendor-edit"; id: string; title: string; sub: string; since: string; owner: AssetOwner }
   | { kind: "billing"; id: string; title: string; sub: string; since: string; profile: BillingProfile };
 
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
@@ -128,7 +136,7 @@ function Approvals() {
   const { can, linksQ, plansQ, assetsQ, billingQ, campaignsQ } = sources;
   const token = accessToken ?? "";
 
-  const kinds = (Object.keys(KIND) as Kind[]).filter((k) => (k === "proof" || k === "insights" ? can.links : k === "people" ? can.people : k === "plan" ? can.plans : k === "page" || k === "page-edit" ? can.pages : can.billing));
+  const kinds = (Object.keys(KIND) as Kind[]).filter((k) => (k === "proof" || k === "insights" ? can.links : k === "people" ? can.people : k === "plan" ? can.plans : k === "page" || k === "page-edit" || k === "vendor-edit" ? can.pages : can.billing));
   const available = CATEGORIES.filter((c) => CATEGORY[c].kinds.some((k) => kinds.includes(k)));
   // ?type=<kind> deep links (home, content, finance) land on that kind's category with the kind picked.
   const typeParam = params.get("type") as Kind | null;
@@ -175,12 +183,14 @@ function Approvals() {
     for (const c of (campaignsQ.data ?? []).filter((c) => (c.pendingAssignmentCount ?? 0) > 0)) out.push({ kind: "people", id: `c:${c.id}`, title: `${plural(c.pendingAssignmentCount ?? 0, "page")} to match`, sub: c.title, since: c.createdAt, campaign: c });
     for (const a of (assetsQ.data ?? []).filter((a) => a.approvalStatus === "pending")) out.push({ kind: "page", id: `a:${a.id}`, title: displayHandle(a.handle, a.platform), sub: `${a.owner?.name ?? "—"} · ${audienceLabel(a.followers, a.platform)}`, since: a.createdAt, asset: a });
     for (const a of (assetsQ.data ?? []).filter((a) => a.pendingEdit && typeof a.pendingEdit === "object")) out.push({ kind: "page-edit", id: `e:${a.id}`, title: `${displayHandle(a.handle, a.platform)} · suggested edit`, sub: `by ${a.pendingEditBy?.name ?? a.pendingEditBy?.email ?? "a planner"}`, since: a.pendingEditAt ?? a.createdAt, asset: a });
+    for (const o of vendorsWithPendingEdit(assetsQ.data ?? []))
+      out.push({ kind: "vendor-edit", id: `v:${o.id}`, title: `${personLabel(o, "Vendor")} · suggested change`, sub: `by ${o.pendingVendorEditBy?.name ?? o.pendingVendorEditBy?.email ?? "a planner"}`, since: o.pendingVendorEditAt ?? new Date().toISOString(), owner: o });
     for (const b of (billingQ.data ?? []).filter((b) => b.approvalStatus === "pending")) out.push({ kind: "billing", id: `b:${b.id}`, title: b.user?.name ?? b.name, sub: `•••• ${b.bankAccountNumber.slice(-4)} · ${b.ifscCode}`, since: b.createdAt, profile: b });
     return out;
   }, [linksQ.data, plansQ.data, campaignsQ.data, assetsQ.data, billingQ.data]);
 
   const counts = useMemo(() => {
-    const c = { proof: 0, insights: 0, plan: 0, people: 0, page: 0, "page-edit": 0, billing: 0 } as Record<Kind, number>;
+    const c = { proof: 0, insights: 0, plan: 0, people: 0, page: 0, "page-edit": 0, "vendor-edit": 0, billing: 0 } as Record<Kind, number>;
     items.forEach((i) => c[i.kind]++);
     return c;
   }, [items]);
@@ -195,7 +205,7 @@ function Approvals() {
     if (!category) return [];
     const inCategory = items.filter((i) => categoryOf(i.kind) === category);
     // Inventory's queue is one person's work.
-    const scoped = category === "inventory" ? (person ? [...person.pages, ...person.edits] : []) : inCategory;
+    const scoped = category === "inventory" ? (person ? [...person.pages, ...person.edits, ...person.vendors] : []) : inCategory;
     const rows = sub === "all" ? scoped : scoped.filter((i) => i.kind === sub);
     return [...rows].sort((a, b) => (sort === "oldest" ? 1 : -1) * (new Date(a.since).getTime() - new Date(b.since).getTime()));
   }, [items, category, person, sub, sort]);
@@ -229,6 +239,8 @@ function Approvals() {
           return assetsApi.setApproval(token, item.asset.id, approve ? "approved" : "rejected");
         case "page-edit":
           return assetsApi.decideEdit(token, item.asset.id, approve ? "approve" : "reject");
+        case "vendor-edit":
+          return assetsApi.decideVendorEdit(token, item.owner.id, approve ? "approve" : "reject");
         case "billing":
           return billingApi.setApproval(token, item.profile.id, approve ? "approved" : "rejected");
         default:
@@ -271,8 +283,8 @@ function Approvals() {
   const categoryCount = (c: Category) => CATEGORY[c].kinds.reduce((n, k) => n + totals[k], 0);
   const oldest = (c: Category) => items.filter((i) => categoryOf(i.kind) === c).reduce<string | null>((o, i) => (!o || new Date(i.since) < new Date(o) ? i.since : o), null);
   // What this person's queue offers: pills only when they have both kinds.
-  const subKinds = category === "inventory" ? (person ? (["page", "page-edit"] as Kind[]).filter((k) => (k === "page" ? person.pages.length : person.edits.length) > 0) : []) : category ? CATEGORY[category].kinds.filter((k) => kinds.includes(k)) : [];
-  const subCount = (k: Kind) => (person ? (k === "page" ? person.pages.length : person.edits.length) : counts[k]);
+  const subKinds = category === "inventory" ? (person ? INVENTORY_KINDS.filter((k) => personCount(person, k) > 0) : []) : category ? CATEGORY[category].kinds.filter((k) => kinds.includes(k)) : [];
+  const subCount = (k: Kind) => (person ? personCount(person, k) : counts[k]);
   const view = !category ? "cards" : category === "inventory" && !by ? "people" : "queue";
   const backHref = by ? hrefFor({ category: "inventory" }) : "/approvals";
   const backLabel = by ? "Back to Inventory" : "Back to Approvals";
@@ -292,7 +304,7 @@ function Approvals() {
             <UserAvatar name={personName ?? "?"} />
             <div className="min-w-0">
               <h1 className="truncate text-display">{personName ?? (loading ? <Skeleton className="h-control w-48" /> : "Inventory")}</h1>
-              {person && <p className="mt-1 text-body text-muted-foreground">{[person.role, person.pages.length ? plural(person.pages.length, "new page") : "", person.edits.length ? plural(person.edits.length, "page edit") : ""].filter(Boolean).join(" · ")}</p>}
+              {person && <p className="mt-1 text-body text-muted-foreground">{[person.role, person.pages.length ? plural(person.pages.length, "new page") : "", person.edits.length ? plural(person.edits.length, "page edit") : "", person.vendors.length ? plural(person.vendors.length, "vendor change") : ""].filter(Boolean).join(" · ")}</p>}
             </div>
           </div>
         ) : (
@@ -375,6 +387,7 @@ function Approvals() {
                   <TableHead>Pages</TableHead>
                   <TableHead className="text-right">New pages</TableHead>
                   <TableHead className="text-right">Page edits</TableHead>
+                  <TableHead className="text-right">Vendor changes</TableHead>
                   <TableHead>Waiting</TableHead>
                   <TableHead>
                     <span className="sr-only">Open</span>
@@ -399,6 +412,7 @@ function Approvals() {
                     </TableCell>
                     <TableCell className="num text-right">{p.pages.length || "—"}</TableCell>
                     <TableCell className="num text-right">{p.edits.length || "—"}</TableCell>
+                    <TableCell className="num text-right">{p.vendors.length || "—"}</TableCell>
                     <TableCell>
                       <StatusPill tone="warning">{waited(p.since)}</StatusPill>
                     </TableCell>
@@ -565,6 +579,7 @@ function QueueRow({ item, current, onSelect, className }: { item: Item; current:
 function QueueIcon({ item }: { item: Item }) {
   if (item.kind === "proof" || item.kind === "insights") return <ContentThumb src={postThumbSrc(item.post)} format={item.post.format} />;
   if (item.kind === "page" || item.kind === "page-edit") return <PageAvatar assetId={item.asset.id} handle={item.asset.handle} size="md" />;
+  if (item.kind === "vendor-edit") return <UserAvatar name={personLabel(item.owner, "Vendor")} size="md" />;
   const Icon = item.kind === "plan" ? ClipboardCheck : item.kind === "billing" ? CreditCard : Users;
   return (
     <span className="grid h-10 w-10 shrink-0 place-items-center rounded-sm bg-brand-soft text-brand-ink">
@@ -732,6 +747,34 @@ function Evidence({ item, onSetRates }: { item: Item; onSetRates?: (assetId: str
       </div>
     );
   }
+  if (item.kind === "vendor-edit") {
+    const o = item.owner;
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-4">
+          <UserAvatar name={personLabel(o, "Vendor")} />
+          <div>
+            <p className="text-card-title">{personLabel(o, "Vendor")}</p>
+            <p className="text-small text-muted-foreground">Approve applies these contact details to the vendor. Reject discards them and leaves the vendor as they are.</p>
+          </div>
+        </div>
+        <dl className="grid max-w-lg grid-cols-[1fr_auto_auto] gap-x-6 gap-y-2 text-body" data-testid="vendor-edit-diff">
+          <div className="contents text-th uppercase text-muted-foreground">
+            <dt>Field</dt>
+            <dd className="text-right">Now</dd>
+            <dd className="text-right">Suggested</dd>
+          </div>
+          {vendorEditRows(o).map(([label, from, to]) => (
+            <div key={label} className="contents">
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="text-right text-fg-muted line-through">{from}</dd>
+              <dd className="text-right font-semibold">{to}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    );
+  }
   if (item.kind === "billing") {
     const b = item.profile;
     return (
@@ -807,7 +850,9 @@ function Decision({ item, busy, onApprove, onReject }: { item: Item; busy: boole
                 ? "Approved bank details are what Finance pays into."
                 : item.kind === "page-edit"
                   ? "Approving applies the suggested changes to the page. Rejecting discards them."
-                  : "Approved pages can be added to plans and campaigns."}
+                  : item.kind === "vendor-edit"
+                    ? "Approving updates the vendor's contact details everywhere. Rejecting discards the suggestion."
+                    : "Approved pages can be added to plans and campaigns."}
       </p>
     </div>
   );
@@ -876,6 +921,16 @@ function Context({ item }: { item: Item }) {
       </div>
     );
   }
+  if (item.kind === "vendor-edit") {
+    return (
+      <div className="flex flex-col gap-2 text-small">
+        <span className="font-semibold">{item.owner.pendingVendorEditBy?.name ?? item.owner.pendingVendorEditBy?.email ?? "A planner"}</span>
+        <span className="text-muted-foreground">Suggested the change</span>
+        {item.owner.pendingVendorEditAt && <span className="text-muted-foreground">On {new Date(item.owner.pendingVendorEditAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>}
+        {item.owner.email && <span className="text-muted-foreground">Vendor email {item.owner.email}</span>}
+      </div>
+    );
+  }
   if (item.kind === "page") {
     const { owner, createdBy } = item.asset;
     return (
@@ -921,6 +976,8 @@ function RejectDialog({ item, busy, onClose, onReject }: { item: Item | null; bu
                   ? "Finance won't pay into these bank details until the creator fixes and resubmits them."
                   : item?.kind === "page-edit"
                     ? "The suggested changes are discarded and the page stays as it is."
+                    : item?.kind === "vendor-edit"
+                      ? "The suggested change is discarded and the vendor's details stay as they are."
                     : "The page can't be booked until it's added again."}
           </DialogDescription>
         </DialogHeader>

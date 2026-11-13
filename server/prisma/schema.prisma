@@ -124,6 +124,13 @@ model User {
   // 21 Oct: admin "Deactivate" — set = can't sign in or use a session; every
   // record they're on (pages, posts, invoices, payouts, plans) stays. Null = active.
   deactivatedAt        DateTime?
+  // 13 Nov: a plan maker's suggested change to a vendor's contact details
+  // ({ name?, phoneNumber?, secondaryPhone? }), parked until someone with
+  // inventory.approve applies or discards it. Same shape of flow as
+  // Asset.pendingEdit; one suggestion at a time, a newer one replaces it.
+  pendingVendorEdit     Json?
+  pendingVendorEditById String?
+  pendingVendorEditAt   DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

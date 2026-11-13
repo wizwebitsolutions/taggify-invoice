@@ -1,3 +1,4 @@
+import { Notice } from "@/components/taggify/notice";
 import { plural } from "@/lib/format";
 import type { SkippedSheetRow } from "@/lib/plan-sheet";
 import { displayHandle } from "@/components/finance/identity";
@@ -29,10 +30,10 @@ export function SheetRowProblems({ skipped, note = "They're left out. Fix them i
 export function SheetBlockers({ blockers }: { blockers: string[] }) {
   if (blockers.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1 rounded-md bg-danger-soft px-3 py-2 text-small text-danger-fg" role="alert">
+    <Notice tone="danger">
       {blockers.map((b) => (
         <p key={b}>{b}</p>
       ))}
-    </div>
+    </Notice>
   );
 }

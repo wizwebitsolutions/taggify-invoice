@@ -4,7 +4,6 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
-import morgan from "morgan";
 
 import authRoutes from "./modules/auth/routes.js";
 import usersRoutes from "./modules/users/routes.js";
@@ -26,9 +25,14 @@ import { startPostTrackerWorker } from "./modules/postTracker/worker.js";
 import { startCronJobs } from "./modules/jobs/index.js";
 import { startKeepAlive } from "./modules/jobs/keepAlive.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
+import { requestLog } from "./middleware/requestLog.js";
 import { createFrontendHandler } from "./frontend.js";
 
 const app = express();
+
+// First, so every request is timed: one line each with status, time, user and the
+// error code/message when it failed (replaces morgan, 3 Nov — see middleware/requestLog.js).
+app.use(requestLog());
 
 // credentials: true + a reflected (non-"*") origin is required for the
 // browser to send/accept the trusted-device cookie (23 Sep — "skip OTP for
@@ -38,7 +42,6 @@ const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json());
-app.use(morgan(process.env.NODE_ENV === "development" ? "dev" : "combined"));
 
 // helmet() (full defaults, CSP included) is scoped per-section below rather
 // than applied globally, so the CSP relaxation the static frontend needs

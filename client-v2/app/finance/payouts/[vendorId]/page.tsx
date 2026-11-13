@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -400,10 +401,18 @@ function VendorPayout() {
               </div>
 
               {pending.data && pending.data.total > pending.data.items.length && (
-                <p className="rounded-md bg-warning-soft px-4 py-3 text-small text-warning-fg">Showing the newest {pending.data.items.length} of {pending.data.total} dues. Pay these first, then the rest appear.</p>
+                <Notice tone="warning">
+                  <p>
+                    Showing the newest <strong>{pending.data.items.length} of {pending.data.total} dues</strong>. Pay these first, then the rest appear.
+                  </p>
+                </Notice>
               )}
               {pending.data && pending.data.invoices.length >= 500 && (
-                <p className="rounded-md bg-warning-soft px-4 py-3 text-small text-warning-fg">Showing the newest 500 invoices. Pay these first, then older ones appear.</p>
+                <Notice tone="warning">
+                  <p>
+                    Showing the <strong>newest 500 invoices</strong>. Pay these first, then older ones appear.
+                  </p>
+                </Notice>
               )}
               <Card className="ledger-panel">
                 {selectedDues.length > 0 && (
@@ -657,7 +666,15 @@ function PaidTab({ ledger }: { ledger: ReturnType<typeof usePaidLedger> }) {
   const total = ledger.data?.total ?? items.length;
   return (
     <Card className="ledger-panel">
-      {total > items.length && <p className="bg-warning-soft px-5 py-3 text-small text-warning-fg">Showing the latest {items.length} of {total} payments.</p>}
+      {total > items.length && (
+        <div className="px-5 py-3">
+          <Notice tone="warning">
+            <p>
+              Showing the latest <strong>{items.length} of {total} payments</strong>.
+            </p>
+          </Notice>
+        </div>
+      )}
       <PaidTable rows={items} />
     </Card>
   );

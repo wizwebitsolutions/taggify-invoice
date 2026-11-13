@@ -188,11 +188,16 @@ const config: Config = {
         "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },
         "slide-in-right": { from: { transform: "translateX(var(--enter-slide))", opacity: "0" }, to: { transform: "translateX(0)", opacity: "1" } },
         "pop-in": { from: { transform: "translateY(var(--enter-rise)) scale(0.98)", opacity: "0" }, to: { transform: "translateY(0) scale(1)", opacity: "1" } },
+        // Notice dot (13 Nov): the dot swells a little while its halo spreads out and fades.
+        "notice-twinkle": { "0%, 100%": { transform: "scale(1)" }, "50%": { transform: "scale(var(--twinkle-grow))" } },
+        "notice-halo": { "0%": { transform: "scale(1)", opacity: "var(--twinkle-halo-opacity)" }, "70%, 100%": { transform: "scale(var(--twinkle-halo-spread))", opacity: "0" } },
       },
       animation: {
         "fade-in": "fade-in var(--duration-enter) var(--ease-out)",
         "slide-in-right": "slide-in-right var(--duration-drawer) var(--ease-out)",
         "pop-in": "pop-in var(--duration-enter) var(--ease-out)",
+        "notice-twinkle": "notice-twinkle var(--duration-twinkle) ease-in-out infinite",
+        "notice-halo": "notice-halo var(--duration-twinkle) ease-out infinite",
       },
     },
   },

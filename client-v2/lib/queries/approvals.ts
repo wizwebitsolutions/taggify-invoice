@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth-context";
 import { assets as assetsApi, billing as billingApi, campaigns as campaignsApi, hasAccess, links as linksApi, plans as plansApi } from "@/lib/api-client";
 import { isDecidable } from "@/lib/plans";
+import { vendorsWithPendingEdit } from "@/lib/creators";
 
 /**
  * Everything the Approvals inbox decides, one query per kind. Each kind is its
@@ -51,7 +52,7 @@ function gate<Q extends { data: unknown; isLoading: boolean; isError: boolean }>
   return allowed ? q : { ...q, data: undefined, status: "pending", isSuccess: false, isLoading: false, isError: false };
 }
 
-export type ApprovalCounts = { proof: number; insights: number; plan: number; people: number; page: number; "page-edit": number; billing: number };
+export type ApprovalCounts = { proof: number; insights: number; plan: number; people: number; page: number; "page-edit": number; "vendor-edit": number; billing: number };
 
 /** How many items of each kind wait in the inbox (0 for kinds this user can't decide). */
 export function approvalCounts(s: ReturnType<typeof useApprovalSources>): ApprovalCounts {
@@ -64,6 +65,8 @@ export function approvalCounts(s: ReturnType<typeof useApprovalSources>): Approv
     page: (s.assetsQ.data ?? []).filter((a) => a.approvalStatus === "pending").length,
     // A planner's suggested edit to a page (16 Oct) waits in the same inbox.
     "page-edit": (s.assetsQ.data ?? []).filter((a) => a.pendingEdit && typeof a.pendingEdit === "object" && Object.keys(a.pendingEdit).length > 0).length,
+    // A planner's suggested vendor contact change (13 Nov), once per vendor.
+    "vendor-edit": vendorsWithPendingEdit(s.assetsQ.data ?? []).length,
     billing: (s.billingQ.data ?? []).filter((b) => b.approvalStatus === "pending").length,
   };
 }

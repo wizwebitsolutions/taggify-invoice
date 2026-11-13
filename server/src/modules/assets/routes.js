@@ -2,11 +2,12 @@ import express, { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireAccess } from "../../middleware/requireAccess.js";
 import { validateBody } from "../../middleware/validate.js";
-import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, bulkDeleteSchema, bulkApprovalSchema, proposeEditSchema, decideEditSchema } from "./schemas.js";
+import { createAssetSchema, updateRateCardSchema, updateAssetDetailsSchema, importAssetsSchema, setActiveSchema, setApprovalSchema, importSheetUrlSchema, importFollowersSchema, refreshProfilesSchema, bulkDeleteSchema, bulkApprovalSchema, proposeEditSchema, decideEditSchema, vendorEditSchema } from "./schemas.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { requireOwnAccess } from "../../middleware/requireOwnAccess.js";
 import { requireRole } from "../../middleware/requireRole.js";
 import * as assetsService from "./service.js";
+import * as vendorEdits from "./vendorEdits.js";
 import { buildImportPagesTemplate } from "../../lib/importPagesTemplate.js";
 
 const router = Router();
@@ -55,6 +56,34 @@ router.use(requireAuth);
 router.get("/", requireOwnAccess("inventory.view"), async (req, res, next) => {
   try {
     res.json(await assetsService.listAssets(req.user));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ── Vendor contact details from Inventory (13 Nov) — see vendorEdits.js ── */
+
+// Admin edits directly: the ADMIN role plus Inventory edit access, the same gate as Active/Inactive.
+router.put("/vendors/:id", requireRole("ADMIN"), requireAccess("inventory.edit"), validateBody(vendorEditSchema), async (req, res, next) => {
+  try {
+    res.json(await vendorEdits.editVendor(req.user, req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A plan maker suggests (PLAN_MAKER is bare: its own inventory.edit switch lets it through, as for page edits).
+router.put("/vendors/:id/propose-edit", requireAccess("inventory.edit", "PLAN_MAKER"), validateBody(vendorEditSchema), async (req, res, next) => {
+  try {
+    res.json(await vendorEdits.proposeVendorEdit(req.user, req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/vendors/:id/edit-decision", requireAccess("inventory.approve"), validateBody(decideEditSchema), async (req, res, next) => {
+  try {
+    res.json(await vendorEdits.decideVendorEdit(req.user, req.params.id, req.body.decision));
   } catch (err) {
     next(err);
   }

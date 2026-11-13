@@ -5,11 +5,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowUpDown, CircleCheck, ClipboardList, Eye, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { ArrowUpDown, CircleCheck, ClipboardList, Eye, MoreHorizontal, Pencil, Plus, RefreshCw, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
-import { ApiError, assets as assetsApi, hasAccess, type Asset } from "@/lib/api-client";
-import { canAddForOwner, canApprovePages, canDeletePage, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, rateOf, scrapeState } from "@/lib/creators";
+import { ApiError, assets as assetsApi, hasAccess, type Asset, type AssetOwner } from "@/lib/api-client";
+import { canAddForOwner, canApprovePages, canDeletePage, canEditVendors, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, rateOf, scrapeState } from "@/lib/creators";
 import { money, personLabel, plural } from "@/lib/format";
 import { canEditPlan } from "@/lib/plans";
 import { FORMATS, formatLabel } from "@/lib/formats";
@@ -50,6 +50,7 @@ import { LoadError, NoAccess } from "@/components/finance/states";
 import { AddPageDialog } from "@/components/creators/add-page-dialog";
 import { ImportPagesDialog } from "@/components/creators/import-pages-dialog";
 import { GradeMark, PageSheet } from "@/components/creators/page-sheet";
+import { canChangeVendor, VendorEditDialog } from "@/components/creators/vendor-edit";
 
 type Tab = "pages" | "vendors" | "waiting";
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
@@ -112,6 +113,7 @@ function Creators() {
   const [open, setOpen] = useState<Asset | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [editingVendor, setEditingVendor] = useState<AssetOwner | null>(null);
   // Pages awaiting the remove confirmation: the selection (bulk) or one row from its "⋯" menu.
   const [removing, setRemoving] = useState<{ ids: string[]; bulk: boolean } | null>(null);
 
@@ -392,14 +394,23 @@ function Creators() {
                       {v.pending > 0 && <StatusPill tone="warning">{plural(v.pending, "page")} waiting</StatusPill>}
                       {v.rejected > 0 && <StatusPill tone="danger">{plural(v.rejected, "page")} rejected</StatusPill>}
                       {v.pending === 0 && v.rejected === 0 && <StatusPill tone="success">Approved</StatusPill>}
+                      {v.owner?.pendingVendorEdit && Object.keys(v.owner.pendingVendorEdit).length > 0 && <StatusPill tone="info">Change suggested</StatusPill>}
                     </span>
                   </TableCell>
                   <TableCell className="text-right">
-                    {hasAccess(user, "finance.pay") && (
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/finance/payouts/${v.id}`}>Payouts</Link>
-                      </Button>
-                    )}
+                    <span className="inline-flex items-center gap-2">
+                      {v.owner && canChangeVendor(user) && (
+                        <Button size="sm" variant="ghost" aria-label={`${canEditVendors(user) ? "Edit" : "Suggest a change to"} ${personLabel(v.owner, "vendor")}`} onClick={() => setEditingVendor(v.owner)}>
+                          <Pencil />
+                          {canEditVendors(user) ? "Edit" : "Suggest change"}
+                        </Button>
+                      )}
+                      {hasAccess(user, "finance.pay") && (
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={`/finance/payouts/${v.id}`}>Payouts</Link>
+                        </Button>
+                      )}
+                    </span>
                   </TableCell>
                 </TableRow>
               ))}
@@ -614,6 +625,7 @@ function Creators() {
       <PageSheet page={openPage} onClose={() => setOpen(null)} />
       <AddPageDialog open={adding} onOpenChange={setAdding} />
       <ImportPagesDialog open={importing} onOpenChange={setImporting} />
+      <VendorEditDialog vendor={editingVendor} onClose={() => setEditingVendor(null)} />
       <Dialog open={removing != null} onOpenChange={(o) => !o && !removeMany.isPending && setRemoving(null)}>
         <DialogContent>
           <DialogHeader>

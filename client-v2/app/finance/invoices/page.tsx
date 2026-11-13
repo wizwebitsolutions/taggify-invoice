@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -343,9 +344,11 @@ function InvoiceSheet({ invoice, canReject, onClose }: { invoice: Invoice | null
               </SheetDescription>
             </SheetHeader>
             {(invoice.overQuotaCount ?? 0) > 0 && invoice.status === "RAISED" && (
-              <p className="rounded-md bg-danger-soft px-3 py-2 text-small text-danger-fg">
-                {plural(invoice.overQuotaCount ?? 0, "post")} on this invoice {invoice.overQuotaCount === 1 ? "is" : "are"} beyond what the campaign booked. It can&apos;t be approved; {canReject ? "reject it" : "ask someone with Finance pay access to reject it"} so the creator raises it again with only the booked posts.
-              </p>
+              <Notice tone="danger" role="status">
+                <p>
+                  <strong>{plural(invoice.overQuotaCount ?? 0, "post")}</strong> on this invoice {invoice.overQuotaCount === 1 ? "is" : "are"} beyond what the campaign booked. It can&apos;t be approved; {canReject ? "reject it" : "ask someone with Finance pay access to reject it"} so the creator raises it again with only the booked posts.
+                </p>
+              </Notice>
             )}
             <ul className="flex flex-col divide-y rounded-card border">
               {(invoice.items ?? []).map((it) => (

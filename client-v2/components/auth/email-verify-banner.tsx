@@ -1,6 +1,9 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import Link from "next/link";
+
+import { Button } from "@/components/ui/button";
 
 import { useAuth } from "@/lib/auth-context";
 
@@ -15,13 +18,18 @@ export function EmailVerifyBanner({ hidden }: { hidden?: boolean }) {
   const { user } = useAuth();
   if (hidden || user?.emailVerified !== false) return null;
   return (
-    <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md bg-warning-soft px-4 py-3 text-small text-warning-fg">
+    <Notice
+      tone="warning"
+      className="mb-4"
+      action={
+        <Button asChild size="sm" variant="outline" className="rounded-pill">
+          <Link href="/verify-email">Verify email</Link>
+        </Button>
+      }
+    >
       <p>
-        <span className="font-semibold">Verify your email to keep access.</span> Only 2 sign-ins are allowed without one. After that you&apos;ll need it to get in.
+        <strong>Verify your email to keep access.</strong> Only 2 sign-ins are allowed without one. After that you&apos;ll need it to get in.
       </p>
-      <Link href="/verify-email" className="shrink-0 font-semibold underline underline-offset-2">
-        Verify email
-      </Link>
-    </div>
+    </Notice>
   );
 }

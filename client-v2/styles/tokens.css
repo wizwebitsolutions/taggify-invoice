@@ -152,6 +152,11 @@
   --duration-page: 180ms;
   --duration-drawer: 220ms;
   --duration-ambient: 8s;
+  /* Notice dot twinkle: one pulse, how far the dot swells, and the halo's reach and strength. */
+  --duration-twinkle: 1.6s;
+  --twinkle-grow: 1.25;
+  --twinkle-halo-spread: 2.8;
+  --twinkle-halo-opacity: 0.55;
   --duration-ambient-delay-1: -2.67s;
   --duration-ambient-delay-2: -5.33s;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);

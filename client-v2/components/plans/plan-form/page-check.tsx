@@ -1,8 +1,9 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, RefreshCw, TriangleAlert } from "lucide-react";
+import { CircleCheck, RefreshCw } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, plans as plansApi, type Asset, type PageCheckResult } from "@/lib/api-client";
@@ -98,17 +99,24 @@ export function PageCheck({ assets, pickedIds, onReplace }: { assets: Asset[]; p
       ) : (
         <ul className="flex flex-col gap-2" data-testid="page-check-problems">
           {problems.map((p) => (
-            <li key={p.asset.id} className="flex items-center gap-3 rounded-md bg-danger-soft px-3 py-2" data-testid={`page-problem-${p.asset.id}`}>
-              <TriangleAlert className="h-4 w-4 shrink-0 text-danger-fg" aria-hidden />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-small font-semibold">{displayHandle(p.asset.handle, p.asset.platform)}</span>
-                <span className="block truncate text-caption text-danger-fg" title={p.detail}>
+            <li key={p.asset.id} data-testid={`page-problem-${p.asset.id}`}>
+              <Notice
+                tone="danger"
+                role="status"
+                className="w-full"
+                action={
+                  <Button size="sm" variant="outline" className="rounded-pill" onClick={() => setReplacing(p.asset)} data-testid={`replace-page-${p.asset.id}`}>
+                    Replace
+                  </Button>
+                }
+              >
+                <p className="truncate">
+                  <strong>{displayHandle(p.asset.handle, p.asset.platform)}</strong>
+                </p>
+                <p className="truncate text-caption text-muted-foreground" title={p.detail}>
                   {REASON[p.reason]} · {p.detail}
-                </span>
-              </span>
-              <Button size="sm" variant="outline" onClick={() => setReplacing(p.asset)} data-testid={`replace-page-${p.asset.id}`}>
-                Replace
-              </Button>
+                </p>
+              </Notice>
             </li>
           ))}
         </ul>

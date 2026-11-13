@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -86,9 +87,11 @@ function NumberingForm({ saved }: { saved: InvoiceNumbering }) {
         </p>
       </div>
       {goingBack && (
-        <p role="alert" className="rounded-md bg-warning-soft px-3 py-2 text-small text-warning-fg">
-          This goes back from {saved.suggestion}. Numbers from {preview(saved.prefix, n)} on may already be on issued invoices, and a repeat will be refused when the invoice is made.
-        </p>
+        <Notice tone="warning" role="alert">
+          <p>
+            <strong>This goes back from {saved.suggestion}.</strong> Numbers from {preview(saved.prefix, n)} on may already be on issued invoices, and a repeat will be refused when the invoice is made.
+          </p>
+        </Notice>
       )}
       <div className="flex gap-2">
         <Button type="submit" disabled={!changed || !!prefixError || !!nextError || save.isPending}>

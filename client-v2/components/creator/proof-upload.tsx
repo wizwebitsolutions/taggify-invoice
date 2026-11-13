@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -108,7 +109,13 @@ export function FixProofDialog({ post, onClose }: { post: Link | null; onClose: 
           <DialogTitle>{post?.status === "SCREENSHOT_REJECTED" ? "Upload a new proof" : "Add the proof"}</DialogTitle>
           <DialogDescription>{title}</DialogDescription>
         </DialogHeader>
-        {reason && <p className="rounded-md bg-danger-soft px-3 py-2 text-small text-danger-fg">Why it was rejected: {reason}</p>}
+        {reason && (
+          <Notice tone="danger" role="status">
+            <p>
+              <strong>Why it was rejected:</strong> {reason}
+            </p>
+          </Notice>
+        )}
         <ProofPicker file={file} onFile={setFile} error={error} onError={setError} />
         {upload.isError && (
           <p className="text-small text-danger-helper" role="alert">

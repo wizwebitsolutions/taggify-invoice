@@ -1,8 +1,9 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Download, Loader2, RefreshCw, Trash2, X } from "lucide-react";
+import { Download, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { MICRO, StatusPill, errorMessage } from "@/components/bulk-track/shared";
@@ -94,9 +95,9 @@ export function BatchDetailModal({ batchId, onClose, onDeleted }: { batchId: str
 
         <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
           {(del.isError || exportMutation.isError) && (
-            <p className="rounded-md bg-danger-soft px-3 py-2 text-caption font-normal text-danger-fg">
-              {del.isError ? errorMessage(del.error, "Couldn't delete this batch — try again.") : errorMessage(exportMutation.error, "Couldn't export this batch — try again.")}
-            </p>
+            <Notice tone="danger">
+              <p>{del.isError ? errorMessage(del.error, "Couldn't delete this batch — try again.") : errorMessage(exportMutation.error, "Couldn't export this batch — try again.")}</p>
+            </Notice>
           )}
           {isLoading && <p className="py-8 text-center text-body text-muted-foreground">Loading…</p>}
 
@@ -185,12 +186,11 @@ export function BatchDetailModal({ batchId, onClose, onDeleted }: { batchId: str
           )}
 
           {data && (data.profiles.some((p) => p.status === "failed") || data.posts.some((p) => p.status === "broken")) && (
-            <div className="flex items-start gap-2 rounded-md bg-danger-soft px-3 py-2.5">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-danger-fg" />
-              <p className="text-micro font-normal leading-relaxed text-danger-fg">
-                Failed profiles are usually private or don&apos;t exist. Broken links were deleted, made private, or invalid — they won&apos;t retry on their own.
+            <Notice tone="danger" role="status">
+              <p>
+                <strong>Failed profiles</strong> are usually private or don&apos;t exist. <strong>Broken links</strong> were deleted, made private, or invalid — they won&apos;t retry on their own.
               </p>
-            </div>
+            </Notice>
           )}
         </div>
       </DialogContent>

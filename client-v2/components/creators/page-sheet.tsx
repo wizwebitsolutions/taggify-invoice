@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, MessageCircle, RefreshCw, Trash2 } from "lucide-react";
+import { ExternalLink, MessageCircle, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, canUse, type Asset, type PendingAssetEdit } from "@/lib/api-client";
-import { canApprovePages, canDeletePage, canEditPages, canProposeEdits, canSetPageActive, GRADES, isGrade, PAGE_APPROVAL, rateOf, scrapeState, type Grade } from "@/lib/creators";
+import { canApprovePages, canDeletePage, canEditPages, canEditVendors, canProposeEdits, canSetPageActive, GRADES, isGrade, PAGE_APPROVAL, rateOf, scrapeState, type Grade } from "@/lib/creators";
 import { personLabel, roleLabel } from "@/lib/format";
 import { invalidatePages } from "@/lib/queries/creators";
 import { FORMATS, formatLabel } from "@/lib/formats";
@@ -25,6 +25,7 @@ import { PlatformIcon } from "@/components/taggify/platform-icon";
 import { StatusPill } from "@/components/taggify/status-pill";
 import { displayHandle, PageAvatar } from "@/components/finance/identity";
 import { rateCardsFrom, RateFields, type RateValues } from "@/components/creators/rate-fields";
+import { canChangeVendor, PendingVendorEditCard, saveVendorChange, vendorChanges, vendorErrors, VendorEditDialog, VendorFields, vendorInitial } from "@/components/creators/vendor-edit";
 
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 const count = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString("en-IN"));
@@ -49,6 +50,7 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
   const approvable = canApprovePages(user);
   const [editing, setEditing] = useState(startEditing && (editable || proposer));
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingVendor, setEditingVendor] = useState(false);
   const st = PAGE_APPROVAL[page.approvalStatus] ?? PAGE_APPROVAL.pending;
   const scrape = scrapeState(page);
   const pending = page.pendingEdit && typeof page.pendingEdit === "object" && Object.keys(page.pendingEdit).length > 0 ? page.pendingEdit : null;
@@ -136,6 +138,7 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
       ) : (
         <div className="detail-profile-body">
           {pending && <PendingEditCard page={page} pending={pending} canDecide={approvable} busy={decideEdit.isPending} onDecide={(d) => decideEdit.mutate(d)} />}
+          {page.owner && (canChangeVendor(user) || approvable) && <PendingVendorEditCard owner={page.owner} />}
           {canSetPageActive(user) && (
             <div className="detail-availability">
               <div className="min-w-0 flex-1">
@@ -179,8 +182,22 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
               </div>
               <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Vendor</dt>
-                <dd className="truncate text-body-strong">{personLabel(page.owner, "No vendor")}</dd>
+                <dd className="flex min-w-0 items-center gap-2 text-body-strong">
+                  <span className="truncate">{personLabel(page.owner, "No vendor")}</span>
+                  {page.owner && canChangeVendor(user) && (
+                    <Button size="sm" variant="ghost" className="ml-auto shrink-0" onClick={() => setEditingVendor(true)}>
+                      <Pencil />
+                      {canEditVendors(user) ? "Edit vendor" : "Suggest change"}
+                    </Button>
+                  )}
+                </dd>
               </div>
+              {page.owner && (page.owner.phoneNumber || page.owner.secondaryPhone) && (
+                <div className="detail-key-value">
+                  <dt className="text-label text-muted-foreground">Vendor contact</dt>
+                  <dd className="truncate text-body">{[page.owner.phoneNumber, page.owner.secondaryPhone && `WhatsApp ${page.owner.secondaryPhone}`].filter(Boolean).join(" · ")}</dd>
+                </div>
+              )}
               <div className="detail-key-value">
                 <dt className="text-label text-muted-foreground">Added by</dt>
                 <dd className="truncate text-body-strong">{page.createdBy ? `${personLabel(page.createdBy)} · ${roleLabel(page.createdBy.role)}` : <span className="font-normal text-muted-foreground">Before tracking</span>}</dd>
@@ -287,6 +304,7 @@ function PageDetails({ page, onClose, startEditing }: { page: Asset; onClose: ()
         </SheetFooter>
       )}
 
+      <VendorEditDialog vendor={editingVendor ? (page.owner ?? null) : null} onClose={() => setEditingVendor(false)} />
       <Dialog open={confirmDelete} onOpenChange={(o) => !o && !remove.isPending && setConfirmDelete(false)}>
         <DialogContent>
           <DialogHeader>
@@ -417,7 +435,16 @@ function PendingEditCard({ page, pending, canDecide, busy, onDecide }: { page: A
  * `propose` (a planner): only what changed is sent as a suggestion; nothing is applied until an admin says so.
  */
 function EditForm({ page, propose, onDone }: { page: Asset; propose: boolean; onDone: () => void }) {
-  const { accessToken } = useAuth();
+  const { user, accessToken } = useAuth();
+  // Vendor contact (13 Nov): edited in the same form. An admin's change applies at once; a planner's goes for approval.
+  const vendor = page.owner && canChangeVendor(user) ? page.owner : null;
+  const vendorDirect = canEditVendors(user);
+  const vendorStart = vendor ? vendorInitial(vendor) : null;
+  const [vendorValues, setVendorValues] = useState(vendorStart);
+  const vendorBody = vendorStart && vendorValues ? vendorChanges(vendorStart, vendorValues) : {};
+  const vendorChanged = Object.keys(vendorBody).length > 0;
+  const vendorErrs = vendorStart && vendorValues ? vendorErrors(vendorStart, vendorValues) : null;
+  const vendorInvalid = !!vendorErrs && Object.values(vendorErrs).some(Boolean);
   const qc = useQueryClient();
   const manual = (k: "avgViews" | "avgLikes" | "avgComments") => (page.engagement.manual?.[k] ? String(page.engagement[k] ?? "") : "");
   const [category, setCategory] = useState(page.category ?? "");
@@ -431,7 +458,7 @@ function EditForm({ page, propose, onDone }: { page: Asset; propose: boolean; on
   const whole = (v: string) => v.trim() === "" || /^\d+$/.test(v.trim());
   const zeroRate = Object.values(rates).some((v) => v.trim() !== "" && !(Number(v) > 0));
   const badLink = groupLink.trim() !== "" && !/^https?:\/\/\S+\.\S+/.test(groupLink.trim());
-  const invalid = ![...Object.values(rates), eng.avgViews, eng.avgLikes, eng.avgComments].every(whole) || zeroRate || badLink;
+  const invalid = ![...Object.values(rates), eng.avgViews, eng.avgLikes, eng.avgComments].every(whole) || zeroRate || badLink || vendorInvalid;
   const nextCategory = category.trim() || null;
   const nextGrade = grade || null;
   const nextLink = groupLink.trim() || null;
@@ -446,16 +473,27 @@ function EditForm({ page, propose, onDone }: { page: Asset; propose: boolean; on
         if (nextGrade !== (page.grade ?? null)) body.grade = nextGrade;
         if (nextLink !== (page.groupLink ?? null)) body.groupLink = nextLink;
         if (changedRates.length) body.rateCards = changedRates;
-        if (Object.keys(body).length === 0) throw new Error("Nothing changed.");
-        return assetsApi.proposeEdit(accessToken!, page.id, body);
+        if (Object.keys(body).length === 0 && !vendorChanged) throw new Error("Nothing changed.");
+        if (Object.keys(body).length > 0) await assetsApi.proposeEdit(accessToken!, page.id, body);
+      } else {
+        // The rate-card route needs at least one entry; skip it when nothing changed.
+        if (changedRates.length) await assetsApi.updateRateCard(accessToken!, page.id, changedRates);
+        const n = (v: string) => (v.trim() === "" ? null : Number(v));
+        await assetsApi.updateDetails(accessToken!, page.id, { category: nextCategory, grade: nextGrade, groupLink: nextLink, avgViews: n(eng.avgViews), avgLikes: n(eng.avgLikes), avgComments: n(eng.avgComments) });
       }
-      // The rate-card route needs at least one entry; skip it when nothing changed.
-      if (changedRates.length) await assetsApi.updateRateCard(accessToken!, page.id, changedRates);
-      const n = (v: string) => (v.trim() === "" ? null : Number(v));
-      return assetsApi.updateDetails(accessToken!, page.id, { category: nextCategory, grade: nextGrade, groupLink: nextLink, avgViews: n(eng.avgViews), avgLikes: n(eng.avgLikes), avgComments: n(eng.avgComments) });
+      // The vendor last: if it fails, the page part is already saved and the error says so.
+      if (vendor && vendorChanged) {
+        try {
+          await saveVendorChange(vendorDirect, accessToken!, vendor.id, vendorBody);
+        } catch (e) {
+          throw new Error(`${propose ? "Page suggestion sent" : "Page saved"}, but the vendor change didn't go through: ${e instanceof Error ? e.message : "try again"}`);
+        }
+      }
     },
     onSuccess: () => {
-      toast.success(propose ? "Suggestion sent. An admin will apply it." : "Page updated.");
+      const vendorNote = vendorChanged ? (vendorDirect ? " Vendor details updated." : " Vendor change sent for approval.") : "";
+      toast.success((propose ? "Suggestion sent. An admin will apply it." : "Page updated.") + vendorNote);
+      if (vendorChanged) qc.invalidateQueries({ queryKey: ["adminUsers"] });
       onDone();
     },
     // Rates and details are two calls: if the second fails the first already saved, so refresh either way.
@@ -487,6 +525,15 @@ function EditForm({ page, propose, onDone }: { page: Asset; propose: boolean; on
             <Input id="pg-group" type="url" placeholder="https://chat.whatsapp.com/…" value={groupLink} onChange={(e) => setGroupLink(e.target.value)} aria-invalid={badLink || undefined} />
           </div>
         </div>
+        {vendor && vendorValues && vendorErrs && (
+          <fieldset className="flex flex-col gap-2" data-testid="page-edit-vendor">
+            <legend className="mb-1 text-body-strong">Vendor</legend>
+            <p className="-mt-1 mb-1 text-small text-muted-foreground">
+              {vendorDirect ? "Changes apply to every page this vendor owns. Email and bank details are changed in Settings → People." : "A vendor change goes to an admin for approval, like the page changes."}
+            </p>
+            <VendorFields values={vendorValues} errors={vendorErrs} onChange={setVendorValues} />
+          </fieldset>
+        )}
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2 text-body-strong">Rates (₹ per post)</legend>
           <RateFields idPrefix="pg" values={rates} onChange={setRates} fixed={saved} />

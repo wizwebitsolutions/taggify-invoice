@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Papa from "papaparse";
@@ -160,7 +161,11 @@ function NewCampaignFlow({ onClose, onCreated }: { onClose: () => void; onCreate
             {(a) => <Input {...a} autoFocus inputMode="numeric" placeholder="e.g. 720000" value={costCap} onChange={(e) => setCostCap(e.target.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 12))} />}
           </Field>
           <Field label="Deadline (optional)">{(a) => <Input {...a} type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />}</Field>
-          <p className="rounded-card bg-info-soft px-4 py-3 text-small text-info-fg">This creates phase 1. Add phase 2 later from the campaign page when a second batch of posts is needed under the same deal.</p>
+          <Notice tone="info" role="note">
+            <p>
+              This creates <strong>phase 1</strong>. Add phase 2 later from the campaign page when a second batch of posts is needed under the same deal.
+            </p>
+          </Notice>
         </div>
       )}
 
@@ -315,9 +320,11 @@ function NewCampaignFlow({ onClose, onCreated }: { onClose: () => void; onCreate
             </dd>
           </dl>
           {cap && rowCost > cap ? (
-            <p className="rounded-card bg-warning-soft px-4 py-3 text-small text-warning-fg" role="status">
-              The sheet&apos;s costs (<Money value={rowCost} />) are above the budget cap (<Money value={cap} />). You can still create it, or go back and change the cap.
-            </p>
+            <Notice tone="warning">
+              <p>
+                The sheet&apos;s costs (<Money value={rowCost} />) are <strong>above the budget cap</strong> (<Money value={cap} />). You can still create it, or go back and change the cap.
+              </p>
+            </Notice>
           ) : null}
         </div>
       )}

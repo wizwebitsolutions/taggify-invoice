@@ -5,7 +5,9 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, Copy, Pencil, Download, FileSpreadsheet, FileText, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Copy, Pencil, Download, FileSpreadsheet, FileText, Trash2 } from "lucide-react";
+
+import { Notice } from "@/components/taggify/notice";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, plans as plansApi, type Plan, type SheetFormat } from "@/lib/api-client";
@@ -170,13 +172,12 @@ function PlanDetail() {
 
       <ClientSheetDialog plan={p} open={clientSheetOpen} busy={sheet.isPending} onOpenChange={(o) => !sheet.isPending && setClientSheetOpen(o)} onGenerate={(sheetFormat) => sheet.mutate({ kind: "client", sheetFormat })} />
       {(p.inactivePages?.length ?? 0) > 0 && (
-        <p role="status" className="flex items-start gap-2 rounded-md bg-warning-soft px-4 py-3 text-small text-warning-fg" data-testid="plan-inactive-pages">
-          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <span>
-            {p.inactivePages!.length === 1 ? "1 page on this plan is" : `${p.inactivePages!.length} pages on this plan are`} no longer available in Inventory: {p.inactivePages!.map((x) => `@${x.handle}`).join(", ")}.
-            {editable && isEditablePlan(p) ? " Edit the plan to swap them out before sharing." : ""}
-          </span>
-        </p>
+        <Notice tone="warning" data-testid="plan-inactive-pages">
+          <p>
+            <strong>{p.inactivePages!.map((x) => `@${x.handle}`).join(", ")}</strong> {p.inactivePages!.length === 1 ? "is" : "are"} no longer in Inventory.
+            {editable && isEditablePlan(p) ? ` Edit the plan to swap ${p.inactivePages!.length === 1 ? "it" : "them"} out before sharing.` : ""}
+          </p>
+        </Notice>
       )}
 
       {siblings.length > 1 && (

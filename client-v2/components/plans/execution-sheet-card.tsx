@@ -1,9 +1,10 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CircleCheck, ExternalLink, Plus, RefreshCw } from "lucide-react";
+import { ExternalLink, Plus, RefreshCw } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, plans as plansApi, type Plan } from "@/lib/api-client";
@@ -79,18 +80,21 @@ export function ExecutionSheetCard({ plan: p, editable }: { plan: Plan; editable
         )
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-2 rounded-md bg-success-soft px-3 py-2">
-            <a href={p.executionSheetUrl} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 text-small font-semibold text-success-fg hover:text-success-fg">
-              <CircleCheck className="h-4 w-4 shrink-0" aria-hidden />
+          <Notice
+            tone="success"
+            action={
+              editable ? (
+                <Button variant="ghost" size="sm" className="rounded-pill" onClick={() => setAttachOpen(true)}>
+                  Change
+                </Button>
+              ) : undefined
+            }
+          >
+            <a href={p.executionSheetUrl} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 font-semibold text-foreground hover:text-brand-ink">
               <span className="truncate">Execution sheet attached · Open</span>
               <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden />
             </a>
-            {editable && (
-              <Button variant="link" size="sm" className="h-auto shrink-0 px-0" onClick={() => setAttachOpen(true)}>
-                Change
-              </Button>
-            )}
-          </div>
+          </Notice>
 
           {!approved ? (
             <p className="text-small text-muted-foreground">Posted links are read from this sheet once the plan is approved.</p>

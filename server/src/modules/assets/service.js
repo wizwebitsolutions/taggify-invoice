@@ -51,7 +51,8 @@ export async function listAssets(user) {
     // assignment row against the same campaign, e.g. re-attached sheets).
     include: {
       rateCards: true,
-      owner: { select: { id: true, name: true, phoneNumber: true, email: true } },
+      // + WhatsApp number and a plan maker's waiting vendor change (13 Nov — vendor edits from Inventory).
+      owner: { select: { id: true, name: true, phoneNumber: true, email: true, secondaryPhone: true, pendingVendorEdit: true, pendingVendorEditById: true, pendingVendorEditAt: true } },
       // Who added the page (1 Nov) — Approvals groups new pages by this.
       createdBy: { select: { id: true, name: true, email: true, role: true } },
       assignments: { select: { campaign: { select: { id: true, title: true, brandName: true } } } },
@@ -59,7 +60,7 @@ export async function listAssets(user) {
     orderBy: { createdAt: "desc" },
   });
   // Who proposed each pending edit (16 Oct) — one lookup for the whole list.
-  const proposerIds = [...new Set(assets.map((a) => a.pendingEditById).filter(Boolean))];
+  const proposerIds = [...new Set(assets.flatMap((a) => [a.pendingEditById, a.owner?.pendingVendorEditById]).filter(Boolean))];
   const [proposers, engagementByAsset] = await Promise.all([
     proposerIds.length ? prisma.user.findMany({ where: { id: { in: proposerIds } }, select: { id: true, name: true, email: true, role: true } }) : [],
     getAvgEngagementForAssets(assets),
@@ -68,13 +69,22 @@ export async function listAssets(user) {
   return assets.map((asset) => {
     const { assignments, ...rest } = asset;
     const campaignsById = new Map((assignments ?? []).map((a) => [a.campaign.id, a.campaign]));
+    // A creator listing their own pages never sees staff's suggestions about them (or who made them).
+    const ownerBase = rest.owner && user.role === "CREATOR" ? withoutVendorSuggestion(rest.owner) : rest.owner;
+    const owner = ownerBase ? { ...ownerBase, pendingVendorEditBy: ownerBase.pendingVendorEditById ? proposerById.get(ownerBase.pendingVendorEditById) ?? null : null } : ownerBase;
     return {
       ...rest,
+      owner,
       pendingEditBy: asset.pendingEditById ? proposerById.get(asset.pendingEditById) ?? null : null,
       campaigns: [...campaignsById.values()],
       engagement: engagementByAsset.get(asset.id),
     };
   });
+}
+
+function withoutVendorSuggestion(owner) {
+  const { pendingVendorEdit, pendingVendorEditById, pendingVendorEditAt, ...rest } = owner;
+  return rest;
 }
 
 /**
@@ -1299,6 +1309,8 @@ export async function fetchImportFollowers(handles) {
   try {
     results = await ApifyInstagramProvider.getAccountMetricsBatch(clean);
   } catch (err) {
+    // Logged so a production failure (token / Apify limit) shows in the runtime logs, not only in the modal.
+    console.error(`fetchImportFollowers: Apify lookup failed for ${clean.length} handle(s)`, err);
     throw new ApiError(502, "FOLLOWERS_FETCH_FAILED", `Couldn't fetch follower counts from Instagram right now (${String(err?.message ?? err).slice(0, 120)}). Retry the check — pages can't be imported until Instagram confirms them.`);
   }
   // A handle absent from `results` (its chunk timed out) is left out of the

@@ -1,6 +1,6 @@
 "use client";
 
-import { TriangleAlert } from "lucide-react";
+import { Notice } from "@/components/taggify/notice";
 
 import type { Asset } from "@/lib/api-client";
 import { comboParts } from "@/lib/formats";
@@ -112,10 +112,11 @@ export function PricingStep({ items, byId, budget, pricing, setPricing }: { item
             </p>
             {!quoteValid(pricing.overrideCost) && <p className="text-small text-danger-helper">Enter an amount of 0 or more, or leave it blank.</p>}
             {below && (
-              <p className="flex items-center gap-2 rounded-md bg-warning-soft px-3 py-2 text-small text-warning-fg">
-                <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
-                This is below what the pages cost us.
-              </p>
+              <Notice tone="warning">
+                <p>
+                  This is <strong>below what the pages cost us</strong>.
+                </p>
+              </Notice>
             )}
           </div>
           <div className="flex flex-col gap-2">
@@ -125,10 +126,11 @@ export function PricingStep({ items, byId, budget, pricing, setPricing }: { item
             <Input id="pl-discount" type="number" inputMode="numeric" min={0} className="w-40" placeholder="0" value={pricing.discount} onChange={(e) => setPricing((p) => ({ ...p, discount: e.target.value }))} aria-invalid={!discountValid(pricing.discount)} />
             {!discountValid(pricing.discount) && <p className="text-small text-danger-helper">Enter an amount of 0 or more, or leave it blank.</p>}
             {t.discount > t.quoted && (
-              <p className="flex items-center gap-2 rounded-md bg-warning-soft px-3 py-2 text-small text-warning-fg">
-                <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
-                The discount is more than the quoted total. The client would pay nothing.
-              </p>
+              <Notice tone="warning">
+                <p>
+                  The discount is <strong>more than the quoted total</strong>. The client would pay nothing.
+                </p>
+              </Notice>
             )}
           </div>
           <div className="flex flex-col gap-2">

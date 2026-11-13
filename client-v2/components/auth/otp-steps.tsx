@@ -1,8 +1,9 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { AlertCircle, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 import { ApiError, auth, type AuthResponse, type EmailSetupIdentity } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
@@ -23,10 +24,9 @@ export function messageOf(error: unknown) {
 export function AuthError({ message }: { message: string | null }) {
   if (!message) return null;
   return (
-    <p role="alert" className="flex items-start gap-3 rounded-md border border-danger/40 border-l-3 border-l-danger bg-danger-soft px-4 py-3 text-small font-semibold text-danger-fg animate-fade-in">
-      <AlertCircle className="mt-px h-4 w-4 shrink-0 text-danger" aria-hidden />
-      <span>{message}</span>
-    </p>
+    <Notice tone="danger" className="animate-fade-in">
+      <p className="font-semibold">{message}</p>
+    </Notice>
   );
 }
 

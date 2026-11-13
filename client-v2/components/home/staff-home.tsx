@@ -171,9 +171,10 @@ export function StaffHome() {
     {
       key: "page",
       icon: IdCard,
-      count: counts.page + counts["page-edit"],
-      label: counts.page + counts["page-edit"] === 1 ? "Page to approve" : "Pages to approve",
-      href: "/approvals?type=page",
+      // New pages, page edits and vendor changes (13 Nov) all wait under Approvals → Inventory.
+      count: counts.page + counts["page-edit"] + counts["vendor-edit"],
+      label: counts.page + counts["page-edit"] + counts["vendor-edit"] === 1 ? "Inventory change to approve" : "Inventory changes to approve",
+      href: "/approvals?category=inventory",
     },
     {
       key: "billing",

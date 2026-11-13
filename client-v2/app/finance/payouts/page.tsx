@@ -1,5 +1,6 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -194,7 +195,13 @@ function CreatorPayouts() {
           />
         </div>
 
-        {truncation && <p className="border-t bg-warning-soft px-5 py-3 text-small text-warning-fg">{truncation}</p>}
+        {truncation && (
+          <div className="border-t px-5 py-3">
+            <Notice tone="warning">
+              <p>{truncation}</p>
+            </Notice>
+          </div>
+        )}
         {pending.isError ? (
           <LoadError onRetry={() => pending.refetch()} />
         ) : (
@@ -396,9 +403,13 @@ function PaidLedger() {
         )}
       </div>
       {ledger.data && ledger.data.total > items.length && (
-        <p className="border-t bg-warning-soft px-5 py-3 text-small text-warning-fg" data-testid="truncation-note">
-          Showing the latest {items.length} of {ledger.data.total} payments. Narrow the filters (vendor, page or month) to see the rest and get exact totals.
-        </p>
+        <div className="border-t px-5 py-3">
+          <Notice tone="warning" data-testid="truncation-note">
+            <p>
+              Showing the latest <strong>{items.length} of {ledger.data.total} payments</strong>. Narrow the filters (vendor, page or month) to see the rest and get exact totals.
+            </p>
+          </Notice>
+        </div>
       )}
       <div className="border-t">
         {ledger.isError ? (

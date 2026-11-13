@@ -1,8 +1,9 @@
 "use client";
 
+import { Notice } from "@/components/taggify/notice";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, Download } from "lucide-react";
+import { Download } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, plans as plansApi, type Plan, type SavedClient } from "@/lib/api-client";
@@ -139,17 +140,14 @@ function InvoiceFlow({ plan: p, onClose }: { plan: Plan; onClose: () => void }) 
             {generated.clientInvoiceNumber} · {p.name}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-start gap-3 rounded-md bg-success-soft px-4 py-3 text-small" data-testid="client-invoice-generated">
-          <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-success-fg" aria-hidden />
-          <div className="flex flex-col gap-1">
-            <p className="font-semibold">
-              Invoice {generated.clientInvoiceNumber} {download.isError ? "was generated." : download.isPending ? "is downloading." : "has downloaded."}
-            </p>
-            <p className="text-muted-foreground">
-              <Money value={generated.overview.total} /> billed to {generated.clientCompany}. The details are saved on the plan. Regenerate any time to reissue it.
-            </p>
-          </div>
-        </div>
+        <Notice tone="success" data-testid="client-invoice-generated">
+          <p className="font-semibold">
+            Invoice {generated.clientInvoiceNumber} {download.isError ? "was generated." : download.isPending ? "is downloading." : "has downloaded."}
+          </p>
+          <p className="text-muted-foreground">
+            <Money value={generated.overview.total} /> billed to {generated.clientCompany}. The details are saved on the plan. Regenerate any time to reissue it.
+          </p>
+        </Notice>
         {download.isError && (
           <p className="text-small text-danger-helper" role="alert">
             The PDF didn&apos;t download ({errText(download.error, "network error")}). Try Download again.
