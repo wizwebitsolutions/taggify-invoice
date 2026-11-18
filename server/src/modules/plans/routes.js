@@ -169,7 +169,7 @@ router.get("/:id/client-invoice.pdf", async (req, res, next) => {
     const invoice = await plansService.getClientInvoice(req.params.id, req.user);
     const pdf = await buildClientInvoicePdf(invoice);
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${invoice.clientInvoiceNumber.replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf"`);
+    res.setHeader("Content-Disposition", `attachment; filename="Proforma-Invoice-${invoice.clientInvoiceNumber.replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf"`);
     res.setHeader("Content-Length", pdf.length);
     res.send(pdf);
   } catch (err) {

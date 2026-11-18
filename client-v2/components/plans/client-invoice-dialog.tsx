@@ -135,7 +135,7 @@ function InvoiceFlow({ plan: p, onClose }: { plan: Plan; onClose: () => void }) 
     return (
       <>
         <DialogHeader>
-          <DialogTitle>Invoice generated</DialogTitle>
+          <DialogTitle>Proforma invoice generated</DialogTitle>
           <DialogDescription>
             {generated.clientInvoiceNumber} · {p.name}
           </DialogDescription>
@@ -174,7 +174,7 @@ function InvoiceFlow({ plan: p, onClose }: { plan: Plan; onClose: () => void }) 
       }}
     >
       <DialogHeader>
-        <DialogTitle>{p.clientInvoiceNumber ? "Client invoice details" : "Generate client invoice"}</DialogTitle>
+        <DialogTitle>{p.clientInvoiceNumber ? "Proforma invoice details" : "Generate proforma invoice"}</DialogTitle>
         <DialogDescription>
           {p.name} · billed to {p.clientName} for <Money value={p.overview.total} />
           {p.isGstPlan && p.gstPercent ? ` incl. ${p.gstPercent}% GST` : ""}.

@@ -84,7 +84,7 @@ test.describe("Plan client invoice", () => {
     await signIn(page, "ADMIN");
     const calls = await invoiceApi(page, plan(), [SAFFRON_MH]);
     await page.goto("/plans/p1");
-    await page.getByRole("button", { name: "Generate client invoice" }).click();
+    await page.getByTestId("proforma-invoice-card").getByRole("button", { name: "Generate proforma invoice" }).click();
     const dialog = page.getByRole("dialog");
 
     // Numbering API: the next number and the default HSN/SAC.
@@ -144,7 +144,7 @@ test.describe("Plan client invoice", () => {
     await signIn(page, "ADMIN");
     await invoiceApi(page, plan(), [SAFFRON_MH, SAFFRON_KA]);
     await page.goto("/plans/p1");
-    await page.getByRole("button", { name: "Generate client invoice" }).click();
+    await page.getByTestId("proforma-invoice-card").getByRole("button", { name: "Generate proforma invoice" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText("Saffron Street has 2 saved billing profiles. Pick one here.")).toBeVisible();
     await expect(dialog.getByLabel("Company name")).toHaveValue("");
@@ -161,7 +161,7 @@ test.describe("Plan client invoice", () => {
     await signIn(page, "ADMIN");
     const calls = await invoiceApi(page, plan(issued), [SAFFRON_MH]);
     await page.goto("/plans/p1");
-    await page.getByRole("button", { name: "Edit details" }).click();
+    await page.getByRole("button", { name: "Edit invoice details" }).click();
     const dialog = page.getByRole("dialog");
     // The plan's own details and number, not the saved profile or the counter.
     await expect(dialog.getByLabel("Invoice no.")).toHaveValue("TGF/26-27/003");
@@ -179,7 +179,7 @@ test.describe("Plan client invoice", () => {
     await signIn(page, "PLAN_MAKER");
     const calls = await invoiceApi(page, plan({ createdBy: { id: planner.id, name: planner.name }, clientCompany: "Saffron Street Foods", clientGstNumber: "27AAKCS1234L1Z5", clientAddress: "Mumbai", invoiceDescription: "Reels" }), []);
     await page.goto("/plans/p1");
-    await page.getByRole("button", { name: "Generate client invoice" }).click();
+    await page.getByTestId("proforma-invoice-card").getByRole("button", { name: "Generate proforma invoice" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByLabel("Invoice no.")).toHaveAttribute("readonly", "");
     await expect(dialog.getByText("Set by Admin or Finance.")).toBeVisible();

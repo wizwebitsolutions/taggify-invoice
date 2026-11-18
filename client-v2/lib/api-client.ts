@@ -1692,7 +1692,7 @@ export const plans = {
   generateClientInvoice: (token: string, id: string, body: ClientInvoiceDetails) =>
     request<Plan>(`/plans/${id}/client-invoice`, { method: "POST", token, body }),
   downloadClientInvoicePdf: (token: string, id: string, invoiceNumber?: string | null) =>
-    downloadBinary(`${API_URL}/plans/${id}/client-invoice.pdf`, token, `${(invoiceNumber ?? id).replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf`),
+    downloadBinary(`${API_URL}/plans/${id}/client-invoice.pdf`, token, `Proforma-Invoice-${(invoiceNumber ?? id).replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf`),
   // Attached invoice PDF (user request, 14 Sep) — same signed direct-to-
   // Cloudinary two-step as invoices.requestAttachmentUpload/confirmAttachment.
   requestInvoiceAttachmentUpload: (token: string, id: string) =>

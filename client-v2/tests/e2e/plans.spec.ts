@@ -183,9 +183,9 @@ test.describe("Plans", () => {
     await plansApi(page, [plan("mine", { id: planner.id, name: "Test PLAN_MAKER" }, "DRAFT")], { hidden: ["theirs"] });
     await page.goto("/plans/mine");
     await expect(page.getByRole("button", { name: "Approve plan" })).toBeVisible();
-    // Client invoices only exist for approved plans.
-    await expect(page.getByRole("button", { name: "Generate client invoice" })).toHaveCount(0);
-    await expect(page.getByText("Available once the plan is approved.")).toBeVisible();
+    // Proforma invoices only exist for approved plans: the card shows it locked.
+    await expect(page.getByRole("button", { name: "Generate proforma invoice" })).toHaveCount(0);
+    await expect(page.getByTestId("proforma-invoice-card")).toContainText("Unlocks when the plan is approved.");
     await page.goto("/plans/theirs");
     await expect(page.getByText("Couldn't load this plan")).toBeVisible();
     await expect(page.getByRole("button", { name: "Approve plan" })).toHaveCount(0);

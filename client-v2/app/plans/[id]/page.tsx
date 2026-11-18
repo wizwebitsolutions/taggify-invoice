@@ -16,6 +16,7 @@ import { SheetFormatPicker } from "@/components/plans/sheet-format-picker";
 import { ExecutionSheetCard } from "@/components/plans/execution-sheet-card";
 import { SourceSheetCard } from "@/components/plans/source-sheet-card";
 import { ClientInvoiceDialog } from "@/components/plans/client-invoice-dialog";
+import { ProformaInvoiceCard } from "@/components/plans/proforma-invoice-card";
 import { invalidateAfterPlanChange, usePlan, usePlans } from "@/lib/queries/plans";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/layout/app-shell";
@@ -171,6 +172,23 @@ function PlanDetail() {
       </div>
 
       <ClientSheetDialog plan={p} open={clientSheetOpen} busy={sheet.isPending} onOpenChange={(o) => !sheet.isPending && setClientSheetOpen(o)} onGenerate={(sheetFormat) => sheet.mutate({ kind: "client", sheetFormat })} />
+      {/* 16 Nov: an approved plan with no proforma invoice yet says so at the top, with the action. */}
+      {p.status === "APPROVED" && !p.clientInvoiceNumber && editable && (
+        <Notice
+          tone="info"
+          data-testid="proforma-invoice-ready"
+          action={
+            <Button size="sm" className="rounded-pill" onClick={() => setInvoiceOpen(true)}>
+              <FileText />
+              Generate proforma invoice
+            </Button>
+          }
+        >
+          <p>
+            Plan approved. <strong>The proforma invoice is ready to generate</strong> from the client&apos;s billing details.
+          </p>
+        </Notice>
+      )}
       {(p.inactivePages?.length ?? 0) > 0 && (
         <Notice tone="warning" data-testid="plan-inactive-pages">
           <p>
@@ -331,7 +349,8 @@ function PlanDetail() {
             )}
           </Card>
 
-          <ClientCard plan={p} editable={editable} onInvoice={() => setInvoiceOpen(true)} />
+          <ProformaInvoiceCard plan={p} editable={editable} onOpen={() => setInvoiceOpen(true)} />
+          <ClientCard plan={p} editable={editable} />
           <ExecutionSheetCard plan={p} editable={editable} />
         </div>
       </div>
@@ -506,8 +525,7 @@ function ClientSheetDialog({ plan: p, open, busy, onOpenChange, onGenerate }: { 
 }
 
 
-function ClientCard({ plan: p, editable, onInvoice }: { plan: Plan; editable: boolean; onInvoice: () => void }) {
-  const { accessToken } = useAuth();
+function ClientCard({ plan: p, editable }: { plan: Plan; editable: boolean }) {
   return (
     <Card className="form-panel p-6">
       <h2 className="mb-3 text-card-title">Client</h2>
@@ -534,39 +552,14 @@ function ClientCard({ plan: p, editable, onInvoice }: { plan: Plan; editable: bo
         )}
       </dl>
       {p.notes && <p className="mt-3 rounded-md bg-muted p-3 text-small text-fg-strong">{p.notes}</p>}
-      <div className="mt-4 flex flex-col gap-2 border-t pt-4">
-        <p className="text-body-strong">Client invoice</p>
-        {p.status !== "APPROVED" ? (
-          <p className="text-small text-muted-foreground">Available once the plan is approved.</p>
-        ) : p.clientInvoiceNumber ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-body">{p.clientInvoiceNumber}</span>
-            <Button size="sm" variant="outline" className="ml-auto" onClick={() => plansApi.downloadClientInvoicePdf(accessToken!, p.id, p.clientInvoiceNumber).catch(() => toast.error("Couldn't download the invoice."))}>
-              <Download />
-              PDF
-            </Button>
-            {editable && (
-              <Button size="sm" variant="ghost" onClick={onInvoice}>
-                Edit details
-              </Button>
-            )}
-          </div>
-        ) : editable ? (
-          <Button size="sm" variant="outline" className="self-start" onClick={onInvoice}>
-            <FileText />
-            Generate client invoice
-          </Button>
-        ) : (
-          <p className="text-small text-muted-foreground">Not generated yet.</p>
-        )}
-        {/* A client invoice raised outside Taggify, at any plan status (server plans/service.js invoiceAttachmentFor). */}
-        {(p.invoiceAttachment || editable) && (
-          <div className="flex flex-col gap-2 pt-2">
-            <p className="text-small text-muted-foreground">Client invoice PDF</p>
-            <PlanInvoiceAttachmentField plan={p} editable={editable} />
-          </div>
-        )}
-      </div>
+      {/* A client invoice raised outside Taggify, at any plan status (server plans/service.js invoiceAttachmentFor). */}
+      {(p.invoiceAttachment || editable) && (
+        <div className="mt-4 flex flex-col gap-2 border-t pt-4">
+          <p className="text-body-strong">Final tax invoice</p>
+          <p className="text-small text-muted-foreground">Upload the invoice raised outside Taggify. The proforma invoice has its own card above.</p>
+          <PlanInvoiceAttachmentField plan={p} editable={editable} />
+        </div>
+      )}
     </Card>
   );
 }
