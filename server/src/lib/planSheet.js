@@ -585,9 +585,15 @@ function cellStyleRequest(range, style) {
 export function buildFormatRequests(sheetId, rowSpecs, numCols) {
   const numRows = rowSpecs.length;
   if (numRows === 0) return [];
+  // Whole tab, not just the new content's area (19 Nov): a regenerated sheet
+  // can still hold merges/styling from an earlier, larger version (more
+  // pages, the other layout). Google refuses to unmerge a range that only
+  // partly covers a merged block, and a partial reset would leave stale
+  // styling past the new content. A range with only sheetId is the whole tab.
+  const wholeTab = { sheetId };
   const requests = [
-    { unmergeCells: { range: fullRange(sheetId, numRows, numCols) } },
-    { repeatCell: { range: fullRange(sheetId, numRows, numCols), cell: { userEnteredFormat: {} }, fields: "userEnteredFormat" } },
+    { unmergeCells: { range: wholeTab } },
+    { repeatCell: { range: wholeTab, cell: { userEnteredFormat: {} }, fields: "userEnteredFormat" } },
   ];
 
   rowSpecs.forEach((spec, i) => {

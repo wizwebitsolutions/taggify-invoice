@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { API_URL, mockApi, signIn } from "./fixtures";
 
-/** Top bar → Notifications: picking an unread one marks just that one read; "Mark all as read" still works. API fully mocked. */
+/** Top bar → Notifications: picking one opens its page and marks just that one read; "Mark all as read" still works. API fully mocked. */
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 
@@ -40,37 +40,30 @@ const bell = (page: Page, name: string) => page.getByRole("button", { name, exac
 test.describe("Notifications", () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
 
-  test("picking an unread notification marks only that one read and keeps the menu open", async ({ page }) => {
+  // 19 Nov: picking a notification opens the page it's about (it used to only mark it read).
+  test("picking an unread notification marks it read and opens its page", async ({ page }) => {
     const calls = await notificationsApi(page);
     await page.getByRole("button", { name: "Notifications, 2 unread" }).click();
-    const menu = page.getByRole("menu");
-    const first = menu.getByRole("menuitem", { name: /Invoice INV-0042 was raised/ });
-    await expect(first).toContainText("unread");
-    await first.click();
-
-    await expect(bell(page, "Notifications, 1 unread")).toBeVisible();
-    await expect(menu).toBeVisible();
-    await expect(first).not.toContainText("unread");
-    expect(calls.read).toEqual(["n1"]);
-
-    // A read one does nothing when picked.
-    await menu.getByRole("menuitem", { name: /waiting for its screenshot/ }).click();
-    await expect(menu).toBeVisible();
+    await page.getByRole("menu").getByRole("menuitem", { name: /Invoice INV-0042 was raised/ }).click();
+    await expect(page).toHaveURL(/\/money\?tab=invoices$/);
     expect(calls.read).toEqual(["n1"]);
   });
 
-  test("the keyboard can read several in a row", async ({ page }) => {
+  test("a read notification still opens its page, without another read request", async ({ page }) => {
     const calls = await notificationsApi(page);
     await page.getByRole("button", { name: "Notifications, 2 unread" }).click();
-    const menu = page.getByRole("menu");
-    await menu.getByRole("menuitem", { name: /INV-0042/ }).focus();
+    await page.getByRole("menu").getByRole("menuitem", { name: /waiting for its screenshot/ }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    expect(calls.read).toEqual([]);
+  });
+
+  test("the keyboard opens one too", async ({ page }) => {
+    const calls = await notificationsApi(page);
+    await page.getByRole("button", { name: "Notifications, 2 unread" }).click();
+    await page.getByRole("menu").getByRole("menuitem", { name: /INV-0041/ }).focus();
     await page.keyboard.press("Enter");
-    await expect(bell(page, "Notifications, 1 unread")).toBeVisible();
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("Enter");
-    await expect(bell(page, "Notifications")).toBeVisible();
-    expect(calls.read).toEqual(["n1", "n2"]);
-    await expect(menu).toBeVisible();
+    await expect(page).toHaveURL(/\/money\?tab=paid$/);
+    expect(calls.read).toEqual(["n2"]);
   });
 
   test("Mark all as read clears every unread dot with one request", async ({ page }) => {

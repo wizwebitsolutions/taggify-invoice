@@ -33,7 +33,8 @@ export const ROLE_NAMES: Record<Role, string> = { CREATOR: "Creator", TEAM_MEMBE
 export const canSeePeople = (u: Actor) => hasAccess(u, "users.view");
 export const canEditPeople = (u: Actor) => hasAccess(u, "users.edit");
 export const canEditNumbering = (u: Actor) => hasAccess(u, "finance.edit");
-export const canSeeJobs = (u: Actor) => hasAccess(u, "finance.edit");
+/** Background jobs: Admin only (19 Nov); server GET /admin/job-runs and the run-now exports are requireRole("ADMIN"). */
+export const canSeeJobs = (u: Actor) => u?.role === "ADMIN";
 /**
  * Own bank details: staff always pass GET/POST /billing-profiles (requireOwnAccess
  * lets non-own-scope roles through); own-scope roles need their finance switches.

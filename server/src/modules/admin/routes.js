@@ -149,7 +149,8 @@ router.post("/repair/invoiced-links", requireRole("ADMIN"), requireAccess("finan
   }
 });
 
-router.post("/finance-export/run-now", requireAccess("finance.edit"), async (req, res, next) => {
+// Background jobs are Admin-only (19 Nov — "hide background job from any other role"): history and the two run-now exports.
+router.post("/finance-export/run-now", requireRole("ADMIN"), requireAccess("finance.edit"), async (req, res, next) => {
   const run = await prisma.jobRun.create({ data: { jobName: "finance_export", status: "running" } });
   try {
     const result = await financeExportJob();
@@ -164,7 +165,7 @@ router.post("/finance-export/run-now", requireAccess("finance.edit"), async (req
 
 // Same manual-trigger pattern as finance-export/run-now, for the Google
 // Sheet export (newTask.md, 8 Sep) — runs alongside it, not in place of it.
-router.post("/finance-google-sheet-export/run-now", requireAccess("finance.edit"), async (req, res, next) => {
+router.post("/finance-google-sheet-export/run-now", requireRole("ADMIN"), requireAccess("finance.edit"), async (req, res, next) => {
   const run = await prisma.jobRun.create({ data: { jobName: "finance_google_sheet_export", status: "running" } });
   try {
     const result = await financeGoogleSheetExportJob();
@@ -183,7 +184,7 @@ router.post("/finance-google-sheet-export/run-now", requireAccess("finance.edit"
 // an explicit requireRole("ADMIN") rather than requireAccess(), since this
 // route was never part of the grantable set and shouldn't become one by
 // accident just because the router's old blanket ADMIN gate was removed.
-router.get("/job-runs", requireAccess("finance.edit"), async (req, res, next) => {
+router.get("/job-runs", requireRole("ADMIN"), async (req, res, next) => {
   try {
     const runs = await prisma.jobRun.findMany({ orderBy: { startedAt: "desc" }, take: 50 });
     res.json(runs);

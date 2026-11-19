@@ -255,14 +255,28 @@ describe("buildFormatRequests — the styling that makes a tab actually look lik
     expect(valueStyle.repeatCell.cell.userEnteredFormat.horizontalAlignment).toBe("CENTER");
   });
 
-  it("resets formatting and applies borders across the whole populated range, not just the styled rows", () => {
+  it("resets formatting across the whole tab and applies borders across the whole populated range, not just the styled rows", () => {
     const rowSpecs = [{ cellTypes: ["logo"], merge: true }, { cellTypes: [null, null], merge: false }];
     const requests = buildFormatRequests(7, rowSpecs, 2);
 
-    expect(requests[0]).toMatchObject({ unmergeCells: { range: { sheetId: 7, endRowIndex: 2, endColumnIndex: 2 } } });
+    expect(requests[0]).toEqual({ unmergeCells: { range: { sheetId: 7 } } });
     const borders = requests.find((r) => r.updateBorders);
     expect(borders.updateBorders.range).toMatchObject({ sheetId: 7, endRowIndex: 2, endColumnIndex: 2 });
     expect(borders.updateBorders.innerHorizontal.style).toBe("SOLID");
+  });
+
+  // Regression (19 Nov): regenerating a client sheet 500'd with Google's "You must
+  // select all cells in a merged range to merge or unmerge them" when the tab
+  // still held a wider/taller merge from an earlier version of the sheet.
+  it("a regenerated, smaller sheet clears every old merge and style on the tab, with no row/column bounds", () => {
+    const smaller = [{ cellTypes: ["logo"], merge: true }, { cellTypes: ["label", "value"], merge: false }];
+    const requests = buildFormatRequests(11, smaller, 2);
+
+    const [unmerge, reset] = requests;
+    expect(unmerge.unmergeCells.range).toEqual({ sheetId: 11 });
+    expect(reset.repeatCell).toMatchObject({ range: { sheetId: 11 }, cell: { userEnteredFormat: {} }, fields: "userEnteredFormat" });
+    // Both clears run before anything is merged or styled again.
+    expect(requests.findIndex((r) => r.mergeCells)).toBeGreaterThan(1);
   });
 
   it("a row's `links` become cell-level link formats after the style request, so the style can't wipe them (22 Sep)", () => {

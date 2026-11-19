@@ -15,6 +15,8 @@ import { getUserAccessToken, isGoogleOAuthConfigured } from "../../lib/googleOAu
 import { buildPlanSheetTabs, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, reconcilePlanTabRequests, tabStatusRequests } from "../../lib/planSheet.js";
 import { getNumbering, advancePast } from "../../lib/clientInvoiceNumbering.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
+import { getEffectivePermissions } from "../../lib/permissions.js";
+import { notify } from "../notifications/service.js";
 import { buildPlanInvoiceAttachmentKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
 import { fetchSheetCsv } from "../campaigns/service.js";
 import { autoAttachLink } from "../links/service.js";
@@ -206,6 +208,7 @@ export async function updatePlan(planId, requester, { items, ...fields }) {
     data,
     include: PLAN_INCLUDE,
   });
+  if (fields.executionSheetUrl && fields.executionSheetUrl !== existing.executionSheetUrl) await notifyFinancePlanReady(plan);
   // Attaching a sheet to an approved plan reads it immediately (23 Sep) so
   // the links show up without a second click. The link is already saved
   // above, so a sheet that can't be read (not shared, wrong columns) is
@@ -550,7 +553,31 @@ async function decidePlan(planId, requester, decision) {
       include: PLAN_INCLUDE,
     });
   });
+  if (decision === "APPROVED") await notifyFinancePlanReady(updated);
   return annotatePlan(updated);
+}
+
+// ── Finance hand-off (19 Nov) ─────────────────────────────────────────
+// "After the execution sheet is uploaded, notify finance that they can
+// generate the invoice." Fires once per plan, when it is both APPROVED and
+// has an execution sheet — whichever of the two happens second. Recipients
+// are active FINANCE accounts that can upload the invoice (finance.edit).
+// Never fails the save that triggered it.
+export const PLAN_READY_TO_INVOICE = "plan_ready_to_invoice";
+export const PLAN_INVOICE_UPLOADED = "plan_invoice_uploaded";
+
+async function notifyFinancePlanReady(plan) {
+  try {
+    if (plan.status !== "APPROVED" || !plan.executionSheetUrl || plan.invoiceAttachmentPublicId) return;
+    const already = await prisma.notification.findFirst({ where: { type: PLAN_READY_TO_INVOICE, payload: { path: ["planId"], equals: plan.id } }, select: { id: true } });
+    if (already) return;
+    const candidates = await prisma.user.findMany({ where: { role: "FINANCE", deactivatedAt: null }, select: { id: true, role: true, permissions: true } });
+    const recipients = candidates.filter((u) => getEffectivePermissions(u)["finance.edit"]);
+    const payload = { planId: plan.id, planName: plan.name, clientName: plan.clientCompany || plan.clientName, plannerName: plan.createdBy?.name ?? null };
+    for (const u of recipients) await notify(u.id, PLAN_READY_TO_INVOICE, payload);
+  } catch (err) {
+    console.error(`[plans] couldn't notify finance that plan ${plan.id} is ready to invoice:`, err?.message ?? err);
+  }
 }
 
 // One CampaignAssignment per plan line per post (16 Oct; combo lines: one
@@ -984,21 +1011,25 @@ async function getWritablePlan(planId, requester) {
   return plan;
 }
 
-export async function requestInvoiceAttachmentUpload(planId, requester) {
-  await getWritablePlan(planId, requester);
-  return getUploadParams(buildPlanInvoiceAttachmentKey(planId));
+// Finance uploads the plan's client invoice from Receivables → To invoice
+// (19 Nov) without plan access. The route has already checked finance.edit;
+// only an approved plan can take it here.
+async function getApprovedPlanForFinance(planId) {
+  const plan = await prisma.plan.findUnique({ where: { id: planId } });
+  if (!plan) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
+  if (plan.status !== "APPROVED") throw new ApiError(400, "INVALID_PLAN_STATUS", "Only an approved plan can take its client invoice here");
+  return plan;
 }
 
-export async function confirmInvoiceAttachment(planId, requester, { publicId, fileName }) {
-  await getWritablePlan(planId, requester);
-  if (!publicId.startsWith(`plan-invoice-attachments/${planId}/`)) {
+async function attachInvoice(plan, requester, { publicId, fileName }) {
+  if (!publicId.startsWith(`plan-invoice-attachments/${plan.id}/`)) {
     throw new ApiError(400, "KEY_MISMATCH", "Object key does not belong to this plan");
   }
   if (!(await objectExists(publicId))) {
     throw new ApiError(422, "UPLOAD_NOT_FOUND", "No file found at that key — upload may not have completed");
   }
   const updated = await prisma.plan.update({
-    where: { id: planId },
+    where: { id: plan.id },
     data: {
       invoiceAttachmentPublicId: publicId,
       invoiceAttachmentName: fileName,
@@ -1006,18 +1037,89 @@ export async function confirmInvoiceAttachment(planId, requester, { publicId, fi
       invoiceAttachmentUploadedAt: new Date(),
     },
   });
+  // Tell the planner who made the plan when someone else (Finance, Admin) uploads it.
+  if (plan.createdById && plan.createdById !== requester.id) {
+    try {
+      await notify(plan.createdById, PLAN_INVOICE_UPLOADED, { planId: plan.id, planName: plan.name, fileName });
+    } catch (err) {
+      console.error(`[plans] couldn't notify the planner about plan ${plan.id}'s invoice:`, err?.message ?? err);
+    }
+  }
   return invoiceAttachmentFor(updated);
 }
 
 /** Clears the reference only — the object stays in Cloudinary, same as invoices/service.js's removeAttachment. */
-export async function removeInvoiceAttachment(planId, requester) {
-  const plan = await getWritablePlan(planId, requester);
+async function detachInvoice(plan) {
   if (!plan.invoiceAttachmentPublicId) return null;
   await prisma.plan.update({
-    where: { id: planId },
+    where: { id: plan.id },
     data: { invoiceAttachmentPublicId: null, invoiceAttachmentName: null, invoiceAttachmentUploadedById: null, invoiceAttachmentUploadedAt: null },
   });
   return null;
+}
+
+export async function requestInvoiceAttachmentUpload(planId, requester) {
+  await getWritablePlan(planId, requester);
+  return getUploadParams(buildPlanInvoiceAttachmentKey(planId));
+}
+
+export async function confirmInvoiceAttachment(planId, requester, body) {
+  return attachInvoice(await getWritablePlan(planId, requester), requester, body);
+}
+
+export async function removeInvoiceAttachment(planId, requester) {
+  return detachInvoice(await getWritablePlan(planId, requester));
+}
+
+/**
+ * Receivables → To invoice (19 Nov): approved plans with an execution sheet,
+ * i.e. the ones Finance was told about. For a caller already authorised by
+ * the route (finance.view, staff only) — no requester scoping here.
+ */
+const TO_INVOICE_UPLOADED_DAYS = 30;
+
+export async function listPlansToInvoice() {
+  // Still waiting, plus ones uploaded in the last 30 days (to check or replace) — so the list doesn't grow forever.
+  const since = new Date(Date.now() - TO_INVOICE_UPLOADED_DAYS * 24 * 60 * 60 * 1000);
+  const plans = await prisma.plan.findMany({
+    where: {
+      status: "APPROVED",
+      executionSheetUrl: { not: null },
+      OR: [{ invoiceAttachmentPublicId: null }, { invoiceAttachmentUploadedAt: { gte: since } }],
+    },
+    // rateCards preloaded so combo lines don't cost a query per plan.
+    include: { ...PLAN_INCLUDE, items: { include: { asset: { include: { rateCards: true } } } } },
+    orderBy: { approvedAt: "desc" },
+  });
+  // Only the total is used here, so engagement isn't fetched: every page reads as zero.
+  const noEngagement = new Map(plans.flatMap((p) => p.items).map((i) => [i.assetId, {}]));
+  const annotated = await Promise.all(plans.map((plan) => annotatePlan(plan, noEngagement)));
+  const items = annotated.map((p) => ({
+    id: p.id,
+    name: p.name,
+    clientName: p.clientName,
+    clientCompany: p.clientCompany,
+    createdBy: p.createdBy,
+    executionSheetUrl: p.executionSheetUrl,
+    approvedAt: p.approvedAt,
+    clientInvoiceNumber: p.clientInvoiceNumber,
+    total: p.overview.total,
+    invoiceAttachment: p.invoiceAttachment,
+  }));
+  return { items, total: items.length };
+}
+
+export async function requestInvoiceAttachmentUploadForFinance(planId) {
+  await getApprovedPlanForFinance(planId);
+  return getUploadParams(buildPlanInvoiceAttachmentKey(planId));
+}
+
+export async function confirmInvoiceAttachmentForFinance(planId, requester, body) {
+  return attachInvoice(await getApprovedPlanForFinance(planId), requester, body);
+}
+
+export async function removeInvoiceAttachmentForFinance(planId) {
+  return detachInvoice(await getApprovedPlanForFinance(planId));
 }
 
 export async function getClientInvoice(planId, requester) {

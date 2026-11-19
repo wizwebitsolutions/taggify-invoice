@@ -33,7 +33,7 @@ const STATUS: Record<JobRun["status"], { tone: StatusTone; label: string }> = {
 const labelOf = (name: string) => JOBS[name]?.label ?? name;
 
 /**
- * Background jobs (GET /admin/job-runs, finance.edit): the last 50 runs, the
+ * Background jobs (GET /admin/job-runs, Admin only): the last 50 runs, the
  * latest one per job, and the two finance exports that can be run by hand
  * (POST /admin/finance-export/run-now and /finance-google-sheet-export/run-now).
  */

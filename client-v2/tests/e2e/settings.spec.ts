@@ -349,7 +349,8 @@ test.describe("Settings", () => {
   });
 
   test("background jobs: latest result per job, history, run-now failure is reported", async ({ page }) => {
-    await signIn(page, "FINANCE");
+    // Admin only (19 Nov).
+    await signIn(page, "ADMIN");
     const calls = await settingsApi(page);
     await page.goto("/settings?tab=jobs");
     const exp = page.getByTestId("job-finance_export");
@@ -368,7 +369,10 @@ test.describe("Settings", () => {
     await signIn(page, "FINANCE");
     await settingsApi(page);
     await page.goto("/settings");
-    await expect(page.getByRole("tab")).toHaveText(["Invoice numbering", "Background jobs", "Billing profiles", "My profile"]);
+    // No Background jobs: Admin only (19 Nov).
+    await expect(page.getByRole("tab")).toHaveText(["Invoice numbering", "Billing profiles", "My profile"]);
+    await page.goto("/settings?tab=jobs");
+    await expect(page.getByRole("tab", { name: "Invoice numbering" })).toHaveAttribute("aria-selected", "true");
     // A tab you can't use falls back to your first one.
     await page.goto("/settings?tab=people");
     await expect(page.getByRole("tab", { name: "Invoice numbering" })).toHaveAttribute("aria-selected", "true");

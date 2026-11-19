@@ -10,6 +10,8 @@ const mockPrisma = {
   clientInvoice: { upsert: vi.fn() },
   campaignAssignment: { findMany: vi.fn(), update: vi.fn() },
   link: { findFirst: vi.fn() },
+  // Finance hand-off (19 Nov): "already told finance about this plan?" lookup.
+  notification: { findFirst: vi.fn(async () => null) },
   // findMany (16 Oct, sheet sharing) answers from findUnique, so a test that
   // stubs one email for findUnique sees the same email for every id asked for.
   user: { findUnique: vi.fn(), findMany: vi.fn(async ({ where }) => Promise.all((where?.id?.in ?? []).map(async (id) => ({ id, ...((await mockPrisma.user.findUnique({ where: { id } })) ?? {}) })))) },
@@ -84,6 +86,9 @@ const mockCloudinary = {
 };
 vi.mock("../../lib/cloudinaryClient.js", () => mockCloudinary);
 
+const mockNotify = vi.fn();
+vi.mock("../notifications/service.js", () => ({ notify: (...args) => mockNotify(...args) }));
+
 const {
   createPlan,
   updatePlan,
@@ -109,6 +114,10 @@ const {
   requestInvoiceAttachmentUpload,
   confirmInvoiceAttachment,
   removeInvoiceAttachment,
+  requestInvoiceAttachmentUploadForFinance,
+  confirmInvoiceAttachmentForFinance,
+  removeInvoiceAttachmentForFinance,
+  listPlansToInvoice,
   syncExecutionSheet,
   postKindFromUrl,
   slotFormatFromUrl,
@@ -2566,5 +2575,117 @@ describe("inactivePages — pages switched off or rejected after the plan was bu
       { assetId: "asset-rej", handle: "rej.page", reason: "rejected" },
       { assetId: "asset-gone", handle: "gone.page", reason: "broken" },
     ]);
+  });
+});
+
+// 19 Nov — "after the execution sheet is uploaded, notify finance that they can
+// generate the invoice"; Finance uploads it from Receivables → To invoice.
+describe("Finance hand-off: plan ready to invoice", () => {
+  const planMaker = { id: "pm-1", role: "PLAN_MAKER" };
+  const finance = { id: "fin-1", role: "FINANCE" };
+  const url = "https://docs.google.com/spreadsheets/d/xyz/edit";
+  const base = { id: "plan-1", name: "Diwali push", clientName: "Saffron", clientCompany: "Saffron Street Foods", createdById: "pm-1", createdBy: { id: "pm-1", name: "Priya" }, status: "APPROVED", campaignId: null, executionSheetUrl: null, budget: null, gstPercent: null, overrideCost: null, items: [], sourceSheetPending: null, invoiceAttachmentPublicId: null };
+  const staff = [
+    { id: "fin-1", role: "FINANCE", permissions: null },
+    { id: "fin-2", role: "FINANCE", permissions: null },
+    // A restricted Finance account that can't upload (finance.edit off) isn't told.
+    { id: "fin-view", role: "FINANCE", permissions: { "finance.edit": false, "finance.approve": false, "finance.pay": false } },
+  ];
+  const recipients = () => mockNotify.mock.calls.filter((c) => c[1] === "plan_ready_to_invoice").map((c) => c[0]);
+
+  beforeEach(() => {
+    mockPrisma.user.findMany.mockImplementation(async ({ where }) => (where?.role === "FINANCE" ? staff : []));
+    mockPrisma.notification.findFirst.mockResolvedValue(null);
+  });
+
+  function sheetSaved(plan) {
+    mockPrisma.plan.findUnique.mockReset().mockResolvedValue(plan);
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...plan, ...data }));
+    return updatePlan("plan-1", planMaker, { executionSheetUrl: url });
+  }
+
+  it("a sheet saved on an approved plan tells every Finance user who can upload the invoice, once each", async () => {
+    await sheetSaved(base);
+    expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { role: "FINANCE", deactivatedAt: null } }));
+    expect(recipients()).toEqual(["fin-1", "fin-2"]);
+    expect(mockNotify).toHaveBeenCalledWith("fin-1", "plan_ready_to_invoice", { planId: "plan-1", planName: "Diwali push", clientName: "Saffron Street Foods", plannerName: "Priya" });
+  });
+
+  it("a sheet on a draft plan tells nobody; approving it later does", async () => {
+    await sheetSaved({ ...base, status: "DRAFT" });
+    expect(recipients()).toEqual([]);
+
+    mockPrisma.plan.findUnique.mockReset().mockResolvedValue({ ...base, status: "DRAFT", executionSheetUrl: url });
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...base, executionSheetUrl: url, ...data }));
+    await approvePlan("plan-1", planMaker);
+    expect(recipients()).toEqual(["fin-1", "fin-2"]);
+  });
+
+  it("approving a plan with no execution sheet tells nobody", async () => {
+    mockPrisma.plan.findUnique.mockReset().mockResolvedValue({ ...base, status: "DRAFT" });
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...base, ...data }));
+    await approvePlan("plan-1", planMaker);
+    expect(recipients()).toEqual([]);
+  });
+
+  it("doesn't repeat: already told, sheet replaced, or the invoice is already attached", async () => {
+    mockPrisma.notification.findFirst.mockResolvedValue({ id: "n-1" });
+    await sheetSaved({ ...base, executionSheetUrl: "https://docs.google.com/spreadsheets/d/old/edit" });
+    expect(mockPrisma.notification.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { type: "plan_ready_to_invoice", payload: { path: ["planId"], equals: "plan-1" } } }));
+    expect(recipients()).toEqual([]);
+
+    mockPrisma.notification.findFirst.mockResolvedValue(null);
+    await sheetSaved({ ...base, invoiceAttachmentPublicId: "plan-invoice-attachments/plan-1/x" });
+    expect(recipients()).toEqual([]);
+  });
+
+  it("a notification failure never fails the save", async () => {
+    mockNotify.mockRejectedValueOnce(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(sheetSaved(base)).resolves.toMatchObject({ executionSheetUrl: url });
+    err.mockRestore();
+  });
+
+  it("Finance can upload only to an approved plan, and the planner who made it is told", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue({ ...base, status: "DRAFT" });
+    await expect(requestInvoiceAttachmentUploadForFinance("plan-1")).rejects.toMatchObject({ code: "INVALID_PLAN_STATUS" });
+    await expect(confirmInvoiceAttachmentForFinance("plan-1", finance, { publicId: "plan-invoice-attachments/plan-1/uuid", fileName: "inv.pdf" })).rejects.toMatchObject({ code: "INVALID_PLAN_STATUS" });
+
+    mockPrisma.plan.findUnique.mockResolvedValue(base);
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...base, ...data }));
+    await expect(requestInvoiceAttachmentUploadForFinance("plan-1")).resolves.toMatchObject({ publicId: "plan-invoice-attachments/plan-1/uuid" });
+    const result = await confirmInvoiceAttachmentForFinance("plan-1", finance, { publicId: "plan-invoice-attachments/plan-1/uuid", fileName: "inv.pdf" });
+    expect(result).toMatchObject({ name: "inv.pdf", uploadedById: "fin-1" });
+    expect(mockNotify).toHaveBeenCalledWith("pm-1", "plan_invoice_uploaded", { planId: "plan-1", planName: "Diwali push", fileName: "inv.pdf" });
+
+    await expect(confirmInvoiceAttachmentForFinance("plan-1", finance, { publicId: "plan-invoice-attachments/other/uuid", fileName: "x.pdf" })).rejects.toMatchObject({ code: "KEY_MISMATCH" });
+  });
+
+  it("the planner uploading their own invoice is not notified about it", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(base);
+    mockPrisma.plan.update.mockImplementation(async ({ data }) => ({ ...base, ...data }));
+    await confirmInvoiceAttachment("plan-1", planMaker, { publicId: "plan-invoice-attachments/plan-1/uuid", fileName: "inv.pdf" });
+    expect(mockNotify).not.toHaveBeenCalledWith("pm-1", "plan_invoice_uploaded", expect.anything());
+  });
+
+  it("Finance can remove the invoice on an approved plan", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue({ ...base, invoiceAttachmentPublicId: "plan-invoice-attachments/plan-1/uuid" });
+    await removeInvoiceAttachmentForFinance("plan-1");
+    expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-1" }, data: expect.objectContaining({ invoiceAttachmentPublicId: null }) });
+  });
+
+  it("To invoice lists approved plans with an execution sheet, with the amount and any attached invoice", async () => {
+    mockPrisma.plan.findMany.mockResolvedValue([{ ...base, executionSheetUrl: url, approvedAt: new Date("2026-11-18"), clientInvoiceNumber: null, invoiceAttachmentPublicId: "plan-invoice-attachments/plan-1/uuid", invoiceAttachmentName: "inv.pdf" }]);
+    const { items, total } = await listPlansToInvoice();
+    const { where } = mockPrisma.plan.findMany.mock.calls[0][0];
+    expect(where).toMatchObject({ status: "APPROVED", executionSheetUrl: { not: null } });
+    // Waiting plans, plus ones uploaded in the last 30 days.
+    expect(where.OR[0]).toEqual({ invoiceAttachmentPublicId: null });
+    expect(where.OR[1].invoiceAttachmentUploadedAt.gte).toBeInstanceOf(Date);
+    // Only the total is needed: no engagement lookup.
+    expect(mockGetAvgEngagement).not.toHaveBeenCalled();
+    expect(total).toBe(1);
+    expect(items[0]).toMatchObject({ id: "plan-1", name: "Diwali push", createdBy: { id: "pm-1", name: "Priya" }, executionSheetUrl: url, invoiceAttachment: { name: "inv.pdf" } });
+    expect(typeof items[0].total).toBe("number");
   });
 });

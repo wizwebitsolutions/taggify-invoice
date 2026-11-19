@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CircleCheck, Download, FileText, Wallet } from "lucide-react";
@@ -39,7 +40,9 @@ const INVOICE_STAGE: Record<Invoice["status"], { label: string; tone: "warning" 
 export default function MoneyPage() {
   return (
     <AppShell active="money">
-      <CreatorMoney />
+      <Suspense>
+        <CreatorMoney />
+      </Suspense>
     </AppShell>
   );
 }
@@ -57,6 +60,13 @@ function CreatorMoney() {
   const [gst, setGst] = useState<"no" | "yes">("no");
   const [viewing, setViewing] = useState<Invoice | null>(null);
   const { pdf } = useInvoiceDownloads();
+  // ?tab=invoices|paid opens that tab (notification links, 19 Nov); a new link while here switches it.
+  const params = useSearchParams();
+  const urlTab = params.get("tab");
+  const [tab, setTab] = useState(urlTab === "invoices" || urlTab === "paid" ? urlTab : "ready");
+  useEffect(() => {
+    if (urlTab === "invoices" || urlTab === "paid") setTab(urlTab);
+  }, [urlTab, params]);
 
   const ready = useMemo(() => pending.data?.items ?? [], [pending.data]);
   const chosen = ready.filter((l) => selected.has(l.id));
@@ -103,7 +113,7 @@ function CreatorMoney() {
         <MetricTile tone="coral" icon={CircleCheck} label={`Paid in ${monthLabel(month)}`} loading={monthSummary.isLoading} value={<Money value={monthSummary.data?.paid.amount ?? 0} />} meta={`${plural(monthSummary.data?.paid.payments ?? 0, "payment")} · after TDS`} />
       </div>
 
-      <Tabs defaultValue="ready">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="detail-tabs">
           <TabsTrigger value="ready">Ready to invoice ({ready.length})</TabsTrigger>
           <TabsTrigger value="invoices">Invoices ({invoices.data?.total ?? 0})</TabsTrigger>

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { API_URL, mockApi, shot, signIn } from "./fixtures";
+import { API_URL, mockApi, shot, signIn, userFor } from "./fixtures";
 
 /** Invoice files: the creator's own invoice (Finance → Invoices drawer, Money → Invoices) and a plan's client invoice file. API + Cloudinary mocked. */
 
@@ -292,8 +292,29 @@ test.describe("Client invoice file from Receivables", () => {
     expect(calls.removed).toBe(1);
   });
 
-  test("finance (no plans.edit) sees no attach control on the row", async ({ page }) => {
+  // 19 Nov: Finance uploads the client invoice without plan access, through /invoices/plans/:id/final-invoice.
+  test("finance (finance.edit, no plans.edit) attaches through the finance route", async ({ page }) => {
     await signIn(page, "FINANCE");
+    const row = receivable();
+    await receivablesApi(page, row);
+    const confirmed: unknown[] = [];
+    await page.route(`${API_URL}/invoices/plans/p1/final-invoice**`, (route) => {
+      const req = route.request();
+      if (req.url().endsWith("/upload-url")) return route.fulfill({ json: { ...UPLOAD, publicId: "plan-invoice-attachments/p1/file" } });
+      const body = req.postDataJSON();
+      confirmed.push(body);
+      row.plan.invoiceAttachment = { name: body.fileName, url: "https://files.test/client.pdf", uploadedAt: now, uploadedById: "fin" };
+      return route.fulfill({ json: row.plan.invoiceAttachment });
+    });
+    await page.goto("/finance/receivables");
+    const r = page.getByRole("row").filter({ hasText: "TGF/26-27/014" });
+    await r.locator('input[type="file"]').setInputFiles(pdf("saffron-final.pdf"));
+    await expect(r.getByRole("link", { name: "saffron-final.pdf" })).toBeVisible();
+    expect(confirmed).toEqual([{ publicId: "plan-invoice-attachments/p1/file", fileName: "saffron-final.pdf" }]);
+  });
+
+  test("view-only finance (finance.edit off) sees no attach control on the row", async ({ page }) => {
+    await signIn(page, "FINANCE", { permissions: { ...userFor("FINANCE").permissions, "finance.edit": false } });
     await receivablesApi(page);
     await page.goto("/finance/receivables");
     await expect(page.getByRole("row").filter({ hasText: "TGF/26-27/014" })).toBeVisible();

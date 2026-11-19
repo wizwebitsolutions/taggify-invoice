@@ -27,7 +27,9 @@ import { hasAccess, hasOwnAccess, isOwnScopeRole, type PermissionKey, type Role 
  * Visibility rules (`roles`, `permissionKey`, `permissionKeysAny`, `bareRoles`,
  * `ownKey`) are ported from client/components/layout/sidebar.tsx so v2 hides
  * exactly what v1 hides. The nav only hides UI; every route checks the role
- * server-side. Items whose v2 screen doesn't exist yet are `built: false` and
+ * server-side. 19 Nov ("hide the nav tabs a user doesn't have access to"):
+ * each item's rule now matches its page's own NoAccess check, so nothing shows
+ * that would only open an "ask an admin" screen. Items whose v2 screen doesn't exist yet are `built: false` and
  * render as inert rows (no dead links).
  */
 export type NavItem = {
@@ -41,7 +43,8 @@ export type NavItem = {
   permissionKey?: PermissionKey;
   permissionKeysAny?: PermissionKey[];
   bareRoles?: Role[];
-  ownKey?: PermissionKey;
+  /** Own-scope roles need every one of these own-content switches. */
+  ownKey?: PermissionKey | PermissionKey[];
   /** An opt-in key (api-client OPT_IN_KEYS): shows for exactly the accounts holding it, whatever their role. Overrides every rule above. */
   optInKey?: PermissionKey;
   children?: NavItem[];
@@ -50,11 +53,11 @@ export type NavItem = {
 export const NAV: NavItem[] = [
   { key: "dashboard", label: "Home", icon: House, href: "/dashboard", built: true },
   // Creator-side screens (phone-first). Creating a post needs the CREATOR/TEAM_MEMBER role server-side.
-  { key: "submit", label: "Submit post", icon: Upload, href: "/submit", built: true, roles: ["CREATOR", "TEAM_MEMBER"], ownKey: "links.edit" },
+  { key: "submit", label: "Submit post", icon: Upload, href: "/submit", built: true, roles: ["CREATOR", "TEAM_MEMBER"], ownKey: ["links.edit", "inventory.view"] },
   { key: "pages", label: "My pages", icon: IdCard, href: "/pages", built: true, roles: ["CREATOR", "TEAM_MEMBER"], ownKey: "inventory.view" },
   // Team members never see billing.
   { key: "money", label: "Money", icon: Wallet, href: "/money", built: true, roles: ["CREATOR"], ownKey: "finance.view" },
-  { key: "campaigns", label: "Campaigns", icon: Send, href: "/campaigns", built: true, roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"], ownKey: "campaigns.view" },
+  { key: "campaigns", label: "Campaigns", icon: Send, href: "/campaigns", built: true, roles: ["CREATOR", "TEAM_MEMBER", "ADMIN", "FINANCE", "PLAN_MAKER"], permissionKey: "campaigns.view", ownKey: "campaigns.view" },
   // Creators = vendors and their pages (v1 "Inventory").
   { key: "creators", label: "Inventory", icon: Users, href: "/creators", built: true, roles: ["ADMIN", "FINANCE", "PLAN_MAKER"], permissionKey: "inventory.view", bareRoles: ["PLAN_MAKER"], ownKey: "inventory.view" },
   // Content = posts (the code's "links").
@@ -83,7 +86,7 @@ export const NAV: NavItem[] = [
       { key: "receivables", label: "Receivables", href: "/finance/receivables", built: true, roles: ["ADMIN", "FINANCE", "PLAN_MAKER"], permissionKey: "finance.view", bareRoles: ["PLAN_MAKER"], ownKey: "finance.view" },
     ],
   },
-  { key: "reports", label: "Reports", icon: BarChart3, href: "/reports", built: true, roles: ["ADMIN", "FINANCE"] },
+  { key: "reports", label: "Reports", icon: BarChart3, href: "/reports", built: true, roles: ["ADMIN", "FINANCE"], permissionKeysAny: ["finance.pay", "campaigns.view", "links.view"] },
   // 12 Oct (v1 replaced "Job runs" with it). Opt-in: Admin by default, anyone else once granted on People → Edit access.
   { key: "bulk-track", label: "Bulk Tracker", icon: Radar, href: "/bulk-track", built: true, optInKey: "bulkTrack.view" },
   // 24 Oct. Opt-in like Bulk Tracker: paste public reel/post links, see Instagram's own embed of each.
@@ -98,16 +101,17 @@ export function canSeeNavItem(item: NavItem, user: NavUser): boolean {
   if (item.children) return item.children.some((c) => canSeeNavItem(c, user));
   if (item.optInKey) return hasAccess(user, item.optInKey);
   const roleAllowed = !item.roles || (!!user?.role && item.roles.includes(user.role));
-  // Own-scope roles: their role list plus their own-content switch, never a global key.
-  if (isOwnScopeRole(user?.role)) return roleAllowed && (!item.ownKey || hasOwnAccess(user, item.ownKey));
+  // Own-scope roles: their role list plus their own-content switches, never a global key.
+  if (isOwnScopeRole(user?.role)) {
+    const ownKeys = item.ownKey ? (Array.isArray(item.ownKey) ? item.ownKey : [item.ownKey]) : [];
+    return roleAllowed && ownKeys.every((k) => hasOwnAccess(user, k));
+  }
   if (item.permissionKey) {
     if (hasAccess(user, item.permissionKey)) return true;
     return roleAllowed && !!item.bareRoles?.includes(user?.role as Role);
   }
-  if (item.permissionKeysAny) {
-    if (item.permissionKeysAny.some((key) => hasAccess(user, key))) return true;
-    return roleAllowed;
-  }
+  // At least one of the keys; the role alone isn't enough (a restricted admin with none of them would get a no-access page).
+  if (item.permissionKeysAny) return item.permissionKeysAny.some((key) => hasAccess(user, key));
   return roleAllowed;
 }
 

@@ -144,13 +144,60 @@ function describe(n: Notification): string {
       return `Invoice ${p.invoiceNumber ?? ""} is overdue`.replace("  ", " ");
     case "screenshot_reminder":
       return "A post is waiting for its screenshot";
+    case "screenshot_rejected":
+      return "A post's screenshot was rejected. Upload a new one";
+    case "insights_approved":
+      return "A post's insights were approved";
+    case "link_marked_invalid":
+      return "A post link was marked invalid";
+    case "plan_ready_to_invoice":
+      return `${p.planName ?? "A plan"} is ready to invoice${p.clientName ? ` (${p.clientName})` : ""}`;
+    case "plan_invoice_uploaded":
+      return `Client invoice uploaded for ${p.planName ?? "your plan"}`;
     default:
       return n.type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
   }
 }
 
+/**
+ * Where picking a notification goes (19 Nov — "on clicking any notification it
+ * doesn't go to that page"). Each type is sent to one audience (server senders
+ * in brackets), so the page is the one that audience uses.
+ */
+function hrefFor(n: Notification): string | null {
+  const p = (n.payload ?? {}) as Record<string, unknown>;
+  switch (n.type) {
+    // Finance (plans/service.js notifyFinancePlanReady).
+    case "plan_ready_to_invoice":
+      return "/finance/receivables?tab=to-invoice";
+    // The planner who made the plan.
+    case "plan_invoice_uploaded":
+      return typeof p.planId === "string" ? `/plans/${p.planId}` : "/plans";
+    // invoiceAgingSweep: Finance's copy carries the creatorId, the creator's own doesn't.
+    case "invoice_overdue":
+      return typeof p.creatorId === "string" ? "/finance/invoices" : "/money?tab=invoices";
+    // The creator (invoices/service.js, payments/service.js).
+    case "invoice_raised":
+    case "invoice_approved":
+    case "invoice_rejected":
+      return "/money?tab=invoices";
+    case "invoice_paid":
+    case "payout_paid":
+      return "/money?tab=paid";
+    // The creator or team member who submitted the post (links/*, screenshotReminder).
+    case "screenshot_reminder":
+    case "screenshot_rejected":
+    case "insights_approved":
+    case "link_marked_invalid":
+      return "/dashboard";
+    default:
+      return null;
+  }
+}
+
 function NotificationsBell() {
   const { accessToken } = useAuth();
+  const router = useRouter();
   const qc = useQueryClient();
   const list = useQuery({
     queryKey: ["notifications"],
@@ -217,10 +264,12 @@ function NotificationsBell() {
                 <li key={n.id}>
                   {/* Read rows stay menu items so keyboard focus isn't dropped when one is marked read. Stays open so several can be read in a row. */}
                   <DropdownMenuItem
-                    className={cn("flex items-start gap-3 rounded-none px-4 py-3 text-small", n.readAt ? "cursor-default" : "cursor-pointer bg-brand-50")}
+                    className={cn("flex items-start gap-3 rounded-none px-4 py-3 text-small", n.readAt && !hrefFor(n) ? "cursor-default" : "cursor-pointer", !n.readAt && "bg-brand-50")}
                     onSelect={(e) => {
-                      e.preventDefault();
+                      const href = hrefFor(n);
                       if (!n.readAt) markOne.mutate(n.id);
+                      if (href) router.push(href);
+                      else e.preventDefault();
                     }}
                   >
                     {body}

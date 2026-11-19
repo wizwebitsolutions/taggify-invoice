@@ -1,8 +1,9 @@
 "use client";
 
 import { Notice } from "@/components/taggify/notice";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Download, ExternalLink, FileText, Link2, MoreHorizontal, Paperclip } from "lucide-react";
@@ -53,7 +54,9 @@ const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "2
 export default function InvoicesPage() {
   return (
     <AppShell active="invoices">
-      <Invoices />
+      <Suspense>
+        <Invoices />
+      </Suspense>
     </AppShell>
   );
 }
@@ -68,7 +71,13 @@ function Invoices() {
   const qc = useQueryClient();
   const allowed = !!user && user.role !== "CREATOR" && user.role !== "TEAM_MEMBER" && canUse(user, "finance.view");
   const token = allowed ? accessToken : null;
-  const [tab, setTab] = useState<Tab>("RAISED");
+  // ?tab= opens a status tab (notification links, 19 Nov).
+  const params = useSearchParams();
+  const urlTab = params.get("tab");
+  const [tab, setTab] = useState<Tab>(urlTab && urlTab in TABS ? (urlTab as Tab) : "RAISED");
+  useEffect(() => {
+    if (urlTab && urlTab in TABS) setTab(urlTab as Tab);
+  }, [urlTab, params]);
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);

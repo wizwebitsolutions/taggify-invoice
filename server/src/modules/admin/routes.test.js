@@ -4,7 +4,7 @@ import express from "express";
 // The two People → Edit details routes (12 Oct): a wrong-role request is
 // rejected before the service ever runs (CLAUDE.md: every new route needs
 // this test). The full-admin-only rule itself is covered in service.test.js.
-const mockPrisma = { user: { findUnique: vi.fn() } };
+const mockPrisma = { user: { findUnique: vi.fn() }, jobRun: { findMany: vi.fn(async () => []) } };
 vi.mock("../../lib/prisma.js", () => ({ prisma: mockPrisma }));
 
 let currentUser;
@@ -87,5 +87,29 @@ describe("PUT /admin/users/:id/active (21 Oct, deactivate / reactivate)", () => 
     expect((await call(ADMIN, "PUT", "/users/cr-1/active", { active: "no" })).status).toBe(400);
     expect((await call(ADMIN, "PUT", "/users/cr-1/active", {})).status).toBe(400);
     expect(setUserActive).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 19 Nov — "hide background job from any other role, only admin can see".
+describe("Background jobs: GET /admin/job-runs and the run-now exports are Admin-only", () => {
+  const others = [
+    { id: "fin-1", role: "FINANCE" },
+    { id: "pm-1", role: "PLAN_MAKER" },
+    { id: "cr-1", role: "CREATOR" },
+    { id: "tm-1", role: "TEAM_MEMBER" },
+  ];
+
+  it("Admin reads the job history", async () => {
+    expect((await call(ADMIN, "GET", "/job-runs")).status).toBe(200);
+    expect(mockPrisma.jobRun.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("every other role, Finance included, is refused on the history and both run-now exports", async () => {
+    for (const u of others) {
+      expect((await call(u, "GET", "/job-runs")).status).toBe(403);
+      expect((await call(u, "POST", "/finance-export/run-now", {})).status).toBe(403);
+      expect((await call(u, "POST", "/finance-google-sheet-export/run-now", {})).status).toBe(403);
+    }
+    expect(mockPrisma.jobRun.findMany).not.toHaveBeenCalled();
   });
 });

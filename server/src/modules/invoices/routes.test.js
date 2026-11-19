@@ -36,6 +36,16 @@ vi.mock("./clientInvoices.js", () => ({
   cancelClientInvoice: vi.fn(),
   getClientInvoicePdfSource: vi.fn(),
 }));
+const listPlansToInvoice = vi.fn(async () => ({ items: [], total: 0 }));
+const requestInvoiceAttachmentUploadForFinance = vi.fn(async () => ({ publicId: "k" }));
+const confirmInvoiceAttachmentForFinance = vi.fn(async () => ({ name: "inv.pdf" }));
+const removeInvoiceAttachmentForFinance = vi.fn(async () => null);
+vi.mock("../plans/service.js", () => ({
+  listPlansToInvoice: (...a) => listPlansToInvoice(...a),
+  requestInvoiceAttachmentUploadForFinance: (...a) => requestInvoiceAttachmentUploadForFinance(...a),
+  confirmInvoiceAttachmentForFinance: (...a) => confirmInvoiceAttachmentForFinance(...a),
+  removeInvoiceAttachmentForFinance: (...a) => removeInvoiceAttachmentForFinance(...a),
+}));
 vi.mock("../../lib/invoicePdf.js", () => ({ buildInvoicePdf: vi.fn() }));
 vi.mock("../../lib/clientInvoicePdf.js", () => ({ buildClientInvoicePdf: vi.fn() }));
 
@@ -86,6 +96,55 @@ describe("Receivables routes — /invoices/client (23 Sep)", () => {
   it("the /client prefix is never read as an invoice id by the /:id routes", async () => {
     expect(await call({ id: "fin-1", role: "FINANCE" }, "GET", "/client")).toBe(200);
     expect(approveInvoice).not.toHaveBeenCalled();
+  });
+});
+
+// 19 Nov — Finance bills plans whose execution sheet is in, and uploads the
+// client invoice PDF without plan access. Staff only: planners see their own
+// plans' invoices through /plans and /client, never this cross-plan list.
+describe("To invoice routes — /invoices/plans-to-invoice and /plans/:planId/final-invoice", () => {
+  const pdfBody = JSON.stringify({ publicId: "plan-invoice-attachments/plan-1/uuid", fileName: "inv.pdf" });
+  async function send(user, method, path, body) {
+    currentUser = user;
+    const res = await fetch(`${base}/invoices${path}`, { method, headers: { "content-type": "application/json" }, body });
+    return res.status;
+  }
+  const finance = { id: "fin-1", role: "FINANCE" };
+  const admin = { id: "adm-1", role: "ADMIN" };
+  const viewOnlyFinance = { id: "fin-2", role: "FINANCE", permissions: { "finance.edit": false, "finance.approve": false, "finance.pay": false } };
+  const refused = [
+    { id: "pm-1", role: "PLAN_MAKER" },
+    { id: "cr-1", role: "CREATOR" },
+    { id: "tm-1", role: "TEAM_MEMBER" },
+  ];
+
+  it("GET /plans-to-invoice: Finance (even view-only) and Admin list; planners, creators and team members are refused", async () => {
+    expect(await send(finance, "GET", "/plans-to-invoice")).toBe(200);
+    expect(await send(viewOnlyFinance, "GET", "/plans-to-invoice")).toBe(200);
+    expect(await send(admin, "GET", "/plans-to-invoice")).toBe(200);
+    for (const u of refused) expect(await send(u, "GET", "/plans-to-invoice")).toBe(403);
+    expect(listPlansToInvoice).toHaveBeenCalledTimes(3);
+  });
+
+  it("upload, confirm and remove: Finance with finance.edit and Admin only", async () => {
+    for (const u of [finance, admin]) {
+      expect(await send(u, "POST", "/plans/plan-1/final-invoice/upload-url")).toBe(200);
+      expect(await send(u, "POST", "/plans/plan-1/final-invoice", pdfBody)).toBe(200);
+      expect(await send(u, "DELETE", "/plans/plan-1/final-invoice")).toBe(200);
+    }
+    for (const u of [viewOnlyFinance, ...refused]) {
+      expect(await send(u, "POST", "/plans/plan-1/final-invoice/upload-url")).toBe(403);
+      expect(await send(u, "POST", "/plans/plan-1/final-invoice", pdfBody)).toBe(403);
+      expect(await send(u, "DELETE", "/plans/plan-1/final-invoice")).toBe(403);
+    }
+    expect(requestInvoiceAttachmentUploadForFinance).toHaveBeenCalledTimes(2);
+    expect(confirmInvoiceAttachmentForFinance).toHaveBeenCalledWith("plan-1", expect.objectContaining({ id: "fin-1" }), { publicId: "plan-invoice-attachments/plan-1/uuid", fileName: "inv.pdf" });
+    expect(removeInvoiceAttachmentForFinance).toHaveBeenCalledTimes(2);
+  });
+
+  it("confirm only takes a PDF", async () => {
+    expect(await send(finance, "POST", "/plans/plan-1/final-invoice", JSON.stringify({ publicId: "plan-invoice-attachments/plan-1/uuid", fileName: "inv.jpg" }))).toBe(400);
+    expect(confirmInvoiceAttachmentForFinance).not.toHaveBeenCalled();
   });
 });
 

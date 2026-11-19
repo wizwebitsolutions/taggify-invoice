@@ -112,6 +112,45 @@ test.describe("Finance receivables", () => {
     await expect(page.getByRole("button", { name: "Mark paid…" })).toHaveCount(0);
   });
 
+  // 19 Nov — approved plans with an execution sheet wait here for Finance to upload the client invoice PDF.
+  const toInvoice = (id: string, name: string, attached: boolean) => ({
+    id,
+    name,
+    clientName: "Neha Kapoor",
+    clientCompany: "Saffron Street Foods",
+    createdBy: { id: "pl1", name: "Priya Sharma" },
+    executionSheetUrl: `https://docs.google.com/spreadsheets/d/${id}/edit`,
+    approvedAt: daysAgo(2),
+    clientInvoiceNumber: null,
+    total: 118000,
+    invoiceAttachment: attached ? { name: "final.pdf", url: "https://files.test/final.pdf", uploadedAt: daysAgo(1), uploadedById: "fin" } : null,
+  });
+  async function toInvoiceApi(page: Page) {
+    await receivablesApi(page);
+    await page.route(`${API_URL}/invoices/plans-to-invoice`, (route) => route.fulfill({ json: { items: [toInvoice("tp1", "Holi Reels", false), toInvoice("tp2", "Navratri Push", true)], total: 2 } }));
+  }
+
+  test("finance opens To invoice from the notification link: waiting and uploaded plans, sheet link, attach control", async ({ page }) => {
+    await signIn(page, "FINANCE");
+    await toInvoiceApi(page);
+    await page.goto("/finance/receivables?tab=to-invoice");
+    await expect(page.getByRole("tab", { name: "To invoice (1)", selected: true })).toBeVisible();
+    const waiting = page.getByRole("row").filter({ hasText: "Holi Reels" });
+    await expect(waiting.getByText("Waiting")).toBeVisible();
+    await expect(waiting.getByRole("link", { name: "Execution sheet" })).toHaveAttribute("href", "https://docs.google.com/spreadsheets/d/tp1/edit");
+    await expect(waiting.getByRole("button", { name: "Attach client invoice PDF" })).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: "Navratri Push" }).getByText("Uploaded")).toBeVisible();
+    await shot(page, "finance-to-invoice");
+  });
+
+  test("planners never see the To invoice tab", async ({ page }) => {
+    await signIn(page, "PLAN_MAKER");
+    await toInvoiceApi(page);
+    await page.goto("/finance/receivables?tab=to-invoice");
+    await expect(page.getByRole("tab", { name: /Issued/, selected: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /To invoice/ })).toHaveCount(0);
+  });
+
   for (const role of ["CREATOR", "TEAM_MEMBER"] as MockRole[]) {
     test(`${role} can't open Receivables`, async ({ page }) => {
       await signIn(page, role);

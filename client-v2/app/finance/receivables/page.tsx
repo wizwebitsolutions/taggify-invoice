@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CircleCheck, Clock, Download, FileText, MoreHorizontal, Paperclip } from "lucide-react";
+import { CircleCheck, Clock, Download, ExternalLink, FileText, MoreHorizontal, Paperclip } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
-import { ApiError, canUse, clientInvoices as clientInvoicesApi, hasAccess, type ClientInvoice } from "@/lib/api-client";
+import { ApiError, canUse, clientInvoices as clientInvoicesApi, hasAccess, type ClientInvoice, type PlanToInvoice } from "@/lib/api-client";
 import { monthKeyOf, monthLabel, monthRange } from "@/lib/finance";
 import { canEditPlan } from "@/lib/plans";
 import { personLabel, plural } from "@/lib/format";
@@ -31,7 +32,7 @@ import { Pager, PER_PAGE } from "@/components/finance/pager";
 import { LoadError, NoAccess } from "@/components/finance/states";
 
 const TABS = { ISSUED: "Issued", PAID: "Paid", CANCELLED: "Cancelled" } as const;
-type Tab = keyof typeof TABS;
+type Tab = keyof typeof TABS | "TO_INVOICE";
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
@@ -42,7 +43,9 @@ const clientOf = (r: ClientInvoice) => r.plan?.clientCompany || r.plan?.clientNa
 export default function ReceivablesPage() {
   return (
     <AppShell active="receivables">
-      <Receivables />
+      <Suspense>
+        <Receivables />
+      </Suspense>
     </AppShell>
   );
 }
@@ -52,30 +55,51 @@ export default function ReceivablesPage() {
  * S.receivables). GET /invoices/client returns every row (no paging), so tabs,
  * counts and search run here over the full list. Reading is finance.view (a
  * planner sees their own plans'); marking paid and cancelling are finance.pay.
+ * "To invoice" (19 Nov) is staff Finance only: approved plans whose execution
+ * sheet is in, where Finance uploads the client invoice PDF (finance.edit).
  */
 function Receivables() {
   const { user, accessToken } = useAuth();
   const qc = useQueryClient();
   const allowed = !!user && user.role !== "CREATOR" && user.role !== "TEAM_MEMBER" && canUse(user, "finance.view");
-  const [tab, setTab] = useState<Tab>("ISSUED");
+  // Global finance.view only: own-scope roles (planners) never hold it, so they never see other planners' plans here.
+  const financeStaff = !!user && hasAccess(user, "finance.view");
+  const canUploadFinal = !!user && hasAccess(user, "finance.edit");
+  const params = useSearchParams();
+  const wantsToInvoice = financeStaff && params.get("tab") === "to-invoice";
+  const [tab, setTab] = useState<Tab>(() => (wantsToInvoice ? "TO_INVOICE" : "ISSUED"));
+  // A "ready to invoice" notification picked while already on this page changes only the query string.
+  useEffect(() => {
+    if (wantsToInvoice) {
+      setTab("TO_INVOICE");
+      setPage(1);
+    }
+  }, [wantsToInvoice, params]);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [paying, setPaying] = useState<ClientInvoice | null>(null);
   const [cancelling, setCancelling] = useState<ClientInvoice | null>(null);
 
   const list = useQuery({ queryKey: ["clientInvoices", "all"], queryFn: () => clientInvoicesApi.list(accessToken!), enabled: !!accessToken && allowed });
+  const toInvoice = useQuery({ queryKey: ["plansToInvoice"], queryFn: () => clientInvoicesApi.listPlansToInvoice(accessToken!), enabled: !!accessToken && financeStaff });
   const all = useMemo(() => list.data?.items ?? [], [list.data]);
   const needle = q.trim().toLowerCase();
   const matches = (r: ClientInvoice) => !needle || `${r.invoiceNumber} ${r.plan?.clientName ?? ""} ${r.plan?.clientCompany ?? ""} ${r.plan?.createdBy?.name ?? ""} ${r.plan?.name ?? ""}`.toLowerCase().includes(needle);
-  const counts = { ISSUED: 0, PAID: 0, CANCELLED: 0 } as Record<Tab, number>;
+  const planMatches = (p: PlanToInvoice) => !needle || `${p.name} ${p.clientName} ${p.clientCompany ?? ""} ${p.createdBy?.name ?? ""} ${p.clientInvoiceNumber ?? ""}`.toLowerCase().includes(needle);
+  const counts = { TO_INVOICE: 0, ISSUED: 0, PAID: 0, CANCELLED: 0 } as Record<Tab, number>;
   all.filter(matches).forEach((r) => counts[r.status]++);
-  const rows = all.filter((r) => r.status === tab && matches(r));
-  const pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+  const planRows = (toInvoice.data?.items ?? []).filter(planMatches);
+  // The tab counts what's still waiting; uploaded ones stay listed so they can be checked or replaced.
+  counts.TO_INVOICE = planRows.filter((p) => !p.invoiceAttachment).length;
+  const rows = tab === "TO_INVOICE" ? [] : all.filter((r) => r.status === tab && matches(r));
+  const shownCount = tab === "TO_INVOICE" ? planRows.length : rows.length;
+  const pages = Math.max(1, Math.ceil(shownCount / PER_PAGE));
   useEffect(() => {
     if (page > pages) setPage(pages);
   }, [page, pages]);
   const current = Math.min(page, pages);
   const shown = rows.slice((current - 1) * PER_PAGE, current * PER_PAGE);
+  const shownPlans = planRows.slice((current - 1) * PER_PAGE, current * PER_PAGE);
 
   const month = monthKeyOf(new Date());
   const range = monthRange(month);
@@ -119,7 +143,8 @@ function Receivables() {
         >
           <div className="tab-shelf flex items-end gap-4">
             <TabsList className="flex-1 border-b-0">
-              {(Object.keys(TABS) as Tab[]).map((k) => (
+              {financeStaff && <TabsTrigger value="TO_INVOICE">To invoice ({counts.TO_INVOICE})</TabsTrigger>}
+              {(Object.keys(TABS) as (keyof typeof TABS)[]).map((k) => (
                 <TabsTrigger key={k} value={k}>
                   {TABS[k]} ({counts[k]})
                 </TabsTrigger>
@@ -130,7 +155,7 @@ function Receivables() {
         <div className="filter-bar">
           <SearchField
             label="Search receivables"
-            placeholder="Search client, planner or invoice no..."
+            placeholder={tab === "TO_INVOICE" ? "Search plan, client or planner..." : "Search client, planner or invoice no..."}
             className="w-full sm:w-80"
             value={q}
             onChange={(e) => {
@@ -140,7 +165,9 @@ function Receivables() {
           />
         </div>
 
-        {list.isError ? (
+        {tab === "TO_INVOICE" ? (
+          <ToInvoiceTable query={toInvoice} rows={shownPlans} searching={!!needle} canUpload={canUploadFinal} />
+        ) : list.isError ? (
           <LoadError onRetry={() => list.refetch()} what="receivables" />
         ) : list.isLoading ? (
           <div className="flex flex-col gap-2 border-t p-5">
@@ -150,7 +177,7 @@ function Receivables() {
           </div>
         ) : shown.length === 0 ? (
           <div className="border-t">
-            <EmptyState name={needle ? "empty-search" : "empty-dues"} title={needle ? "Nothing matches" : `No ${TABS[tab].toLowerCase()} client invoices`}>
+            <EmptyState name={needle ? "empty-search" : "empty-dues"} title={needle ? "Nothing matches" : `No ${TABS[tab as keyof typeof TABS].toLowerCase()} client invoices`}>
               {needle ? "Try another client, planner or number." : tab === "ISSUED" ? "Client invoices appear here when a plan is invoiced." : null}
             </EmptyState>
           </div>
@@ -196,10 +223,10 @@ function Receivables() {
                         "—"
                       )}
                       {r.plan?.campaign && <span className="block text-small text-fg-muted">{r.plan.campaign.title}</span>}
-                      {/* The plan's final client invoice PDF (v1 Receivables "Attach an invoice"): same plans.edit / owning-planner rule as on the plan page. */}
-                      {r.plan && r.status !== "CANCELLED" && canEditPlan(user, { createdBy: { id: r.plan.createdById, name: r.plan.createdBy?.name ?? null } }) && (
+                      {/* The plan's final client invoice PDF (v1 Receivables "Attach an invoice"): same plans.edit / owning-planner rule as on the plan page; Finance with finance.edit too (19 Nov). */}
+                      {r.plan && r.status !== "CANCELLED" && (canEditPlan(user, { createdBy: { id: r.plan.createdById, name: r.plan.createdBy?.name ?? null } }) || canUploadFinal) && (
                         <div className="mt-1">
-                          <PlanInvoiceAttachmentField plan={r.plan} editable compact />
+                          <PlanInvoiceAttachmentField plan={r.plan} editable compact via={canEditPlan(user, { createdBy: { id: r.plan.createdById, name: r.plan.createdBy?.name ?? null } }) ? "plan" : "finance"} />
                         </div>
                       )}
                     </TableCell>
@@ -255,7 +282,7 @@ function Receivables() {
             </TableBody>
           </Table>
         )}
-        {rows.length > 0 && <Pager total={rows.length} page={current} pages={pages} noun="invoices" onPage={setPage} />}
+        {shownCount > 0 && <Pager total={shownCount} page={current} pages={pages} noun={tab === "TO_INVOICE" ? "plans" : "invoices"} onPage={setPage} />}
       </Card>
 
       <Dialog open={!!paying} onOpenChange={(o) => !o && setPaying(null)}>
@@ -263,6 +290,81 @@ function Receivables() {
       </Dialog>
       <CancelDialog invoice={cancelling} onClose={() => setCancelling(null)} onDone={refresh} />
     </div>
+  );
+}
+
+/**
+ * To invoice (19 Nov): approved plans with an execution sheet. Finance raises
+ * the client invoice outside Taggify and uploads the PDF here; the planner who
+ * made the plan is notified and sees it on their plan.
+ */
+function ToInvoiceTable({
+  query,
+  rows,
+  searching,
+  canUpload,
+}: {
+  query: { isError: boolean; isLoading: boolean; refetch: () => unknown };
+  rows: PlanToInvoice[];
+  searching: boolean;
+  canUpload: boolean;
+}) {
+  if (query.isError) return <LoadError onRetry={() => query.refetch()} what="plans to invoice" />;
+  if (query.isLoading)
+    return (
+      <div className="flex flex-col gap-2 border-t p-5">
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
+    );
+  if (rows.length === 0)
+    return (
+      <div className="border-t">
+        <EmptyState name={searching ? "empty-search" : "empty-dues"} title={searching ? "Nothing matches" : "No plans to invoice"}>
+          {searching ? "Try another plan, client or planner." : "Plans appear here once they're approved and have an execution sheet."}
+        </EmptyState>
+      </div>
+    );
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Plan</TableHead>
+          <TableHead>Client</TableHead>
+          <TableHead className="text-right">Amount</TableHead>
+          <TableHead>Approved</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Client invoice PDF</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((p) => (
+          <TableRow key={p.id}>
+            <TableCell>
+              <span className="block text-body-strong">{p.name}</span>
+              {p.createdBy?.name && <span className="block text-small text-fg-muted">Planner: {p.createdBy.name}</span>}
+              <a href={p.executionSheetUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-small font-medium text-brand-ink hover:underline">
+                Execution sheet
+                <ExternalLink className="h-3 w-3" aria-hidden />
+              </a>
+            </TableCell>
+            <TableCell>
+              <span className="block font-medium">{p.clientCompany || p.clientName}</span>
+              {p.clientInvoiceNumber && <span className="block text-small text-fg-muted">Proforma {p.clientInvoiceNumber}</span>}
+            </TableCell>
+            <TableCell className="text-right font-semibold">
+              <Money value={p.total} />
+            </TableCell>
+            <TableCell className="whitespace-nowrap text-muted-foreground">{p.approvedAt ? day(p.approvedAt) : "—"}</TableCell>
+            <TableCell>{p.invoiceAttachment ? <StatusPill tone="success">Uploaded</StatusPill> : <StatusPill tone="warning">Waiting</StatusPill>}</TableCell>
+            <TableCell>
+              <PlanInvoiceAttachmentField plan={p} editable={canUpload} compact via="finance" />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 

@@ -19,6 +19,8 @@ import * as invoicesService from "./service.js";
 import * as clientInvoices from "./clientInvoices.js";
 import { buildInvoicePdf } from "../../lib/invoicePdf.js";
 import { buildClientInvoicePdf } from "../../lib/clientInvoicePdf.js";
+import * as plansService from "../plans/service.js";
+import { confirmPlanInvoiceAttachmentSchema } from "../plans/schemas.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -72,6 +74,46 @@ router.post("/client/:id/mark-paid", RECEIVABLES_WRITE, validateBody(markClientI
 router.post("/client/:id/cancel", RECEIVABLES_WRITE, validateBody(cancelClientInvoiceSchema), async (req, res, next) => {
   try {
     res.json(await clientInvoices.cancelClientInvoice(req.params.id, req.user, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── To invoice: plans Finance should bill (19 Nov) ───────────────────
+// Approved plans with an execution sheet. Finance lists them and uploads the
+// client invoice PDF here, without plan access. Staff only: no bare
+// PLAN_MAKER, so planners (own-scope, never holding global keys) get 403 and
+// keep seeing only their own plans' invoices through /plans and /client.
+const TO_INVOICE_READ = requireAccess("finance.view");
+const TO_INVOICE_WRITE = requireAccess("finance.edit");
+
+router.get("/plans-to-invoice", TO_INVOICE_READ, async (req, res, next) => {
+  try {
+    res.json(await plansService.listPlansToInvoice());
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/plans/:planId/final-invoice/upload-url", TO_INVOICE_WRITE, async (req, res, next) => {
+  try {
+    res.json(await plansService.requestInvoiceAttachmentUploadForFinance(req.params.planId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/plans/:planId/final-invoice", TO_INVOICE_WRITE, validateBody(confirmPlanInvoiceAttachmentSchema), async (req, res, next) => {
+  try {
+    res.json(await plansService.confirmInvoiceAttachmentForFinance(req.params.planId, req.user, req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/plans/:planId/final-invoice", TO_INVOICE_WRITE, async (req, res, next) => {
+  try {
+    res.json(await plansService.removeInvoiceAttachmentForFinance(req.params.planId));
   } catch (err) {
     next(err);
   }

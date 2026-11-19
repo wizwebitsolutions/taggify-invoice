@@ -3,7 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/lib/auth-context";
-import { canUse, invoices as invoicesApi, plans as plansApi, type Invoice, type Plan } from "@/lib/api-client";
+import { canUse, clientInvoices as clientInvoicesApi, invoices as invoicesApi, plans as plansApi, type Invoice, type Plan } from "@/lib/api-client";
 import { uploadSigned } from "@/lib/attachments";
 import { AttachmentField } from "@/components/taggify/attachment-field";
 
@@ -44,11 +44,18 @@ export function InvoiceAttachmentField({ invoice, compact, attachLabel = "Attach
  * the same rule as editing the plan (`editable`); any status, since an
  * invoice raised elsewhere can exist before the plan is approved. Takes the
  * slimmer plan on a ClientInvoice too (Receivables rows, compact).
+ * `via="finance"` (19 Nov) uses /invoices/plans/:id/final-invoice instead:
+ * Finance (finance.edit) uploads on an approved plan without plan access.
  */
-export function PlanInvoiceAttachmentField({ plan, editable, compact }: { plan: Pick<Plan, "id" | "invoiceAttachment">; editable: boolean; compact?: boolean }) {
+export function PlanInvoiceAttachmentField({ plan, editable, compact, via = "plan" }: { plan: Pick<Plan, "id" | "invoiceAttachment">; editable: boolean; compact?: boolean; via?: "plan" | "finance" }) {
   const { accessToken } = useAuth();
   const qc = useQueryClient();
-  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ["plans"] }), qc.invalidateQueries({ queryKey: ["clientInvoices"] })]);
+  const refresh = () =>
+    Promise.all([qc.invalidateQueries({ queryKey: ["plans"] }), qc.invalidateQueries({ queryKey: ["clientInvoices"] }), qc.invalidateQueries({ queryKey: ["plansToInvoice"] })]);
+  const api =
+    via === "finance"
+      ? { request: clientInvoicesApi.requestFinalInvoiceUpload, confirm: clientInvoicesApi.confirmFinalInvoice, remove: clientInvoicesApi.removeFinalInvoice }
+      : { request: plansApi.requestInvoiceAttachmentUpload, confirm: plansApi.confirmInvoiceAttachment, remove: plansApi.removeInvoiceAttachment };
   return (
     <AttachmentField
       attachment={plan.invoiceAttachment}
@@ -58,12 +65,12 @@ export function PlanInvoiceAttachmentField({ plan, editable, compact }: { plan: 
       kind="pdf"
       compact={compact}
       onUpload={async (file) => {
-        const publicId = await uploadSigned(await plansApi.requestInvoiceAttachmentUpload(accessToken!, plan.id), file);
-        await plansApi.confirmInvoiceAttachment(accessToken!, plan.id, publicId, file.name);
+        const publicId = await uploadSigned(await api.request(accessToken!, plan.id), file);
+        await api.confirm(accessToken!, plan.id, publicId, file.name);
         await refresh();
       }}
       onRemove={async () => {
-        await plansApi.removeInvoiceAttachment(accessToken!, plan.id);
+        await api.remove(accessToken!, plan.id);
         await refresh();
       }}
     />

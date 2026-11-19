@@ -660,6 +660,24 @@ export interface ClientInvoice {
   issuedBy?: { id: string; name: string | null; role: Role } | null;
 }
 
+/**
+ * Receivables → To invoice (19 Nov): an approved plan with an execution sheet,
+ * waiting for Finance to upload the client invoice PDF (GET /invoices/plans-to-invoice).
+ */
+export interface PlanToInvoice {
+  id: string;
+  name: string;
+  clientName: string;
+  clientCompany: string | null;
+  createdBy: { id: string; name: string | null } | null;
+  executionSheetUrl: string;
+  approvedAt: string | null;
+  clientInvoiceNumber: string | null;
+  /** The plan's client-facing total (overview.total), in rupees. */
+  total: number;
+  invoiceAttachment: { name: string; url: string | null; uploadedAt: string | null; uploadedById: string | null } | null;
+}
+
 export interface TeamMembership {
   id: string;
   userId: string;
@@ -1229,6 +1247,13 @@ export const clientInvoices = {
   cancel: (token: string, id: string, remarks: string) => request<ClientInvoice>(`/invoices/client/${id}/cancel`, { method: "POST", token, body: { remarks } }),
   downloadPdf: (token: string, id: string, invoiceNumber?: string | null) =>
     downloadBinary(`${API_URL}/invoices/client/${id}/pdf`, token, `${(invoiceNumber ?? id).replace(/[^A-Za-z0-9._-]+/g, "-")}.pdf`),
+  // To invoice (19 Nov): Finance uploads a plan's client invoice PDF without plan access.
+  listPlansToInvoice: (token: string) => request<{ items: PlanToInvoice[]; total: number }>("/invoices/plans-to-invoice", { token }),
+  requestFinalInvoiceUpload: (token: string, planId: string) =>
+    request<{ uploadUrl: string; apiKey: string; timestamp: number; signature: string; publicId: string }>(`/invoices/plans/${planId}/final-invoice/upload-url`, { method: "POST", token }),
+  confirmFinalInvoice: (token: string, planId: string, publicId: string, fileName: string) =>
+    request<NonNullable<PlanToInvoice["invoiceAttachment"]>>(`/invoices/plans/${planId}/final-invoice`, { method: "POST", token, body: { publicId, fileName } }),
+  removeFinalInvoice: (token: string, planId: string) => request<void>(`/invoices/plans/${planId}/final-invoice`, { method: "DELETE", token }),
 };
 
 // ── Invoices ────────────────────────────────────────────────────────
