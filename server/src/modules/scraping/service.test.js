@@ -14,6 +14,15 @@ beforeEach(() => {
 
 /** Inventory "Create page" (14 Sep): the profile scrape now also stores avg views/likes/comments and when it last ran. */
 describe("refreshAssetMetrics — profile engagement + scrape status", () => {
+  // 23 Nov: YouTube / Facebook pages can't be fetched; their numbers are typed by hand.
+  it("leaves a YouTube or Facebook page alone and clears its queued marker", async () => {
+    mockPrisma.asset.findUnique.mockResolvedValueOnce({ id: "asset-yt", platform: "youtube", handle: "techburner", scrapeQueuedAt: new Date() });
+    getAccountMetrics.mockClear();
+    await refreshAssetMetrics("asset-yt");
+    expect(getAccountMetrics).not.toHaveBeenCalled();
+    expect(mockPrisma.asset.update).toHaveBeenCalledWith({ where: { id: "asset-yt" }, data: { scrapeQueuedAt: null } });
+  });
+
   it("stores followers, the latest-posts averages, lastScrapedAt, and clears any previous error", async () => {
     getAccountMetrics.mockResolvedValue({ followers: 5000, mediaCount: 40, fullName: "Demo", biography: null, profilePicUrl: null, avgViews: 1200, avgLikes: 80, avgComments: 4, sampleSize: 12 });
     await refreshAssetMetrics("asset-1");

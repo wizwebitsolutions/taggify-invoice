@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 
-import { parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, parseGroupLink, ImportParseError, MAX_IMPORT_ROWS, rateFormatFromHeader, parseCategory } from "./importParser.js";
+import { pageRefFromText, otherPlatformRef, parseImportSheet, parseCsv, normalizeHandle, parseFollowerCount, parseAmount, classifyContact, parseGroupLink, ImportParseError, MAX_IMPORT_ROWS, rateFormatFromHeader, parseCategory } from "./importParser.js";
 import { FORMATS } from "../../lib/formats.js";
 
 /**
@@ -121,7 +121,7 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
   it("a broken or non-Instagram link, or a missing one, is flagged on its row", async () => {
     const csv = [TEMPLATE_HEADER, "Blog,https://example.com/blog,,,", "No link,,,,"].join("\n");
     const parsed = await parseImportSheet(Buffer.from(csv), "t.csv");
-    expect(parsed.rows[0]).toMatchObject({ handle: null, problem: "Link broken or not an Instagram profile link." });
+    expect(parsed.rows[0]).toMatchObject({ handle: null, problem: "Link broken or not an Instagram, YouTube or Facebook page link." });
     expect(parsed.rows[1]).toMatchObject({ handle: null, problem: "Missing page link." });
   });
 
@@ -142,7 +142,7 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
     ].join("\n");
     const parsed = await parseImportSheet(Buffer.from(csv), "t.csv");
     expect(parsed.rows.map((r) => r.handle)).toEqual([null, null, null, "story.page", "app.page", "mobile.page"]);
-    expect(parsed.rows[0].problem).toBe("Link broken or not an Instagram profile link.");
+    expect(parsed.rows[0].problem).toBe("Link broken or not an Instagram, YouTube or Facebook page link.");
   });
 
   it("a row whose link isn't an Instagram profile falls back to its handle cell (old handle + website sheets)", async () => {
@@ -185,7 +185,9 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       "Grade",
       "Group Link",
       "Reel Rate",
-      "Entertainment / Brand Rate",
+      "Entertainment Rate",
+      "Brand Rate",
+      "OTT Rate",
       "PR Rate",
       "Political Rate",
       "Static & Carousel Rate",
@@ -214,10 +216,12 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       ["Example Vendor", null, "vendor@example.com"],
     ]);
     expect(parsed.rows[0].followers).toBe(450000);
-    // All ten rates (16 Oct); the second example fills only some, including the required Reel and Story.
+    // All twelve rates (16 Oct; Brand + OTT 20 Nov); the second example fills only some, including the required ones.
     expect(parsed.rows[0].rateCards).toEqual([
       { format: "reel", amount: 18000 },
       { format: "entertainment", amount: 20000 },
+      { format: "brand", amount: 22000 },
+      { format: "ott", amount: 24000 },
       { format: "pr", amount: 25000 },
       { format: "political_reel", amount: 22000 },
       { format: "post", amount: 9000 },
@@ -229,6 +233,8 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
     ]);
     expect(parsed.rows[1].rateCards).toEqual([
       { format: "reel", amount: 9000 },
+      { format: "entertainment", amount: 10000 },
+      { format: "brand", amount: 11000 },
       { format: "post", amount: 4500 },
       { format: "story", amount: 3000 },
     ]);
@@ -261,6 +267,22 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       { format: "pr", amount: 2500 },
       { format: "entertainment", amount: 2000 },
       { format: "post", amount: 800 },
+      // 20 Nov: the old combined column also gives the page its Brand rate.
+      { format: "brand", amount: 2000 },
+    ]);
+  });
+
+  it("20 Nov: separate Entertainment, Brand and OTT columns each give their own rate; a Brand column beats the old combined one", async () => {
+    const separate = await parseImportSheet(Buffer.from(["Page Link,Entertainment Rate,Brand Rate,OTT Rate", "https://instagram.com/x.page,2000,3000,4000"].join("\n")), "pages.csv");
+    expect(separate.rows[0].rateCards).toEqual([
+      { format: "entertainment", amount: 2000 },
+      { format: "brand", amount: 3000 },
+      { format: "ott", amount: 4000 },
+    ]);
+    const both = await parseImportSheet(Buffer.from(["Page Link,Entertainment / Brand Rate,Brand Rate", "https://instagram.com/x.page,2000,3500"].join("\n")), "pages.csv");
+    expect(both.rows[0].rateCards).toEqual([
+      { format: "entertainment", amount: 2000 },
+      { format: "brand", amount: 3500 },
     ]);
   });
 
@@ -277,8 +299,11 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
       ["Repost", "repost"],
       ["Repost + Story", "repost_story"],
       ["Entertainment / Brand", "entertainment"],
+      ["Entertainment", "entertainment"],
       ["Reel + Story", "reel_story"],
-      ["Brand rate", "entertainment"],
+      ["Brand rate", "brand"],
+      ["OTT rate", "ott"],
+      ["OTT cost", "ott"],
       ["Political Story Rate", "political_story"],
       ["Repost + Story Rate", "repost_story"],
       ["Reels rate", "reel"],
@@ -293,7 +318,7 @@ describe("parseImportSheet — Page Name / Page Link template", () => {
     ]) {
       expect(rateFormatFromHeader(header), header).toBe(format);
     }
-    for (const header of ["Reels", "Posts", "Stories", "Images", "Image", "Brand", "Reposts", "Political reels", "Political stories", "Post URL", "Post link", "Posted link", "Video price", "Post", "Static", "Carousel", "PR", "Combo", ""]) {
+    for (const header of ["Reels", "Posts", "Stories", "Images", "Image", "Brand", "OTT", "Reposts", "Political reels", "Political stories", "Post URL", "Post link", "Posted link", "Video price", "Post", "Static", "Carousel", "PR", "Combo", ""]) {
       expect(rateFormatFromHeader(header), header).toBeNull();
     }
   });
@@ -456,4 +481,39 @@ describe("parseImportSheet — Grade and Group Link columns (16 Oct)", () => {
     expect(parseGroupLink("")).toBeNull();
     expect(parseGroupLink(null)).toBeNull();
   });
+});
+
+// 23 Nov — "YouTube and Facebook inventory add nahi ho rahi".
+describe("YouTube and Facebook page links", () => {
+  it("reads channel and page links as their platform; video and post links aren't a page", () => {
+    expect(otherPlatformRef("https://www.youtube.com/@TechBurner")).toEqual({ platform: "youtube", handle: "TechBurner" });
+    expect(otherPlatformRef("youtube.com/c/carryminati/videos")).toEqual({ platform: "youtube", handle: "carryminati" });
+    expect(otherPlatformRef("https://youtube.com/channel/UC0123456789abcdefghijkl")).toEqual({ platform: "youtube", handle: "UC0123456789abcdefghijkl" });
+    expect(otherPlatformRef("https://www.facebook.com/ghantaa/")).toEqual({ platform: "facebook", handle: "ghantaa" });
+    expect(otherPlatformRef("https://m.facebook.com/profile.php?id=1000123")).toEqual({ platform: "facebook", handle: "1000123" });
+    expect(otherPlatformRef("https://www.youtube.com/watch?v=abc")).toBeNull();
+    expect(otherPlatformRef("https://www.facebook.com/watch/?v=1")).toBeNull();
+    expect(pageRefFromText("@riya.eats")).toEqual({ platform: "instagram", handle: "riya.eats" });
+  });
+
+  it("an import sheet can mix Instagram, YouTube and Facebook pages", async () => {
+    const csv = ["Page Link,Reel Rate", "https://instagram.com/ig.page,1000", "https://www.youtube.com/@yt.channel,2000", "https://facebook.com/fb.page,3000"].join("\n");
+    const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+    expect(parsed.rows.map((r) => [r.platform, r.handle, r.problem])).toEqual([
+      ["instagram", "ig.page", null],
+      ["youtube", "yt.channel", null],
+      ["facebook", "fb.page", null],
+    ]);
+  });
+});
+
+// 23 Nov — "sheet se vendor ka number pick nahi kar raha": the column names people use.
+describe("vendor number columns", () => {
+  for (const header of ["Vendor Number", "Vendor No.", "Vendor Mobile Number", "WhatsApp Number", "Vendor Contact No.", "Vendor Contact *", "Vendor  Phone"]) {
+    it(`reads the vendor's number from "${header}"`, async () => {
+      const csv = [`Page Link,Vendor Name,${header}`, "https://instagram.com/x.page,Asha,+91 98765 43210"].join("\n");
+      const parsed = await parseImportSheet(Buffer.from(csv), "pages.csv");
+      expect(parsed.rows[0]).toMatchObject({ vendorName: "Asha", vendorPhone: "+919876543210", ownerRef: "+919876543210" });
+    });
+  }
 });

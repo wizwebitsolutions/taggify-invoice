@@ -1,4 +1,5 @@
 import { canUse, hasAccess, hasOwnAccess, isOwnScopeRole, type Asset, type Role } from "@/lib/api-client";
+import { FORMATS } from "@/lib/formats";
 
 /**
  * Creators (v1 "Inventory") permissions, mirroring server/src/modules/assets/routes.js:
@@ -63,6 +64,96 @@ export function normalizeHandle(raw: string): string | null {
   } else if (/^(?:https?:\/\/|www\.)/i.test(value)) return null;
   value = value.replace(/^@+/, "").trim();
   return /^[a-z0-9._]{1,30}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+/**
+ * The page's headline price: its first priced format in the app's order (Reel
+ * first). The same rate the plan builder shows and adds a page at.
+ */
+export function headlineRate(a: Pick<Asset, "rateCards">): number | null {
+  for (const f of FORMATS) {
+    const r = a.rateCards?.find((x) => x.format === f);
+    if (r && Number(r.amount) > 0) return Number(r.amount);
+  }
+  return null;
+}
+
+/** Cost filter bands (23 Nov — "filter according to cost of page"), on headlineRate. */
+export const COST_BANDS = [
+  { value: "all", label: "All", min: null, max: null },
+  { value: "lt5k", label: "Under ₹5,000", min: 0, max: 5000 },
+  { value: "5-10k", label: "₹5,000 – ₹10,000", min: 5000, max: 10000 },
+  { value: "10-25k", label: "₹10,000 – ₹25,000", min: 10000, max: 25000 },
+  { value: "25-50k", label: "₹25,000 – ₹50,000", min: 25000, max: 50000 },
+  { value: "50k-1l", label: "₹50,000 – ₹1,00,000", min: 50000, max: 100000 },
+  { value: "gt1l", label: "Over ₹1,00,000", min: 100000, max: null },
+  { value: "none", label: "No rate set", min: null, max: null },
+] as const;
+export type CostBand = (typeof COST_BANDS)[number]["value"];
+
+/** Whether a page's headline rate falls in `band` (lower bound inclusive, upper exclusive). */
+export function inCostBand(a: Pick<Asset, "rateCards">, band: string): boolean {
+  if (band === "all") return true;
+  const rate = headlineRate(a);
+  if (band === "none") return rate == null;
+  const b = COST_BANDS.find((x) => x.value === band);
+  if (!b || rate == null) return false;
+  return (b.min == null || rate >= b.min) && (b.max == null || rate < b.max);
+}
+
+/** Vendor filter options: every page owner, by name. */
+export function vendorOptions(pages: Pick<Asset, "owner">[]): { value: string; label: string }[] {
+  const byId = new Map<string, string>();
+  for (const p of pages) if (p.owner?.id && !byId.has(p.owner.id)) byId.set(p.owner.id, p.owner.name?.trim() || p.owner.email || p.owner.phoneNumber || "Unnamed vendor");
+  return [{ value: "all", label: "All" }, ...[...byId.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label }))];
+}
+
+/** Platforms a page can be on (23 Nov). Only Instagram pages are fetched automatically. */
+export type PagePlatform = "instagram" | "youtube" | "facebook";
+export const PLATFORM_LABEL: Record<PagePlatform, string> = { instagram: "Instagram", youtube: "YouTube", facebook: "Facebook" };
+
+/** A page's public profile link on its platform. */
+export function pageProfileUrl(handle: string, platform?: string | null): string {
+  const h = handle.replace(/^@+/, "");
+  const p = platform?.toLowerCase();
+  if (p === "youtube") return /^UC[\w-]{20,}$/.test(h) ? `https://www.youtube.com/channel/${h}` : `https://www.youtube.com/@${h}`;
+  if (p === "facebook") return /^\d+$/.test(h) ? `https://www.facebook.com/profile.php?id=${h}` : `https://www.facebook.com/${h}`;
+  return `https://www.instagram.com/${h}/`;
+}
+
+/**
+ * A page link or handle → { platform, handle } (23 Nov — "YouTube and Facebook
+ * inventory add nahi ho rahi"). youtube.com/@name, /c/, /user/, /channel/ and
+ * facebook.com/name or profile.php?id= are read as those platforms; anything
+ * else goes through the Instagram rules. A bare handle uses `fallback`.
+ * Mirrors server/src/modules/assets/importParser.js otherPlatformRef.
+ */
+export function pageRefFromInput(raw: string, fallback: PagePlatform = "instagram"): { platform: PagePlatform; handle: string } | null {
+  const value = raw.trim();
+  if (!value) return null;
+  const yt = value.match(/^(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/(@[^/?#\s]+|c\/[^/?#\s]+|user\/[^/?#\s]+|channel\/[^/?#\s]+)/i);
+  if (yt) {
+    const handle = yt[1].replace(/^@/, "").replace(/^(c|user|channel)\//i, "");
+    return /^[a-z0-9._-]{1,100}$/i.test(handle) ? { platform: "youtube", handle } : null;
+  }
+  const fb = value.match(/^(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)\/([^?#\s]+)(\?[^#\s]*)?/i);
+  if (fb) {
+    const path = fb[1].replace(/\/+$/, "");
+    if (/^profile\.php$/i.test(path)) {
+      const id = /[?&]id=(\d+)/.exec(fb[2] ?? "")?.[1];
+      return id ? { platform: "facebook", handle: id } : null;
+    }
+    const first = path.split("/")[0];
+    if (!first || ["watch", "reel", "reels", "share", "groups", "events", "photo", "photos", "story.php", "permalink.php", "login", "pages"].includes(first.toLowerCase())) return null;
+    return /^[a-z0-9._-]{1,100}$/i.test(first) ? { platform: "facebook", handle: first } : null;
+  }
+  if (/^(?:https?:\/\/|www\.)/i.test(value) && !/instagram\.com/i.test(value)) return null;
+  if (fallback !== "instagram" && !/instagram\.com/i.test(value)) {
+    const handle = value.replace(/^@+/, "").trim();
+    return /^[a-z0-9._-]{1,100}$/i.test(handle) ? { platform: fallback, handle } : null;
+  }
+  const ig = normalizeHandle(value);
+  return ig ? { platform: "instagram", handle: ig } : null;
 }
 
 export type Vendor = { id: string; owner: NonNullable<Asset["owner"]> | null; pages: Asset[]; followers: number; campaigns: number; pending: number; rejected: number };

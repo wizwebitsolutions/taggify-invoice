@@ -39,6 +39,14 @@ export function PlatformIcon({ platform, size = 18, className, always }: { platf
       </svg>
     );
   }
+  if (p === "facebook") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" role="img" aria-label="Facebook" className={cn("shrink-0", className)}>
+        <circle cx="12" cy="12" r="11" fill="#1877F2" />
+        <path d="M13.4 19v-5.6h1.9l.3-2.2h-2.2V9.8c0-.6.2-1.1 1.1-1.1h1.2V6.8c-.2 0-.9-.1-1.7-.1-1.7 0-2.9 1-2.9 3v1.6H9.2v2.2h1.9V19z" fill="#fff" />
+      </svg>
+    );
+  }
   if (p === "whatsapp") return <WhatsAppIcon size={size} className={className} />;
   return <span role="img" aria-label={platform} className={cn("inline-block shrink-0 rounded-full bg-fg-muted", className)} style={{ width: size * 0.5, height: size * 0.5 }} />;
 }

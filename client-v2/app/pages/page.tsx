@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/taggify/illustration";
 import { PlatformIcon } from "@/components/taggify/platform-icon";
+import { pageProfileUrl, pageRefFromInput, PLATFORM_LABEL, type PagePlatform } from "@/lib/creators";
 import { SegmentedFilter } from "@/components/taggify/segmented-filter";
 import { StatusPill } from "@/components/taggify/status-pill";
 import { audienceLabel, displayHandle, PageAvatar } from "@/components/finance/identity";
@@ -88,7 +89,7 @@ function MyPages() {
                     <p className="text-small text-muted-foreground">{fetching ? "Fetching from Instagram…" : p.lastScrapeError ? "Couldn't fetch the profile" : audienceLabel(p.followers, p.platform)}</p>
                   </div>
                   <a
-                    href={p.platform.toLowerCase() === "youtube" ? `https://www.youtube.com/@${p.handle}` : `https://www.instagram.com/${p.handle}/`}
+                    href={pageProfileUrl(p.handle, p.platform)}
                     target="_blank"
                     rel="noreferrer"
                     aria-label={`Open ${displayHandle(p.handle, p.platform)}`}
@@ -124,10 +125,15 @@ function AddPageDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   const { accessToken } = useAuth();
   const qc = useQueryClient();
   const [handle, setHandle] = useState("");
-  const [platform, setPlatform] = useState<"instagram" | "youtube">("instagram");
+  const [platform, setPlatform] = useState<PagePlatform>("instagram");
   const [category, setCategory] = useState("");
+  // A pasted YouTube / Facebook link sets the platform itself (23 Nov).
+  const ref = pageRefFromInput(handle, platform);
   const add = useMutation({
-    mutationFn: () => assetsApi.create(accessToken!, handle.trim().replace(/^@+/, ""), platform, category.trim() ? { category: category.trim() } : {}),
+    mutationFn: () => {
+      if (!ref) throw new Error(`That isn't a ${PLATFORM_LABEL[platform]} handle or page link.`);
+      return assetsApi.create(accessToken!, ref.handle, ref.platform, category.trim() ? { category: category.trim() } : {});
+    },
     onSuccess: async (a) => {
       await invalidateCreator(qc);
       toast.success(`${displayHandle(a.handle, a.platform)} added. It's waiting for approval.`);
@@ -147,7 +153,7 @@ function AddPageDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a page</DialogTitle>
-          <DialogDescription>We fetch followers and recent posts from the profile. An admin sets its rates and approves the page before it can be booked.</DialogDescription>
+          <DialogDescription>For Instagram we fetch followers and recent posts from the profile. An admin sets its rates and approves the page before it can be booked.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           <SegmentedFilter
@@ -157,11 +163,12 @@ function AddPageDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
             options={[
               { value: "instagram", label: "Instagram" },
               { value: "youtube", label: "YouTube" },
+              { value: "facebook", label: "Facebook" },
             ]}
             className="self-start"
           />
           <div className="flex flex-col gap-2">
-            <Label htmlFor="page-handle">{platform === "youtube" ? "Channel handle" : "Instagram handle"}</Label>
+            <Label htmlFor="page-handle">{platform === "youtube" ? "Channel link or handle" : platform === "facebook" ? "Facebook page link or name" : "Instagram handle or link"}</Label>
             <Input id="page-handle" placeholder="@yourpage" value={handle} onChange={(e) => setHandle(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
@@ -186,7 +193,7 @@ function AddPageDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
           >
             Cancel
           </Button>
-          <Button disabled={!handle.trim().replace(/^@+/, "") || add.isPending} onClick={() => add.mutate()}>
+          <Button disabled={!ref || add.isPending} onClick={() => add.mutate()}>
             Add page
           </Button>
         </DialogFooter>

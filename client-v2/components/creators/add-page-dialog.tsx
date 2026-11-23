@@ -7,7 +7,7 @@ import { Check, Copy } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, auth as authApi, type Asset } from "@/lib/api-client";
-import { canCreateLogin, canSetRatesOnCreate, normalizeHandle, type Grade } from "@/lib/creators";
+import { canCreateLogin, canSetRatesOnCreate, pageRefFromInput, PLATFORM_LABEL, type Grade } from "@/lib/creators";
 import { personLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { invalidatePages, usePageOwners } from "@/lib/queries/creators";
@@ -96,6 +96,8 @@ function AddPageForm({ login, setLogin, prefill, onClose, onFinished }: { login:
   const [category, setCategory] = useState("");
   const [grade, setGrade] = useState<Grade | "">("");
   const [groupLink, setGroupLink] = useState("");
+  // Typed for a YouTube / Facebook page (23 Nov); Instagram's are fetched.
+  const [followers, setFollowers] = useState("");
   const [rates, setRates] = useState(emptyRates);
   const [tried, setTried] = useState(false);
   const [done, setDone] = useState<{ handle: string; approved: boolean; login: NewLogin } | null>(null);
@@ -111,18 +113,21 @@ function AddPageForm({ login, setLogin, prefill, onClose, onFinished }: { login:
   const totalMatches = allMatches.length;
   const chosen = (owners.data ?? []).find((o) => o.id === ownerId) ?? null;
 
-  const clean = normalizeHandle(handle);
+  const ref = pageRefFromInput(handle);
+  const clean = ref?.handle ?? null;
+  const manualPlatform = ref && ref.platform !== "instagram";
   const emailOk = /^\S+@\S+\.\S+$/.test(newEmail.trim());
   const rateOk = (v: string) => v.trim() === "" || (/^\d+$/.test(v.trim()) && Number(v) > 0);
   const badLink = groupLink.trim() !== "" && !/^https?:\/\/\S+\.\S+/.test(groupLink.trim());
   const errors = {
     owner: login ? null : mode === "new" ? (emailOk ? null : "Enter the new creator's email. It's their login.") : ownerId ? null : "Pick the creator this page belongs to.",
-    handle: !handle.trim() ? "Enter the page's Instagram handle." : clean ? null : "That isn't an Instagram handle or profile link.",
+    handle: !handle.trim() ? "Enter the page's link or Instagram handle." : clean ? null : "That isn't an Instagram handle or an Instagram, YouTube or Facebook page link.",
+    followers: followers.trim() !== "" && !/^\d+$/.test(followers.trim()) ? "Followers is a whole number." : null,
     // No rate is mandatory (16 Oct); a typed one just has to be a whole rupee amount.
     rates: !Object.values(rates).every(rateOk) ? "Rates are whole rupees above ₹0." : null,
     groupLink: badLink ? "The group link needs to be a full web address (https://…)." : null,
   };
-  const valid = !errors.owner && !errors.handle && !errors.rates && !errors.groupLink;
+  const valid = !errors.owner && !errors.handle && !errors.rates && !errors.groupLink && !errors.followers;
 
   const create = useMutation({
     mutationFn: async () => {
@@ -141,8 +146,9 @@ function AddPageForm({ login, setLogin, prefill, onClose, onFinished }: { login:
         owner = r.user.id;
       }
       const rateCards = withRates ? rateCardsFrom(rates) : [];
-      const asset = await assetsApi.create(accessToken!, clean!, "instagram", {
+      const asset = await assetsApi.create(accessToken!, clean!, ref!.platform, {
         ownerId: owner,
+        ...(manualPlatform && followers.trim() ? { followers: Number(followers.trim()) } : {}),
         ...(category.trim() ? { category: category.trim() } : {}),
         ...(grade ? { grade } : {}),
         ...(groupLink.trim() ? { groupLink: groupLink.trim() } : {}),
@@ -232,7 +238,7 @@ function AddPageForm({ login, setLogin, prefill, onClose, onFinished }: { login:
       <DialogHeader>
         <DialogTitle>{prefill ? "Add as a new page" : "Add a page"}</DialogTitle>
         <DialogDescription>
-          {prefill ? `Register the page from the campaign sheet under the creator who gets paid for it. It's matched to the sheet row once it's saved.${prefill.note ? ` ${prefill.note}` : ""}` : "Register an Instagram page under the creator who gets paid for it. Followers and recent posts are fetched automatically."}
+          {prefill ? `Register the page from the campaign sheet under the creator who gets paid for it. It's matched to the sheet row once it's saved.${prefill.note ? ` ${prefill.note}` : ""}` : "Register a page under the creator who gets paid for it. Paste an Instagram, YouTube or Facebook link. Instagram followers and recent posts are fetched automatically."}
         </DialogDescription>
       </DialogHeader>
 
@@ -309,10 +315,20 @@ function AddPageForm({ login, setLogin, prefill, onClose, onFinished }: { login:
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <Label htmlFor="np-handle">Instagram handle or link</Label>
-          <Input id="np-handle" placeholder="@riya.eats" value={handle} onChange={(e) => setHandle(e.target.value)} aria-invalid={tried && !!errors.handle} />
+          <Label htmlFor="np-handle">Page link or Instagram handle</Label>
+          <Input id="np-handle" placeholder="@riya.eats or a YouTube / Facebook link" value={handle} onChange={(e) => setHandle(e.target.value)} aria-invalid={tried && !!errors.handle} />
+          {ref && ref.platform !== "instagram" && <p className="text-small text-muted-foreground">{PLATFORM_LABEL[ref.platform]} page: {ref.handle}</p>}
           {tried && errors.handle && <p className="text-small text-danger-helper">{errors.handle}</p>}
         </div>
+        {manualPlatform && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="np-followers">
+              {ref?.platform === "youtube" ? "Subscribers" : "Followers"} <span className="font-normal text-muted-foreground">(optional, not fetched for {PLATFORM_LABEL[ref!.platform]})</span>
+            </Label>
+            <Input id="np-followers" inputMode="numeric" placeholder="e.g. 250000" value={followers} onChange={(e) => setFollowers(e.target.value)} aria-invalid={tried && !!errors.followers} />
+            {tried && errors.followers && <p className="text-small text-danger-helper">{errors.followers}</p>}
+          </div>
+        )}
         <div className="flex flex-col gap-2">
           <Label htmlFor="np-category">
             Category <span className="font-normal text-muted-foreground">(optional)</span>

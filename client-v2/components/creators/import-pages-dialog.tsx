@@ -20,7 +20,7 @@ import {
   type ImportScrapedProfile,
   type PageOwner,
 } from "@/lib/api-client";
-import { canCreateLogin } from "@/lib/creators";
+import { canCreateLogin, pageProfileUrl } from "@/lib/creators";
 import { compactNumber, money, personLabel, plural } from "@/lib/format";
 import { invalidatePages } from "@/lib/queries/creators";
 import { FORMATS, formatLabel, joinLabels } from "@/lib/formats";
@@ -145,6 +145,9 @@ function useCreateCreatorLogin(owners: PageOwner[]) {
  * except on a creator's own sheet. A row whose page is already in Inventory is
  * an edit: an admin's changes are applied, anyone else's go for approval.
  */
+/** Instagram rows are looked up there; YouTube / Facebook rows (23 Nov) are imported with the sheet's numbers. */
+const isInstagram = (r: ImportPreviewRow) => (r.platform ?? "instagram") === "instagram";
+
 export function ImportPagesDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -243,7 +246,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
       setCategoryForAll(SHEET);
       setLive({});
       setLiveError(null);
-      const handles = [...new Set(data.rows.filter((r) => PLACEABLE.includes(r.status) && r.handle).map((r) => r.handle as string))];
+      const handles = [...new Set(data.rows.filter((r) => PLACEABLE.includes(r.status) && r.handle && isInstagram(r)).map((r) => r.handle as string))];
       if (handles.length) lookup.mutate({ handles, src });
     },
     onError: (e, src) => {
@@ -282,8 +285,8 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
 
   const placeable = (r: ImportPreviewRow) => (PLACEABLE.includes(r.status) || isUpdate(r)) && !!r.handle;
   const checkOf = (r: ImportPreviewRow): CheckState => {
-    // A page already in Inventory was confirmed on Instagram when it was added.
-    if (isUpdate(r)) return "found";
+    // A page already in Inventory was confirmed on Instagram when it was added; YouTube / Facebook pages (23 Nov) can't be looked up.
+    if (isUpdate(r) || !isInstagram(r)) return "found";
     const p = r.handle ? live[r.handle] : undefined;
     if (p) return "found";
     if (p === null) return "not-found";
@@ -298,6 +301,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
     return preview.rows
       .filter((r) => placeable(r) && checkOf(r) === "found" && (isCreator || ownerOf(r)))
       .map((r) => ({
+        platform: r.platform ?? "instagram",
         handle: r.handle as string,
         // The server puts a creator's rows under the creator whatever is sent.
         ownerId: isCreator ? (user?.id ?? "") : ownerOf(r),
@@ -312,7 +316,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preview, ownerByRow, ownerForAll, categoryByRow, live, lookup.isPending, isCreator, user?.id]);
 
-  const recheck = preview ? [...new Set(preview.rows.filter((r) => placeable(r) && (checkOf(r) === "unverified" || checkOf(r) === "not-found")).map((r) => r.handle as string))] : [];
+  const recheck = preview ? [...new Set(preview.rows.filter((r) => placeable(r) && isInstagram(r) && (checkOf(r) === "unverified" || checkOf(r) === "not-found")).map((r) => r.handle as string))] : [];
   const waitingForCreator = !preview || isCreator ? 0 : preview.rows.filter((r) => placeable(r) && (checkOf(r) === "found" || checkOf(r) === "checking") && !ownerOf(r)).length;
 
   const updating = toImport.filter((row) => preview?.rows.some((r) => isUpdate(r) && r.handle === row.handle)).length;
@@ -508,7 +512,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
                         </span>
                       )}
                       {r.handle ? (
-                        <a href={`https://www.instagram.com/${r.handle}/`} target="_blank" rel="noreferrer" className="block truncate text-small text-muted-foreground hover:underline">
+                        <a href={pageProfileUrl(r.handle ?? "", r.platform)} target="_blank" rel="noreferrer" className="block truncate text-small text-muted-foreground hover:underline">
                           {label}
                         </a>
                       ) : (
@@ -693,7 +697,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
           <span className="font-semibold text-foreground">Followers</span>
           {!isCreator ? (
             <>
-              , <span className="font-semibold text-foreground">Entertainment / Brand Rate</span>, <span className="font-semibold text-foreground">Reel Rate</span>, <span className="font-semibold text-foreground">Story Rate</span> and the other rate columns in whole rupees. Those three are needed for a new page.
+              , <span className="font-semibold text-foreground">Entertainment Rate</span>, <span className="font-semibold text-foreground">Brand Rate</span>, <span className="font-semibold text-foreground">Reel Rate</span>, <span className="font-semibold text-foreground">Story Rate</span> and the other rate columns (OTT Rate is optional) in whole rupees. Those four are needed for a new page.
               A page already in Inventory is updated from its row{isAdmin ? "" : " once an admin approves the changes"}.
             </>
           ) : (

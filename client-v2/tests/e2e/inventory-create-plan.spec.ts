@@ -187,6 +187,34 @@ test.describe("Inventory → Create plan", () => {
     await expect(page).toHaveURL(/\/plans\/new\?assetIds=p03$/);
   });
 
+  test("the header checkbox ticks every page across the pager and unticks them all (23 Nov)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await api(page);
+    await page.goto("/creators");
+    const bar = page.getByTestId("selection-bar");
+    const all = page.getByRole("checkbox", { name: "Select all pages" });
+    await all.click();
+    await expect(bar).toContainText("12 of 12 selected");
+    await expect(all).toBeChecked();
+    await page.getByRole("button", { name: "Next page" }).click();
+    await expect(page.getByRole("checkbox", { name: "Select page.p12" })).toBeChecked();
+    await all.click();
+    await expect(bar).toHaveCount(0);
+  });
+
+  test("ticking this page from the menu leaves the bar's Select all to widen it (23 Nov)", async ({ page }) => {
+    await signIn(page, "ADMIN");
+    await api(page);
+    await page.goto("/creators");
+    const bar = page.getByTestId("selection-bar");
+    await page.getByRole("button", { name: "Selection options" }).click();
+    await page.getByRole("menuitem", { name: /This page/ }).click();
+    await expect(bar).toContainText("10 of 12 selected");
+    await bar.getByRole("button", { name: "Select all 12" }).click();
+    await expect(bar).toContainText("12 of 12 selected");
+    await expect(bar.getByRole("button", { name: /^Select all/ })).toHaveCount(0);
+  });
+
   test("no Create plan for someone who can't make plans", async ({ page }) => {
     await signIn(page, "FINANCE");
     await api(page);

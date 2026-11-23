@@ -906,15 +906,31 @@ export const billing = {
 };
 
 // ── Assets ──────────────────────────────────────────────────────────
+// Bulk page actions go up in batches: the server takes at most 500 ids per call (assets/schemas.js).
+const BULK_BATCH = 100;
+function chunk<T>(xs: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
+}
+
 export const assets = {
   list: (token: string) => request<Asset[]>("/assets", { token }),
-  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string; rateCards?: { format: string; amount: number }[]; grade?: "A" | "B" | "C" | null; groupLink?: string | null } = {}) =>
+  create: (token: string, handle: string, platform = "instagram", opts: { category?: string; ownerId?: string; rateCards?: { format: string; amount: number }[]; grade?: "A" | "B" | "C" | null; groupLink?: string | null; followers?: number } = {}) =>
     request<Asset>("/assets", { method: "POST", token, body: { handle, platform, ...opts } }),
   // Remove a page (16 Oct): ADMIN role + inventory.edit. 409 ASSET_IN_USE for a page with posts or on an approved plan.
   remove: (token: string, assetId: string) => request<{ id: string }>(`/assets/${assetId}`, { method: "DELETE", token }),
   // Bulk delete (19 Oct), same rules as remove: pages with posts or on an approved plan come back in `skipped` with the reason.
-  removeMany: (token: string, assetIds: string[]) =>
-    request<{ deleted: string[]; skipped: { id: string; reason: string }[] }>("/assets/bulk-delete", { method: "POST", token, body: { assetIds } }),
+  // Sent in batches (23 Nov): "Select all" can tick more than the server's 500-id cap, and each page is a few DB round trips.
+  removeMany: async (token: string, assetIds: string[]) => {
+    const out: { deleted: string[]; skipped: { id: string; reason: string }[] } = { deleted: [], skipped: [] };
+    for (const ids of chunk(assetIds, BULK_BATCH)) {
+      const r = await request<typeof out>("/assets/bulk-delete", { method: "POST", token, body: { assetIds: ids } });
+      out.deleted.push(...r.deleted);
+      out.skipped.push(...r.skipped);
+    }
+    return out;
+  },
   // A planner's suggested edit (16 Oct): parked on the row until an admin decides. Only the keys sent are proposed.
   // Vendor contact details from Inventory (13 Nov): admin direct, plan maker suggests, inventory.approve decides.
   editVendor: (token: string, vendorId: string, body: VendorEdit) => request<VendorContact>(`/assets/vendors/${vendorId}`, { method: "PUT", token, body }),
@@ -942,7 +958,11 @@ export const assets = {
   // callers should invalidate ["assets"] and refetch rather than read this
   // directly.
   // Bulk version for a selection — queues background scrapes, returns at once.
-  refreshProfiles: (token: string, assetIds: string[]) => request<{ queued: number }>("/assets/refresh-profiles", { method: "POST", token, body: { assetIds } }),
+  refreshProfiles: async (token: string, assetIds: string[]) => {
+    let queued = 0;
+    for (const ids of chunk(assetIds, BULK_BATCH)) queued += (await request<{ queued: number }>("/assets/refresh-profiles", { method: "POST", token, body: { assetIds: ids } })).queued;
+    return { queued };
+  },
   refreshProfile: (token: string, assetId: string) =>
     request<{ id: string; handle: string; followers: number }>(`/assets/${assetId}/refresh-profile`, { method: "POST", token }),
   // Inventory card's cover photo — routed through our own server instead of
@@ -995,6 +1015,8 @@ export interface ImportCurrentValues {
 export interface ImportPreviewRow {
   rowNumber: number;
   rawHandle: string;
+  /** 23 Nov: only "instagram" rows are looked up on Instagram. */
+  platform?: string;
   handle: string | null;
   /** The sheet's "Page Name" column — saved as the page's display name. */
   pageName?: string | null;
@@ -1055,6 +1077,8 @@ export interface ImportScrapedProfile {
 }
 
 export interface ImportAssetRow {
+  /** 23 Nov: "instagram" (default), "youtube" or "facebook". */
+  platform?: string;
   handle: string;
   ownerId: string;
   category?: string | null;
@@ -1557,7 +1581,7 @@ export interface PlanItemInput {
 // One field set shared by create/update — every field beyond name/clientName
 // is optional, matching the wizard's "fill what you have, come back later"
 // shape (see the Plans list's completeness indicator).
-export type SheetFormat = "breakdown" | "summary";
+export type SheetFormat = "breakdown" | "summary" | "comparison";
 
 /** One page's answer from POST /plans/check-pages (17 Oct). */
 export interface PageCheckResult {
@@ -1597,6 +1621,8 @@ export interface SheetImportResult {
   createdCount: number;
   addedCount: number;
   failures: { handle: string; reason: string }[];
+  /** 23 Nov: vendors named in the sheet with no Taggify account yet; their new pages stay under the planner. */
+  unmatchedVendors?: { name: string | null; phone: string | null; handles: string[] }[];
   plan: Plan;
 }
 
@@ -1729,7 +1755,7 @@ export const plans = {
     request<NonNullable<Plan["invoiceAttachment"]>>(`/plans/${id}/invoice-attachment`, { method: "POST", token, body: { publicId, fileName } }),
   removeInvoiceAttachment: (token: string, id: string) => request<void>(`/plans/${id}/invoice-attachment`, { method: "DELETE", token }),
   importSheetUrl: (token: string, url: string) => request<{ csv: string }>("/plans/import-sheet-url", { method: "POST", token, body: { url } }),
-  importSheetPages: (token: string, id: string, rows: { handle: string; category?: string; followers?: number; format?: string; cost?: number; postsPerProfile?: number }[]) =>
+  importSheetPages: (token: string, id: string, rows: { handle: string; category?: string; followers?: number; format?: string; cost?: number; postsPerProfile?: number; vendorName?: string; vendorPhone?: string }[]) =>
     request<SheetImportResult>(`/plans/${id}/import-sheet-pages`, { method: "POST", token, body: { rows } }),
   // "Upload plan" from a whole-plan sheet (user request, 22 Sep). The CSV
   // comes from importSheetUrl above and is parsed client-side

@@ -4,7 +4,9 @@ import { z } from "zod";
  * Post formats ("cost types"). Ten prices per page (16 Oct):
  *
  *   reel             Reel                    bookable, rate, required
- *   entertainment    Entertainment / Brand   bookable, rate
+ *   entertainment    Entertainment           bookable, rate
+ *   brand            Brand                   bookable, rate (20 Nov: split from Entertainment)
+ *   ott              OTT                     bookable, rate, optional (20 Nov)
  *   pr               PR                      bookable, rate
  *   political_reel   Political               bookable, rate
  *   post             Static & Carousel       bookable, rate
@@ -28,6 +30,8 @@ import { z } from "zod";
 export const FORMATS = [
   "reel",
   "entertainment",
+  "brand",
+  "ott",
   "pr",
   "political_reel",
   "post",
@@ -67,7 +71,9 @@ export const COMBO_PART_FORMATS = [...new Set(Object.values(COMBOS).flat())];
 
 export const FORMAT_LABELS = {
   reel: "Reel",
-  entertainment: "Entertainment / Brand",
+  entertainment: "Entertainment",
+  brand: "Brand",
+  ott: "OTT",
   pr: "PR",
   political_reel: "Political",
   post: "Static & Carousel",
@@ -103,12 +109,17 @@ export function postsPerUnit(format) {
 const ALIASES = new Map([
   ["reel", "reel"],
   ["entertainment", "entertainment"],
-  ["brand", "entertainment"],
+  ["entertainment reel", "entertainment"],
+  // Sheets from before 20 Nov had one combined column: it still reads as Entertainment.
   ["entertainment/brand", "entertainment"],
   ["entertainment / brand", "entertainment"],
   ["entertainment & brand", "entertainment"],
   ["entertainment and brand", "entertainment"],
-  ["brand reel", "entertainment"],
+  ["brand", "brand"],
+  ["brand reel", "brand"],
+  ["ott", "ott"],
+  ["ott reel", "ott"],
+  ["ott promotion", "ott"],
   ["pr", "pr"],
   ["p.r.", "pr"],
   ["p.r", "pr"],

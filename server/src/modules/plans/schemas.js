@@ -28,7 +28,8 @@ const overrideFields = {
 
 // The plan sheet's layout (8 Oct): "breakdown" = a row per page category
 // (sample plan 1), "summary" = one campaign-overview block (sample plan 2).
-const sheetFormatSchema = z.enum(["breakdown", "summary"]);
+// "comparison" (23 Nov): one Overview tab for a whole pitch group, plans side by side.
+const sheetFormatSchema = z.enum(["breakdown", "summary", "comparison"]);
 
 // Flat discount in rupees off the client subtotal, before GST (16 Oct). Null/0 = none.
 const discountSchema = z.number().min(0).max(9_999_999_999).nullable().optional();
@@ -157,6 +158,9 @@ export const planSheetRowSchema = z.object({
   cost: z.number().min(0).optional(),
   clientCost: z.number().min(0).optional(),
   postsPerProfile: z.number().int().min(1).max(1000).optional(),
+  // 23 Nov: who owns the page, so a new page lands under its vendor, not the planner.
+  vendorName: z.string().trim().max(100).optional(),
+  vendorPhone: z.string().trim().max(30).optional(),
 });
 
 export const importSheetPagesSchema = z.object({

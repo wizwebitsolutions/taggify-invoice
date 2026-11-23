@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPlanSheetTabs, planSheetTabTitles, pageTabTitle, categoryLabel, splitByWeight, reconcilePlanTabRequests, tabStatusRequests, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, EXECUTION_TEMPLATE_TITLE } from "./planSheet.js";
+import { buildComparisonOverview, comparisonOverviewTitle, buildPlanSheetTabs, planSheetTabTitles, pageTabTitle, categoryLabel, splitByWeight, reconcilePlanTabRequests, tabStatusRequests, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, EXECUTION_TEMPLATE_TITLE } from "./planSheet.js";
 
 /**
  * user request, 10 Sep — "plan will be of google sheet, not in pdf" then
@@ -23,6 +23,16 @@ const basePlan = {
   overview: { totalFollowers: 100000, totalPosts: 2, expectedImpressions: 10000, subtotal: 8000, gstAmount: 0, total: 8000 },
   items: [{ format: "reel", postsPerProfile: 2, displayCost: 8000, asset: { handle: "demo.page", category: "Meme page", followers: 100000 } }],
 };
+
+/**
+ * 23 Nov: the overviews and page tabs are cloned from the reference sheets —
+ * they start in column B and merge cells, so a row has gaps. `filled` is a
+ * row's values left to right without the gaps; amounts are real numbers now
+ * (the ₹ is a number format), not "₹8,000" text.
+ */
+const filled = (row) => row.filter((v) => v !== "");
+const rowOf = (rows, first) => rows.map(filled).find((r) => r[0] === first);
+const styleAt = (layout, r, c) => layout.cells.find((cell) => cell.r === r && cell.c === c)?.style;
 
 describe("planSheetTabTitles — unique within a pitch group's file", () => {
   // Each pitch group has its own spreadsheet (Plan A, B, C… in one file), so
@@ -63,9 +73,12 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
   it("builds non-empty overview and page tabs for a normal plan, rows and specs in lockstep", () => {
     const t = buildPlanSheetTabs(basePlan);
 
-    expect(t.overviewRows.length).toBe(t.overviewRowSpecs.length); // rows/specs never drift apart
+    // The layout carries the same grid the values are written from, every row the full width.
+    expect(t.overviewRowSpecs.kind).toBe("layout");
+    expect(t.overviewRowSpecs.values).toBe(t.overviewRows);
+    expect(t.overviewRows.every((r) => r.length === t.overviewNumCols)).toBe(true);
     expect(t.pageTabs).toHaveLength(1);
-    expect(t.pageTabs[0].rows.length).toBe(t.pageTabs[0].rowSpecs.length);
+    expect(t.pageTabs[0].rowSpecs.values).toBe(t.pageTabs[0].rows);
     expect(t.pageTabs[0].numCols).toBe(6);
     // Client details (user request, 10 Sep) stay on the sheet.
     expect(t.overviewRows.some((r) => r.join(" ").includes("Acme Inc"))).toBe(true);
@@ -98,7 +111,7 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
     const pageRow = meme.rows.find((r) => r[0] === 1);
     expect(pageRow[1]).toBe("a.page");
     expect(pageRow[2]).toBe("https://instagram.com/a.page");
-    expect(meme.rowSpecs[meme.rows.indexOf(pageRow)].links).toEqual({ 2: "https://instagram.com/a.page" });
+    expect(styleAt(meme.rowSpecs, meme.rows.indexOf(pageRow), 2)).toMatchObject({ link: "https://instagram.com/a.page", underline: true });
     expect(meme.rows.flat().join(" ")).not.toMatch(/HYPERLINK|@a\.page/);
     // Each tab ends with a followers total.
     expect(meme.rows.at(-1)).toEqual(["", "Total", "", "50K", "", 1]);
@@ -133,7 +146,8 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
 
     expect(withoutGst).not.toContain("GST (18%)");
     expect(withGst).toContain("GST (18%)");
-    expect(withGst).toContain("₹9,440");
+    expect(rowOf(buildPlanSheetTabs({ ...basePlan, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 } }).overviewRows, "GST (18%)")).toEqual(["GST (18%)", 1440]);
+    expect(withGst).toContain("9440");
   });
 
   it("{ internal: true } uses real costs, adds a Cost/Post column, and shows the quote, margin and budget", () => {
@@ -153,7 +167,7 @@ describe("buildPlanSheetTabs — values (doesn't crash on the shapes forClientPd
 
     expect(t.pageTabs[0].numCols).toBe(7);
     expect(t.pageTabs[0].rows.flat()).toContain("Cost/Post");
-    expect(flatOverview).toContain("₹5,000"); // 2 × 2,500 real cost, not the overridden 8,000
+    expect(rowOf(t.overviewRows, "Total")).toContain(5000); // 2 × 2,500 real cost, not the overridden 8,000
     expect(flatOverview).toContain("Quoted to client");
     expect(flatOverview).toContain("Over Budget");
     expect(t.pageTabs[0].title).toMatch(/^INTERNAL — Meme Pages — /);
@@ -175,35 +189,33 @@ describe("sheet formats (8 Oct)", () => {
 
   it("breakdown (sample 1): a row per category, with the quote split by what each category's pages cost", () => {
     const t = buildPlanSheetTabs({ ...twoCategories, sheetFormat: "breakdown" });
-    const header = t.overviewRows.find((r) => r[0] === "Particulars");
-    expect(header).toEqual(["Particulars", "Utilization", "Followers Count (in Millions)", "Followers Range", "No. of Items", "Total Final Cost", "Expected Views/Reach (in Millions)"]);
-    const news = t.overviewRows.find((r) => r[0] === "News Pages");
-    const biz = t.overviewRows.find((r) => r[0] === "Business Pages");
+    expect(rowOf(t.overviewRows, "Particulars")).toEqual(["Particulars", "Utilization", "Followers Count (in Millions)", "Followers Range", "No. of Items", "Total Final Cost", "Expected Views/Reach (in Millions)"]);
     // Pages cost 30,000 (News) and 20,000 (Business): the 1,00,000 quote splits 60/40.
-    expect(news).toEqual(["News Pages", "Instagram Reel", "9", "9M-9M", 1, "₹60,000", "0.4"]);
-    expect(biz).toEqual(["Business Pages", "Instagram Reel", "0.4", "400K-400K", 2, "₹40,000", "0.5"]);
-    expect(t.overviewRows.find((r) => r[0] === "Total")).toEqual(["Total", "", "9.4", "", 3, "₹1,00,000", "0.9"]);
-    expect(t.overviewRows.find((r) => r[4] === "GST (18%)")?.[5]).toBe("₹18,000");
-    expect(t.overviewNumCols).toBe(7);
+    expect(rowOf(t.overviewRows, "News Pages")).toEqual(["News Pages", "Instagram Reel", 9, "9M-9M", 1, 60000, 0.4]);
+    expect(rowOf(t.overviewRows, "Business Pages")).toEqual(["Business Pages", "Instagram Reel", 0.4, "400K-400K", 2, 40000, 0.5]);
+    expect(rowOf(t.overviewRows, "Total")).toEqual(["Total", 9.4, 3, 100000, 0.9]);
+    expect(rowOf(t.overviewRows, "GST (18%)")).toEqual(["GST (18%)", 18000]);
+    // Column A is the sample's narrow margin; the table is B:H.
+    expect(t.overviewNumCols).toBe(8);
   });
 
   it("summary (sample 2): one campaign-overview block with CPV", () => {
     const t = buildPlanSheetTabs({ ...twoCategories, sheetFormat: "summary" });
-    const rows = Object.fromEntries(t.overviewRows.filter((r) => r.length === 2).map((r) => [r[0], r[1]]));
+    const rows = Object.fromEntries(t.overviewRows.map(filled).filter((r) => r.length === 2).map((r) => [r[0], r[1]]));
     expect(rows).toMatchObject({
       "Total Followers Targeted Overall": "9 Million +",
       "Total Deliverables": 3,
       "Expected Impressions/Views": "900K +",
-      Cost: "₹1,00,000",
-      CPV: "0.11",
+      Cost: 100000,
+      CPV: 0.11,
     });
-    expect(t.overviewNumCols).toBe(2);
+    expect(t.overviewNumCols).toBe(5);
     // Same category page tabs either way.
     expect(t.pageTabs.map((tab) => tab.title.split(" — ")[0])).toEqual(["News Pages", "Business Pages"]);
   });
 
   it("no format saved yet means breakdown", () => {
-    expect(buildPlanSheetTabs(twoCategories).overviewRows.some((r) => r[0] === "Particulars")).toBe(true);
+    expect(rowOf(buildPlanSheetTabs(twoCategories).overviewRows, "Particulars")).toBeDefined();
   });
 
   it("category labels read like the samples' tab names", () => {
@@ -375,8 +387,8 @@ describe("Active / Not active — internal file only (29 Sep; client mark droppe
       expect(planSheetTabTitles({ ...draft, status }).pagesTitle).toBe("Q1 Meme Page Push · Plan B");
       expect(JSON.stringify(t.overviewRows)).not.toMatch(/ACTIVE/i);
       expect(JSON.stringify(t.pageTabs.map((p) => p.rows))).not.toMatch(/ACTIVE/i);
-      expect(t.overviewRowSpecs[0].cellTypes[0]).toBe("navyBand");
-      expect(t.pageTabs[0].rowSpecs[0].cellTypes[0]).toBe("tableHeader");
+      // The client page tab opens straight on its header row.
+      expect(t.pageTabs[0].rows[0][0]).toBe("S No");
     }
     expect(tabStatusRequests(3, approved)).toEqual([]);
     expect(tabStatusRequests(3, approved, { internal: false })).toEqual([]);
@@ -404,11 +416,12 @@ describe("Active / Not active — internal file only (29 Sep; client mark droppe
     const on = buildPlanSheetTabs(annotated(approved), internal);
     const off = buildPlanSheetTabs(annotated(draft), internal);
 
-    expect(on.overviewRows[0][0]).toContain("ACTIVE");
-    expect(on.overviewRowSpecs[0]).toMatchObject({ cellTypes: ["statusActive"], merge: true });
+    // Overview: the merged row under the title (empty in the client file). Page tabs: the first row.
+    expect(on.overviewRows[4][1]).toBe("● ACTIVE — approved plan");
+    expect(off.overviewRows[4][1]).toContain("NOT ACTIVE");
     expect(on.pageTabs[0].rows[0][0]).toContain("ACTIVE");
-    expect(off.overviewRows[0][0]).toContain("NOT ACTIVE");
-    expect(off.pageTabs[0].rowSpecs[0]).toMatchObject({ cellTypes: ["statusInactive"], merge: true });
+    expect(off.pageTabs[0].rows[0][0]).toContain("NOT ACTIVE");
+    expect(on.pageTabs[0].rowSpecs.merges[0]).toEqual({ r: 0, c: 0, r2: 1, c2: 7 });
 
     const [green] = buildFormatRequests(7, on.pageTabs[0].rowSpecs, on.pageTabs[0].numCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
     const [red] = buildFormatRequests(7, off.pageTabs[0].rowSpecs, off.pageTabs[0].numCols).filter((r) => r.repeatCell?.cell?.userEnteredFormat?.backgroundColor);
@@ -427,22 +440,21 @@ describe("Active / Not active — internal file only (29 Sep; client mark droppe
 
 describe("Flat discount rows (16 Oct)", () => {
   const discounted = { ...basePlan, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, subtotal: 8000, discount: 1000, taxable: 7000, gstAmount: 1260, total: 8260 } };
-  const cell = (rows, label) => rows.find((r) => r.includes(label));
-
   it("breakdown: Discount and After Discount sit between the Total row and GST", () => {
     const t = buildPlanSheetTabs(discounted);
-    expect(cell(t.overviewRows, "Discount")).toContain("- ₹1,000");
-    expect(cell(t.overviewRows, "After Discount")).toContain("₹7,000");
-    expect(cell(t.overviewRows, "GST (18%)")).toContain("₹1,260");
-    const labels = t.overviewRows.map((r) => r[4]);
+    // A negative number, shown as -₹1,000 by the cell's ₹ format.
+    expect(rowOf(t.overviewRows, "Discount")).toEqual(["Discount", -1000]);
+    expect(rowOf(t.overviewRows, "After Discount")).toEqual(["After Discount", 7000]);
+    expect(rowOf(t.overviewRows, "GST (18%)")).toEqual(["GST (18%)", 1260]);
+    const labels = t.overviewRows.map((r) => filled(r)[0]);
     expect(labels.indexOf("Discount")).toBeLessThan(labels.indexOf("GST (18%)"));
   });
 
   it("summary: Discount and Cost After Discount follow Cost", () => {
     const t = buildPlanSheetTabs({ ...discounted, sheetFormat: "summary" });
-    const labels = t.overviewRows.map((r) => r[0]);
+    const labels = t.overviewRows.map((r) => filled(r)[0]);
     expect(labels.indexOf("Cost")).toBeLessThan(labels.indexOf("Discount"));
-    expect(cell(t.overviewRows, "Cost After Discount")).toContain("₹7,000");
+    expect(rowOf(t.overviewRows, "Cost After Discount")).toEqual(["Cost After Discount", 7000]);
   });
 
   it("no discount → no discount rows at all", () => {
@@ -566,7 +578,7 @@ describe("plan sheet followers read as K / M", () => {
     const t = buildPlanSheetTabs(basePlan);
     expect(t.pageTabs[0].rows.some((r) => r[1] === "demo.page" && r[3] === "100K")).toBe(true);
     const summary = buildPlanSheetTabs({ ...basePlan, sheetFormat: "summary" });
-    expect(summary.overviewRows.find((r) => r[0] === "Total Followers Targeted Overall")?.[1]).toBe("100K +");
+    expect(rowOf(summary.overviewRows, "Total Followers Targeted Overall")).toEqual(["Total Followers Targeted Overall", "100K +"]);
   });
 });
 
@@ -580,8 +592,171 @@ describe("internal Margin is after the discount (16 Oct review)", () => {
     };
     for (const sheetFormat of ["breakdown", "summary"]) {
       const t = buildPlanSheetTabs({ ...plan, sheetFormat }, { internal: true });
-      const margin = t.overviewRows.find((r) => r.includes("Margin"));
-      expect(margin).toContain("₹4,000"); // 7000 − 3000, not 8000 − 3000
+      expect(rowOf(t.overviewRows, "Margin")).toEqual(["Margin", 4000]); // 7000 − 3000, not 8000 − 3000
     }
+  });
+});
+
+// 23 Nov — "overview of multiple plans should be in one tab only" (sample 3):
+// the "comparison" layout puts Plan A / Plan B / … side by side in one Overview tab.
+describe("Plan comparison layout (23 Nov)", () => {
+  const planA = { ...basePlan, id: "plan-aaaaaa", pitchGroupId: "plan-aaaaaa", name: "Bengal push", variantLabel: "Plan A", status: "APPROVED", notes: null };
+  const planB = {
+    ...basePlan,
+    id: "plan-bbbbbb",
+    pitchGroupId: "plan-aaaaaa",
+    name: "Bengal push",
+    variantLabel: "Plan B",
+    status: "DRAFT",
+    notes: "Two posts per page",
+    overview: { totalFollowers: 33_000_000, totalPosts: 600, expectedImpressions: 22_000_000, subtotal: 600000, gstAmount: 0, total: 600000 },
+  };
+  const renames = (reqs) => reqs.filter((r) => r.updateSheetProperties).map((r) => [r.updateSheetProperties.properties.sheetId, r.updateSheetProperties.properties.title]);
+  const deletes = (reqs) => reqs.filter((r) => r.deleteSheet).map((r) => r.deleteSheet.sheetId);
+  const sheetsFor = (...plans) => plans.map((plan) => ({ plan, ...buildPlanSheetTabs(plan), overviewTitle: null }));
+
+  it("one table with a column per plan: followers, posts, views, cost and CPV", () => {
+    const { rows, numCols } = buildComparisonOverview([planA, planB]);
+    // A margin column, the label pair B:C, then a merged pair of columns per plan.
+    expect(numCols).toBe(7);
+    const lines = rows.map(filled);
+    expect(lines).toContainEqual(["Plan A", "Plan B"]);
+    expect(lines).toContainEqual(["Total Followers Targeted Overall", "100K +", "33 Million +"]);
+    expect(lines).toContainEqual(["Total Posts", 2, 600]);
+    expect(lines).toContainEqual(["Expected Impressions/Views", "10K +", "22 Million +"]);
+    expect(lines).toContainEqual(["Cost", 8000, 600000]);
+    expect(lines).toContainEqual(["CPV", 0.8, 0.03]);
+    // The client file shows no Active / Not active anywhere.
+    expect(rows.flat().join(" ")).not.toMatch(/Active/);
+    // Each plan's own brief follows the standard notes, labelled.
+    expect(lines).toContainEqual(["Plan B: Two posts per page"]);
+  });
+
+  it("the internal file adds status, what was quoted and the margin per plan", () => {
+    const internalOf = (p, cost) => ({ ...p, internal: { computedFollowers: 100000, computedPosts: 2, computedImpressions: 10000 }, items: [{ ...p.items[0], cost }] });
+    const { rows } = buildComparisonOverview([internalOf(planA, 3000), internalOf(planB, 1000)], { internal: true });
+    const lines = rows.map(filled);
+    expect(lines).toContainEqual(["Status", "Active", "Not active"]);
+    expect(lines).toContainEqual(["Internal Cost", 6000, 2000]);
+    expect(lines).toContainEqual(["Quoted to client", 8000, 600000]);
+    expect(lines).toContainEqual(["Margin", 2000, 598000]);
+  });
+
+  it("titles: one per group, never read as a single plan's tab", () => {
+    expect(comparisonOverviewTitle([planA, planB])).toBe("Overview of Bengal push · All plans");
+    expect(comparisonOverviewTitle([planA, planB], { internal: true })).toBe("INTERNAL — Overview of Bengal push · All plans (aaaaaa)");
+  });
+
+  it("switching to comparison turns Plan A's old Overview into the shared one (same gid) and removes Plan B's", () => {
+    const existing = [
+      { sheetId: 1, title: "Overview of Bengal push · Plan A" },
+      { sheetId: 2, title: pageTabTitle(planA, "Meme Pages") },
+      { sheetId: 3, title: "Overview of Bengal push · Plan B" },
+      { sheetId: 4, title: pageTabTitle(planB, "Meme Pages") },
+    ];
+    const combinedTitle = comparisonOverviewTitle([planA, planB]);
+    const reqs = reconcilePlanTabRequests(existing, sheetsFor(planA, planB), { combinedTitle });
+    expect(renames(reqs)).toEqual([[1, combinedTitle]]);
+    expect(deletes(reqs)).toEqual([3]); // page tabs stay
+  });
+
+  it("a comparison tab already there is kept as is", () => {
+    const combinedTitle = comparisonOverviewTitle([planA, planB]);
+    const existing = [
+      { sheetId: 9, title: combinedTitle },
+      { sheetId: 2, title: pageTabTitle(planA, "Meme Pages") },
+      { sheetId: 4, title: pageTabTitle(planB, "Meme Pages") },
+    ];
+    expect(reconcilePlanTabRequests(existing, sheetsFor(planA, planB), { combinedTitle })).toEqual([]);
+  });
+
+  it("switching back to per-plan overviews removes the shared tab instead of leaving it behind", () => {
+    const existing = [{ sheetId: 9, title: "Overview of Old name · All plans" }];
+    const perPlan = [planA, planB].map((plan) => ({ plan, ...buildPlanSheetTabs(plan) }));
+    const reqs = reconcilePlanTabRequests(existing, perPlan, { combinedPattern: comparisonOverviewTitle([planA, planB]) });
+    expect(deletes(reqs)).toEqual([9]);
+  });
+});
+
+// 23 Nov — "exact clone of the sheet … same font, highlight, size, cell size …
+// for all 3 types of plan overview". The numbers below are read from the three
+// reference files (fonts, sizes, fills, merges, column widths).
+describe("cloned from the reference sheets (23 Nov)", () => {
+  const rgb = (h) => ({ red: parseInt(h.slice(0, 2), 16) / 255, green: parseInt(h.slice(2, 4), 16) / 255, blue: parseInt(h.slice(4, 6), 16) / 255 });
+  const a1 = (m) => `${String.fromCharCode(65 + m.c)}${m.r + 1}:${String.fromCharCode(64 + m.c2)}${m.r2}`;
+  const gst = { ...basePlan, notes: null, isGstPlan: true, gstPercent: 18, overview: { ...basePlan.overview, gstAmount: 1440, total: 9440 } };
+  const plans = ["Plan A", "Plan B", "Plan C"].map((variantLabel) => ({ ...basePlan, notes: null, variantLabel }));
+
+  it("sample 1 (breakdown): Lexend 12 in B:H, the title and header bands, GST beside the cost column, notes three rows below", () => {
+    const L = buildPlanSheetTabs(gst).overviewRowSpecs;
+    expect(L.merges.map(a1)).toEqual(expect.arrayContaining(["B2:H3", "B4:H4", "B5:H5"]));
+    expect(L.colWidths).toEqual([51, 188, 186, 139, 100, 100, 161, 244]);
+    expect(styleAt(L, 3, 1)).toMatchObject({ font: "Lexend", size: 12, bold: true, bg: rgb("C9DAF8"), align: "CENTER" });
+    expect(styleAt(L, 5, 1)).toMatchObject({ font: "Lexend", size: 12, bold: true, bg: rgb("6D9EEB"), align: "LEFT", wrap: true });
+    expect(styleAt(L, 5, 6)).toMatchObject({ bold: true, bg: rgb("6D9EEB"), align: "CENTER" });
+    // One category row (r7), Total (r8), then GST and Total in F:G.
+    expect(L.values[8][5]).toBe("GST (18%)");
+    expect(styleAt(L, 8, 6)).toMatchObject({ numFmt: "[$₹]#,##0", align: "CENTER" });
+    // Three empty rows, then NOTES across B:H.
+    expect(L.values[13][1]).toBe("NOTES :");
+    expect(L.merges.map(a1)).toContain("B14:H14");
+  });
+
+  it("sample 2 (summary): a two-row navy band in Lexend 16, labels merged over B:C and values over D:E in Lexend 11 bold", () => {
+    const L = buildPlanSheetTabs({ ...gst, sheetFormat: "summary" }).overviewRowSpecs;
+    expect(L.merges.map(a1)).toEqual(["B2:E3", "B4:E5", "B6:C6", "D6:E6", "B7:C7", "D7:E7", "B8:C8", "D8:E8", "B9:C9", "D9:E9", "B10:C10", "D10:E10", "B12:E12", "B13:E13", "B14:E14", "B15:E15", "B17:E17"]);
+    expect(L.colWidths).toEqual([76, 100, 134, 100, 140]);
+    expect(styleAt(L, 3, 1)).toMatchObject({ font: "Lexend", size: 16, bold: true, bg: rgb("1C4587"), fg: { red: 1, green: 1, blue: 1 }, align: "CENTER" });
+    expect(styleAt(L, 5, 1)).toMatchObject({ size: 11, bold: true, wrap: true });
+    expect(styleAt(L, 8, 3)).toMatchObject({ size: 11, bold: true, align: "CENTER", numFmt: "[$₹]#,##0" });
+    expect(L.values[11][1]).toBe("NOTES:");
+  });
+
+  it("sample 3 (comparison): Orbitron 15 bands on 073763, plan names in Lexend 14, a merged column pair per plan", () => {
+    const L = buildComparisonOverview(plans).rowSpecs;
+    expect(L.merges.map(a1).slice(0, 6)).toEqual(["B3:I4", "B5:I5", "B6:C6", "D6:E6", "F6:G6", "H6:I6"]);
+    expect(L.colWidths).toEqual([51, 131, 141, 139, 100, 100, 161, 149, 100]);
+    expect(styleAt(L, 4, 1)).toMatchObject({ font: "Orbitron", size: 15, bold: true, bg: rgb("073763"), align: "CENTER" });
+    expect(styleAt(L, 5, 3)).toMatchObject({ font: "Lexend", size: 14, bold: true, align: "CENTER" });
+    expect(L.values[13][1]).toBe("NOTES:");
+    expect(styleAt(L, 13, 1)).toMatchObject({ font: "Orbitron", size: 15 });
+  });
+
+  it("page tabs: white bold header on 6D9EEB, a boxed grid, linked page links; Comic Sans MS for the comparison layout as in sample 3", () => {
+    const tab = buildPlanSheetTabs(gst).pageTabs[0];
+    expect(tab.rowSpecs.colWidths).toEqual([60, 201, 100, 100, 100, 129]);
+    expect(styleAt(tab.rowSpecs, 0, 0)).toMatchObject({ font: "Lexend", size: 12, bold: true, bg: rgb("6D9EEB"), fg: { red: 1, green: 1, blue: 1 }, align: "CENTER" });
+    expect(styleAt(tab.rowSpecs, 1, 2)).toMatchObject({ underline: true, fg: rgb("1155CC") });
+    expect(tab.rowSpecs.boxes[0]).toEqual({ r: 0, c: 0, r2: 2, c2: 6 });
+
+    const comparison = buildPlanSheetTabs({ ...gst, sheetFormat: "comparison" }).pageTabs[0];
+    expect(styleAt(comparison.rowSpecs, 0, 0)).toMatchObject({ font: "Comic Sans MS", size: 12 });
+    expect(styleAt(comparison.rowSpecs, 1, 1)).toMatchObject({ font: "Comic Sans MS", size: 11 });
+    expect(comparison.rows[0][5]).toBe("Posts Per Page");
+  });
+
+  it("the black band holds the logo as an image when a public link is available, and the name otherwise", () => {
+    const withLogo = buildPlanSheetTabs(gst, { logoUrl: "https://res.cloudinary.com/x/brand/taggify-sheet-logo.png" }).overviewRowSpecs;
+    expect(withLogo.formulas).toEqual([{ r: 1, c: 1, formula: '=IMAGE("https://res.cloudinary.com/x/brand/taggify-sheet-logo.png")' }]);
+    expect(withLogo.values[1][1]).toBe("");
+    const without = buildPlanSheetTabs(gst).overviewRowSpecs;
+    expect(without.formulas).toEqual([]);
+    expect(without.values[1][1]).toBe("TAGGIFY");
+    expect(styleAt(without, 1, 1).bg).toEqual({ red: 0, green: 0, blue: 0 });
+  });
+
+  it("the requests clear the tab first, then set widths, merges, fonts, number formats, borders and the logo formula", () => {
+    const L = buildPlanSheetTabs(gst, { logoUrl: "https://example.com/logo.png" }).overviewRowSpecs;
+    const requests = buildFormatRequests(7, L, L.numCols);
+    expect(requests[0]).toEqual({ unmergeCells: { range: { sheetId: 7 } } });
+    expect(requests[1].repeatCell).toMatchObject({ range: { sheetId: 7 }, fields: "userEnteredFormat" });
+    const widths = requests.filter((r) => r.updateDimensionProperties).map((r) => r.updateDimensionProperties.properties.pixelSize);
+    // The layout's own columns, then the default out to column L so another layout's widths never linger.
+    expect(widths).toEqual([51, 188, 186, 139, 100, 100, 161, 244, 100, 100, 100, 100]);
+    const title = requests.find((r) => r.repeatCell?.range?.startRowIndex === 3 && r.repeatCell.range.startColumnIndex === 1);
+    expect(title.repeatCell.cell.userEnteredFormat).toMatchObject({ horizontalAlignment: "CENTER", verticalAlignment: "BOTTOM", wrapStrategy: "WRAP", textFormat: { fontFamily: "Lexend", fontSize: 12, bold: true } });
+    expect(requests.some((r) => r.repeatCell?.cell?.userEnteredFormat?.numberFormat?.pattern === "[$₹]#,##0")).toBe(true);
+    expect(requests.filter((r) => r.updateBorders).length).toBe(L.boxes.length);
+    expect(requests.at(-1).updateCells).toMatchObject({ start: { sheetId: 7, rowIndex: 1, columnIndex: 1 }, fields: "userEnteredValue" });
   });
 });

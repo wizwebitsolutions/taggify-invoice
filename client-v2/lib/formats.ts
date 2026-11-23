@@ -3,7 +3,9 @@
  * server/src/lib/formats.js and server/src/lib/comboSplit.js — keep in step.
  *
  *   reel             Reel                    bookable, rate
- *   entertainment    Entertainment / Brand   bookable, rate
+ *   entertainment    Entertainment           bookable, rate
+ *   brand            Brand                   bookable, rate (20 Nov: split from Entertainment)
+ *   ott              OTT                     bookable, rate, optional (20 Nov)
  *   pr               PR                      bookable, rate
  *   political_reel   Political reel          bookable, rate
  *   post             Static / Carousel       bookable, rate (legacy "carousel")
@@ -16,8 +18,8 @@
  *
  * No rate is mandatory (16 Oct — "remove the need part, need reel story rate").
  */
-export const FORMATS = ["reel", "entertainment", "pr", "political_reel", "post", "repost", "story", "political_story", "reel_story", "repost_story"] as const;
-export const BOOKABLE_FORMATS = ["reel", "entertainment", "pr", "political_reel", "post", "repost", "story", "political_story"] as const;
+export const FORMATS = ["reel", "entertainment", "brand", "ott", "pr", "political_reel", "post", "repost", "story", "political_story", "reel_story", "repost_story"] as const;
+export const BOOKABLE_FORMATS = ["reel", "entertainment", "brand", "ott", "pr", "political_reel", "post", "repost", "story", "political_story"] as const;
 /** Nothing is required any more; kept so the few callers stay in one place. */
 export const REQUIRED_RATE_FORMATS: readonly Format[] = [];
 export const OPTIONAL_RATE_FORMATS = FORMATS;
@@ -37,7 +39,9 @@ export const COMBO_PARTS = COMBOS.reel_story;
 
 export const FORMAT_LABELS: Record<Format, string> = {
   reel: "Reel",
-  entertainment: "Entertainment / Brand",
+  entertainment: "Entertainment",
+  brand: "Brand",
+  ott: "OTT",
   pr: "PR",
   political_reel: "Political reel",
   post: "Static / Carousel",
@@ -85,12 +89,17 @@ export const postsPerUnit = (format: string | null | undefined) => (isCombo(form
 const ALIASES = new Map<string, Format>([
   ["reel", "reel"],
   ["entertainment", "entertainment"],
-  ["brand", "entertainment"],
+  ["entertainment reel", "entertainment"],
+  // Sheets from before 20 Nov had one combined column: it still reads as Entertainment.
   ["entertainment/brand", "entertainment"],
   ["entertainment / brand", "entertainment"],
   ["entertainment & brand", "entertainment"],
   ["entertainment and brand", "entertainment"],
-  ["brand reel", "entertainment"],
+  ["brand", "brand"],
+  ["brand reel", "brand"],
+  ["ott", "ott"],
+  ["ott reel", "ott"],
+  ["ott promotion", "ott"],
   ["pr", "pr"],
   ["p.r.", "pr"],
   ["p.r", "pr"],

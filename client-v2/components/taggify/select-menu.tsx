@@ -10,13 +10,12 @@ import { Input } from "@/components/ui/input";
 
 /**
  * Table-header selection control (Inventory declutter, 3 Nov): a checkbox for
- * the rows on screen, split with a menu for "first 25 / 50", "all N", a typed
- * number, and clear. Replaces the always-visible "Select first …" strip.
+ * every row of the current filter (23 Nov; was the rows on screen), split with
+ * a menu for "this page", "first 25 / 50", "all N", a typed number, and clear. Replaces the always-visible "Select first …" strip.
  */
 export function SelectMenu({
   total,
   shown,
-  shownSelected,
   selectedCount,
   onToggleShown,
   onSelectFirst,
@@ -26,7 +25,6 @@ export function SelectMenu({
   total: number;
   /** Rows on the current pager page. */
   shown: number;
-  shownSelected: number;
   selectedCount: number;
   onToggleShown: (on: boolean) => void;
   onSelectFirst: (n: number) => void;
@@ -44,10 +42,11 @@ export function SelectMenu({
   const quick = [25, 50].filter((x) => x < total && x > shown);
   return (
     <span className="select-menu">
+      {/* 23 Nov: the checkbox ticks every row of the current filter (all pager pages), not just this screen; "This page" lives in the menu. */}
       <Checkbox
-        aria-label="Select all pages on this page"
-        checked={shownSelected === 0 ? false : shownSelected === shown ? true : "indeterminate"}
-        onCheckedChange={(v) => onToggleShown(v === true)}
+        aria-label="Select all pages"
+        checked={selectedCount === 0 ? false : selectedCount >= total ? true : "indeterminate"}
+        onCheckedChange={(v) => (v === true ? onSelectFirst(total) : onClear())}
       />
       <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>

@@ -3,7 +3,7 @@ import { ApiError } from "../../middleware/errorHandler.js";
 
 const mockPrisma = {
   asset: { findMany: vi.fn(), create: vi.fn() },
-  plan: { create: vi.fn(), update: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn(), count: vi.fn() },
+  plan: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn(), count: vi.fn() },
   planItem: { deleteMany: vi.fn(), createMany: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   campaign: { create: vi.fn(), findMany: vi.fn() },
   appSetting: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
@@ -32,7 +32,15 @@ vi.mock("../assets/service.js", () => ({
   // The batched form annotatePlan uses (22 Oct) — one mockGetAvgEngagement call per page, so the per-asset expectations below still hold.
   getAvgEngagementForAssets: async (assets) => new Map(await Promise.all(assets.map(async (a) => [a.id, await mockGetAvgEngagement(a.id)]))),
   createAsset: (...args) => mockCreateAsset(...args),
+  // 23 Nov: a sheet's vendor columns. Matching itself is tested in assets/importAssets.test.js.
+  listPageOwners: (...args) => mockListPageOwners(...args),
+  resolveVendor: (vendor, owners) => {
+    const digits = (v) => String(v ?? "").replace(/\D/g, "").slice(-10);
+    const owner = vendor && (owners.find((o) => vendor.phone && digits(o.phoneNumber) === digits(vendor.phone)) ?? owners.find((o) => vendor.name && o.name === vendor.name));
+    return { owner: owner ?? null };
+  },
 }));
+const mockListPageOwners = vi.fn(async () => []);
 // Execution sheet sync (23 Sep): the sheet fetch and the link creation are
 // other modules' jobs — mocked so this file tests only the row → slot logic.
 const mockFetchSheetCsv = vi.fn();
@@ -936,6 +944,30 @@ describe("importPlanSheetPages — attach a Google Sheet of pages (user request,
     mockPrisma.plan.findUnique.mockResolvedValue(null);
     await expect(importPlanSheetPages("missing", admin, [{ handle: "demo.page" }])).rejects.toBeInstanceOf(ApiError);
   });
+
+  // 23 Nov — "sheet se vendor ka number pick nahi kar raha".
+  it("a new page goes under the vendor the sheet names when they're in Taggify; one who isn't is reported back", async () => {
+    const pm = { id: "pm-1", role: "PLAN_MAKER" };
+    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "pm-1" });
+    mockPrisma.asset.findMany.mockResolvedValue([]);
+    mockPrisma.planItem.findMany.mockResolvedValue([]);
+    mockPrisma.asset.create.mockImplementation(async ({ data }) => ({ id: `asset-${data.handle}`, handle: data.handle, rateCards: [] }));
+    mockPrisma.planItem.createMany.mockResolvedValue({ count: 2 });
+    mockPrisma.plan.findUnique.mockResolvedValueOnce({ id: "plan-1", createdById: "pm-1", budget: null, gstPercent: null, items: [] });
+    mockListPageOwners.mockResolvedValueOnce([{ id: "creator-asha", name: "Asha", phoneNumber: "+919876543210" }]);
+
+    const result = await importPlanSheetPages("plan-1", pm, [
+      { handle: "known.vendor.page", cost: 1000, vendorName: "Asha", vendorPhone: "9876543210" },
+      { handle: "new.vendor.page", cost: 1000, vendorName: "Ravi", vendorPhone: "+919000011111" },
+    ]);
+
+    const owners = mockPrisma.asset.create.mock.calls.map(([{ data }]) => [data.handle, data.ownerId]);
+    expect(owners).toEqual([
+      ["known.vendor.page", "creator-asha"],
+      ["new.vendor.page", "pm-1"],
+    ]);
+    expect(result.unmatchedVendors).toEqual([{ name: "Ravi", phone: "+919000011111", handles: ["new.vendor.page"] }]);
+  });
 });
 
 describe("Upload plan from a Google Sheet (user request, 22 Sep) — createPlanFromSheet / syncPlanFromSheet / addPendingPage", () => {
@@ -1411,6 +1443,51 @@ describe("generatePlanSheet — Plan A, B, C… share one sheet, two tabs per pl
     const { titles } = mockEnsureSheetTabsExist.mock.calls[0][0];
     expect(titles).toHaveLength(2);
     expect(titles.every((t) => t.includes("Plan B"))).toBe(true);
+  });
+});
+
+// 23 Nov — "overview of multiple plans should be in one tab only" (sample 3).
+describe("generatePlanSheet — Plan comparison: one Overview tab for the whole pitch group", () => {
+  const planA = { id: "plan-a", name: "Q1 Push", variantLabel: "Plan A", pitchGroupId: "plan-a", sheetFormat: "comparison", createdById: "admin-1", clientName: "Acme", budget: null, gstPercent: null, clientSheetUrl: "https://docs.google.com/spreadsheets/d/group-sheet/edit?gid=1#gid=1", internalSheetUrl: null, items: [{ assetId: "asset-1", format: "reel", cost: 5000, clientCost: null, postsPerProfile: 1, asset }] };
+  const planB = { ...planA, id: "plan-b", variantLabel: "Plan B", clientSheetUrl: null };
+
+  beforeEach(() => {
+    mockIsGoogleOAuthConfigured.mockReturnValue(true);
+    mockGetUserAccessToken.mockResolvedValue("access-token");
+    mockGetSheetTabIds.mockImplementation(({ titles }) => Object.fromEntries(titles.map((t, i) => [t, 100 + i])));
+  });
+
+  it("writes one shared Overview tab plus each plan's page tabs, and every plan's link opens the shared tab", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue(planB);
+    mockPrisma.plan.findMany.mockResolvedValue([planA, planB]);
+
+    const result = await generatePlanSheet("plan-b", admin);
+
+    const { titles } = mockEnsureSheetTabsExist.mock.calls[0][0];
+    expect(titles[0]).toBe("Overview of Q1 Push · All plans");
+    expect(titles.filter((t) => t.startsWith("Overview of"))).toHaveLength(1);
+    expect(titles).toHaveLength(3); // shared overview + one page tab per plan
+    const shared = "https://docs.google.com/spreadsheets/d/group-sheet/edit?gid=100#gid=100";
+    expect(result.spreadsheetUrl).toBe(shared);
+    expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-a" }, data: { clientSheetUrl: shared } });
+    expect(mockPrisma.plan.update).toHaveBeenCalledWith({ where: { id: "plan-b" }, data: { clientSheetUrl: shared } });
+  });
+
+  it("picking Plan comparison (or leaving it) applies to every plan in the group", async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue({ ...planB, sheetFormat: "breakdown" });
+    mockPrisma.plan.findMany.mockResolvedValue([planA, planB]);
+    await generatePlanSheet("plan-b", admin, { sheetFormat: "comparison" });
+    expect(mockPrisma.plan.updateMany).toHaveBeenCalledWith({ where: { pitchGroupId: "plan-a" }, data: { sheetFormat: "comparison" } });
+
+    mockPrisma.plan.updateMany.mockClear();
+    mockPrisma.plan.findUnique.mockResolvedValue(planB);
+    await generatePlanSheet("plan-b", admin, { sheetFormat: "summary" });
+    expect(mockPrisma.plan.updateMany).toHaveBeenCalledWith({ where: { pitchGroupId: "plan-a" }, data: { sheetFormat: "summary" } });
+  });
+
+  it("the schema accepts the new layout", async () => {
+    const { updatePlanSchema } = await import("./schemas.js");
+    expect(updatePlanSchema.safeParse({ sheetFormat: "comparison" }).success).toBe(true);
   });
 });
 

@@ -10,11 +10,13 @@ import ExcelJS from "exceljs";
  * a new one is offered in the import popup to approve and create. Rows
  * with no vendor still get their account picked in the popup.
  */
-// Ten rates (16 Oct), one per lib/formats.js FORMATS key in that order.
-// Entertainment / Brand, Reel and Story are required in the import sheet (17 Oct); the rest optional.
+// One rate column per lib/formats.js FORMATS key, in that order (twelve since 20 Nov).
+// Entertainment, Brand, Reel and Story are required in the import sheet (17 Oct; Brand split out 20 Nov); the rest, OTT included, optional.
 export const IMPORT_TEMPLATE_RATE_HEADERS = [
   "Reel Rate",
-  "Entertainment / Brand Rate",
+  "Entertainment Rate",
+  "Brand Rate",
+  "OTT Rate",
   "PR Rate",
   "Political Rate",
   "Static & Carousel Rate",
@@ -26,17 +28,17 @@ export const IMPORT_TEMPLATE_RATE_HEADERS = [
 ];
 // Category (24 Oct), Grade (A/B/C) and Group Link (16 Oct) are optional columns before the rates.
 export const IMPORT_TEMPLATE_HEADERS = ["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Followers", "Category", "Grade", "Group Link", ...IMPORT_TEMPLATE_RATE_HEADERS];
-// Required cells (17 Oct): the page, who it belongs to and how to reach them, and the three core rates.
-export const IMPORT_REQUIRED_HEADERS = ["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Entertainment / Brand Rate", "Reel Rate", "Story Rate"];
+// Required cells (17 Oct): the page, who it belongs to and how to reach them, and the four core rates (Entertainment, Brand, Reel, Story).
+export const IMPORT_REQUIRED_HEADERS = ["Page Name", "Page Link", "Vendor Name", "Vendor Contact", "Entertainment Rate", "Brand Rate", "Reel Rate", "Story Rate"];
 const FIRST_RATE_COLUMN = IMPORT_TEMPLATE_HEADERS.indexOf(IMPORT_TEMPLATE_RATE_HEADERS[0]) + 1;
 
 // Deliberately not real pages: an example row left in the sheet by mistake
 // then shows as "link broken / not found" instead of quietly importing
 // someone's real page under the chosen account.
 const EXAMPLE_ROWS = [
-  // Reel, Ent./Brand, PR, Political, Static & Carousel, Repost, Story, Political Story, Reel + Story, Repost + Story
-  ["Example Page One", "https://www.instagram.com/example.page.one.replace.me/", "Example Vendor", "+91 90000 00000", 450000, "Meme page", "A", "https://chat.whatsapp.com/replace-me", 18000, 20000, 25000, 22000, 9000, 5000, 6000, 8000, 21000, 9500],
-  ["Example Page Two", "https://www.instagram.com/example.page.two.replace.me/", "Example Vendor", "vendor@example.com", 120000, "News page", "B", "", 9000, "", "", "", 4500, "", 3000, "", "", ""],
+  // Reel, Entertainment, Brand, OTT, PR, Political, Static & Carousel, Repost, Story, Political Story, Reel + Story, Repost + Story
+  ["Example Page One", "https://www.instagram.com/example.page.one.replace.me/", "Example Vendor", "+91 90000 00000", 450000, "Meme page", "A", "https://chat.whatsapp.com/replace-me", 18000, 20000, 22000, 24000, 25000, 22000, 9000, 5000, 6000, 8000, 21000, 9500],
+  ["Example Page Two", "https://www.instagram.com/example.page.two.replace.me/", "Example Vendor", "vendor@example.com", 120000, "News page", "B", "", 9000, 10000, 11000, "", "", "", 4500, "", 3000, "", "", ""],
 ];
 
 export async function buildImportPagesTemplate() {
@@ -68,7 +70,7 @@ export async function buildImportPagesTemplate() {
   const notes = wb.addWorksheet("How to fill");
   [
     ["One row per page. Replace the two example rows with your own."],
-    [`REQUIRED (orange headers): ${IMPORT_REQUIRED_HEADERS.join(", ")}. A row missing Page Name or one of the three rates is shown as incomplete and not imported; a row with no vendor only imports once an account is picked for it in the popup.`],
+    [`REQUIRED (orange headers): ${IMPORT_REQUIRED_HEADERS.join(", ")}. A row missing Page Name or one of the four rates is shown as incomplete and not imported; a row with no vendor only imports once an account is picked for it in the popup.`],
     ["Page Link: the page's Instagram profile link, e.g. https://www.instagram.com/pagename/ — the page is looked up on Instagram from this."],
     ["Page Name: the page's display name. Instagram's own name replaces it once fetched."],
     ["Vendor Name + Vendor Contact (phone number; an email works for matching too): who owns the page."],
@@ -78,7 +80,7 @@ export async function buildImportPagesTemplate() {
     ["Category: optional, e.g. Meme page, News page, Entertainment, Lifestyle, Fashion, Fitness, Food (any other name is kept as written). It can be changed per page in the import popup."],
     ["Grade: A, B or C — optional, set by hand. Group Link: the page's WhatsApp/Telegram group link, optional."],
     [`Rates, in rupees (numbers only, or ₹12,000): ${IMPORT_TEMPLATE_RATE_HEADERS.join(", ")}.`],
-    ["Entertainment / Brand, Reel and Story rates are required. The other seven are optional — leave a column blank if the page doesn't offer that format. Political / Political Story: a reel / story whose content is political. Static & Carousel: an image or carousel post."],
+    ["Entertainment, Brand, Reel and Story rates are required. The others (OTT included) are optional — leave a column blank if the page doesn't offer that format. Political / Political Story: a reel / story whose content is political. Static & Carousel: an image or carousel post."],
     ["Reel + Story Rate is a bundle price for one reel plus one story; Repost + Story Rate is a bundle price for one repost plus one story. Each is usually cheaper than the two booked separately, and is split between the two posts when booked."],
     ["Pages whose link is broken or not found on Instagram are shown in the preview and are not imported."],
     ["Rows with no vendor: you must pick (or create) the account they go under in the import popup before they import."],

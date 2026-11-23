@@ -8,7 +8,7 @@ import { ExternalLink, MessageCircle, Pencil, RefreshCw, Trash2 } from "lucide-r
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, canUse, type Asset, type PendingAssetEdit } from "@/lib/api-client";
-import { canApprovePages, canDeletePage, canEditPages, canEditVendors, canProposeEdits, canSetPageActive, GRADES, isGrade, PAGE_APPROVAL, rateOf, scrapeState, type Grade } from "@/lib/creators";
+import { canApprovePages, canDeletePage, canEditPages, canEditVendors, canProposeEdits, canSetPageActive, GRADES, isGrade, PAGE_APPROVAL, pageProfileUrl, rateOf, scrapeState, type Grade } from "@/lib/creators";
 import { personLabel, roleLabel } from "@/lib/format";
 import { invalidatePages } from "@/lib/queries/creators";
 import { FORMATS, formatLabel } from "@/lib/formats";
@@ -30,7 +30,7 @@ import { canChangeVendor, PendingVendorEditCard, saveVendorChange, vendorChanges
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 const count = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString("en-IN"));
 const source = (a: Pick<Asset, "platform">) => (a.platform.toLowerCase() === "youtube" ? "YouTube" : "Instagram");
-const profileUrl = (a: Asset) => (a.platform.toLowerCase() === "youtube" ? `https://www.youtube.com/@${a.handle}` : `https://www.instagram.com/${a.handle}/`);
+const profileUrl = (a: Asset) => pageProfileUrl(a.handle, a.platform);
 
 /** One page: identity, numbers, campaigns; edit category, grade, group link, rates and engagement overrides; approve; refresh; delete. */
 export function PageSheet({ page, onClose, startEditing = false }: { page: Asset | null; onClose: () => void; startEditing?: boolean }) {

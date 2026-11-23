@@ -28,15 +28,17 @@ import { buildPlanSheetTabs } from "./planSheet.js";
 
 describe("ten page costs (16 Oct)", () => {
   it("the lists, in the agreed order", () => {
-    expect(FORMATS).toEqual(["reel", "entertainment", "pr", "political_reel", "post", "repost", "story", "political_story", "reel_story", "repost_story"]);
-    expect(BOOKABLE_FORMATS).toEqual(["reel", "entertainment", "pr", "political_reel", "post", "repost", "story", "political_story"]);
+    expect(FORMATS).toEqual(["reel", "entertainment", "brand", "ott", "pr", "political_reel", "post", "repost", "story", "political_story", "reel_story", "repost_story"]);
+    expect(BOOKABLE_FORMATS).toEqual(["reel", "entertainment", "brand", "ott", "pr", "political_reel", "post", "repost", "story", "political_story"]);
     // No rate is mandatory (16 Oct, later): pages and plan lines work with any rates or none.
     expect(REQUIRED_RATE_FORMATS).toEqual([]);
     expect(COMBOS).toEqual({ reel_story: ["reel", "story"], repost_story: ["repost", "story"] });
     expect(COMBO_PART_FORMATS).toEqual(["reel", "story", "repost"]);
     expect(FORMAT_LABELS).toEqual({
       reel: "Reel",
-      entertainment: "Entertainment / Brand",
+      entertainment: "Entertainment",
+      brand: "Brand",
+      ott: "OTT",
       pr: "PR",
       political_reel: "Political",
       post: "Static & Carousel",
@@ -63,7 +65,7 @@ describe("ten page costs (16 Oct)", () => {
     expect(formatSchema.safeParse("carousel").success).toBe(false);
     expect(bookableFormatSchema.safeParse("reel_story").success).toBe(false);
     expect(bookableFormatSchema.safeParse("repost_story").success).toBe(false);
-    for (const f of ["political_reel", "repost", "pr", "entertainment", "political_story"]) expect(bookableFormatSchema.safeParse(f).success).toBe(true);
+    for (const f of ["political_reel", "repost", "pr", "entertainment", "brand", "ott", "political_story"]) expect(bookableFormatSchema.safeParse(f).success).toBe(true);
   });
 
   it("labels — legacy carousel reads as Static & Carousel, unknown keys stay readable", () => {
@@ -93,11 +95,16 @@ describe("ten page costs (16 Oct)", () => {
       reels: "reel",
       "Reel Rate": "reel",
       Entertainment: "entertainment",
-      Brand: "entertainment",
+      Brand: "brand",
+      "Brand rate": "brand",
+      OTT: "ott",
+      "OTT cost": "ott",
+      "OTT promotion": "ott",
+      // The pre-20 Nov combined name still reads as Entertainment.
       "Entertainment/Brand": "entertainment",
       "Entertainment / Brand Rate": "entertainment",
       "entertainment & brand": "entertainment",
-      "Brand reel cost": "entertainment",
+      "Brand reel cost": "brand",
       PR: "pr",
       "P.R.": "pr",
       "PR reel": "pr",
@@ -230,7 +237,7 @@ describe("exports print the format's label (14 Oct, relabelled 16 Oct)", () => {
         { format: "entertainment", postsPerProfile: 1, displayCost: 9000, asset: { handle: "demo.page" } },
       ],
     });
-    expect(d.rows.map((r) => r.description)).toEqual(["Reel + Story @demo.page", "Repost + Story @demo.page", "Entertainment / Brand @demo.page"]);
+    expect(d.rows.map((r) => r.description)).toEqual(["Reel + Story @demo.page", "Repost + Story @demo.page", "Entertainment @demo.page"]);
   });
 
   it("finance link records", () => {
@@ -266,11 +273,12 @@ describe("exports print the format's label (14 Oct, relabelled 16 Oct)", () => {
 
 // Review fix (16 Oct): client/lib/formats.ts mirrors this file; it had
 // drifted (the "repost/story combo" spellings, a wider isReelLike).
-describe("client/lib/formats.ts stays in sync with the server", () => {
+describe("client-v2/lib/formats.ts stays in sync with the server", () => {
   const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
   const aliasPairs = (src) => new Map([...src.matchAll(/^\s*\["([^"]+)", "([a-z_]+)"\],?\s*$/gm)].map((m) => [m[1], m[2]]));
   const server = read("./formats.js");
-  const client = read("../../../client/lib/formats.ts");
+  // 20 Nov: client-v2 is the production frontend (v1 retired 3 Nov).
+  const client = read("../../../client-v2/lib/formats.ts");
 
   it("every server alias spelling resolves to the same format on the client", () => {
     const clientAliases = aliasPairs(client);
@@ -279,7 +287,8 @@ describe("client/lib/formats.ts stays in sync with the server", () => {
   });
 
   it("isReelLike is reel + political_reel on both sides", () => {
-    const body = (src) => src.match(/function isReelLike\([^)]*\)[^{]*\{([^}]*)\}/)[1];
+    // A function declaration (server) or a one-line arrow const (client-v2).
+    const body = (src) => src.match(/function isReelLike\([^)]*\)[^{]*\{[^}]*\}|const isReelLike = [^\n]*/)[0];
     const formatsIn = (text) => [...text.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
     expect(formatsIn(body(client))).toEqual(formatsIn(body(server)));
     expect(formatsIn(body(server))).toEqual(["political_reel", "reel"]);

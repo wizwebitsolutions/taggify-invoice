@@ -26,8 +26,11 @@ export const setApprovalSchema = z.object({
   approvalStatus: z.enum(["pending", "approved", "rejected"]),
 });
 
+// 23 Nov: YouTube and Facebook pages too (added by hand; only Instagram is fetched automatically).
+const platformSchema = z.string().trim().toLowerCase().pipe(z.enum(["instagram", "youtube", "facebook"]));
+
 export const createAssetSchema = z.object({
-  platform: z.string().default("instagram"),
+  platform: platformSchema.default("instagram"),
   // Strip a leading "@" (and whitespace) — the UI always prepends its own
   // "@" when displaying a handle, so a stored "@handle" renders as "@@handle".
   handle: z
@@ -47,6 +50,8 @@ export const createAssetSchema = z.object({
   rateCards: z.array(rateCardEntrySchema).max(20).optional(),
   grade: gradeSchema,
   groupLink: groupLinkSchema,
+  // 23 Nov: typed for a YouTube / Facebook page (Instagram's are fetched).
+  followers: z.number().int().min(0).max(2_000_000_000).optional(),
 });
 
 export const updateRateCardSchema = z.object({
@@ -73,6 +78,7 @@ export const updateAssetDetailsSchema = z.object({
 // (handle validity, owner is a real CREATOR, handle not already taken);
 // this is just the shape.
 export const importAssetRowSchema = z.object({
+  platform: platformSchema.default("instagram"),
   handle: z.string().trim().min(1).max(120),
   ownerId: z.string().min(1),
   category: z.string().trim().max(40).nullable().optional(),

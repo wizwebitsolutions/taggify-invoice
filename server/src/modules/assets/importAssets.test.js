@@ -36,7 +36,7 @@ const owners = [priya, rahul, rahul2];
 
 // Page Name and the Entertainment / Reel / Story rates are required cells since 17 Oct (previewImport's "incomplete");
 // the defaults carry them so the status tests below keep reading as they always did.
-const REQUIRED_RATES = [{ format: "entertainment", amount: 3000 }, { format: "reel", amount: 5000 }, { format: "story", amount: 1500 }];
+const REQUIRED_RATES = [{ format: "entertainment", amount: 3000 }, { format: "brand", amount: 3500 }, { format: "reel", amount: 5000 }, { format: "story", amount: 1500 }];
 const row = (overrides) => ({ rowNumber: 2, rawHandle: "x", handle: "x", pageName: "Page X", ownerRef: null, category: null, followers: null, rateCards: REQUIRED_RATES, problem: null, ...overrides });
 
 beforeEach(() => {
@@ -164,7 +164,7 @@ describe("previewImport — per-row status", () => {
 // campaign/plan imports use, then the same parser + preview as a file.
 describe("previewImportFromSheetUrl", () => {
   it("fetches the shared sheet as CSV and previews it exactly like an uploaded file", async () => {
-    fetchSheetCsv.mockResolvedValue("handle,page name,owner,entertainment rate,reel rate,story rate\n@sheet.page,Sheet Page,+919000000001,3000,5000,1500\n");
+    fetchSheetCsv.mockResolvedValue("handle,page name,owner,entertainment / brand rate,reel rate,story rate\n@sheet.page,Sheet Page,+919000000001,3000,5000,1500\n");
     const preview = await previewImportFromSheetUrl("https://docs.google.com/spreadsheets/d/abc/edit#gid=0");
     expect(fetchSheetCsv).toHaveBeenCalledWith("https://docs.google.com/spreadsheets/d/abc/edit#gid=0");
     expect(preview.rows[0]).toMatchObject({ handle: "sheet.page", status: "ready", ownerId: "creator-1" });
@@ -308,6 +308,38 @@ describe("importAssets — only pages confirmed on Instagram are stored", () => 
     getAccountMetricsBatch.mockResolvedValueOnce({ "named.page": found({ followers: 98765 }) });
     await importAssets(admin, [{ handle: "named.page", ownerId: "creator-1", pageName: "  Named Page  ", followers: 10 }]);
     expect(mockPrisma.asset.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ fullName: "Named Page", followers: 98765 }) }));
+  });
+});
+
+// 23 Nov — "YouTube and Facebook inventory add nahi ho rahi": those pages can't be
+// looked up on Instagram, so they're stored with the sheet's own numbers.
+describe("importAssets — YouTube and Facebook pages (23 Nov)", () => {
+  const admin = { id: "admin-1", role: "ADMIN" };
+
+  it("stores them under their platform without an Instagram lookup, keeping the sheet's followers", async () => {
+    const result = await importAssets(admin, [
+      { platform: "youtube", handle: "techburner", ownerId: "creator-1", followers: 12000000, rateCards: REQUIRED_RATES },
+      { platform: "facebook", handle: "ghantaa", ownerId: "creator-1", followers: 500000 },
+    ]);
+    expect(getAccountMetricsBatch).not.toHaveBeenCalled();
+    expect(result.created.map((a) => a.handle)).toEqual(["techburner", "ghantaa"]);
+    expect(mockPrisma.asset.create.mock.calls.map(([{ data }]) => [data.platform, data.handle, data.followers])).toEqual([
+      ["youtube", "techburner", 12000000],
+      ["facebook", "ghantaa", 500000],
+    ]);
+  });
+
+  it("an Instagram page and a YouTube channel with the same name are different pages", async () => {
+    await importAssets(admin, [{ platform: "youtube", handle: "same.name", ownerId: "creator-1" }]);
+    expect(mockPrisma.asset.findFirst.mock.calls[0][0].where).toMatchObject({ platform: "youtube", handle: { equals: "same.name", mode: "insensitive" } });
+  });
+});
+
+describe("resolveVendor — a vendor's second number matches too (23 Nov)", () => {
+  it("matches on secondaryPhone when the main number differs", async () => {
+    const { resolveVendor } = await import("./service.js");
+    const owners = [{ id: "creator-9", name: "Asha", phoneNumber: "+919111111111", secondaryPhone: "+919222222222", email: null }];
+    expect(resolveVendor({ name: null, phone: "92222 22222", email: null }, owners).owner?.id).toBe("creator-9");
   });
 });
 
@@ -538,7 +570,7 @@ describe("previewImport — vendor matching and newVendors", () => {
   });
 
   it("a Google Sheet link goes through the same vendor path", async () => {
-    fetchSheetCsv.mockResolvedValue(["Page Name,Page Link,Vendor Name,Vendor Contact,Entertainment Rate,Reel Rate,Story Rate", "Sheet,https://instagram.com/sheet.page,Fresh Vendor,fresh@vendor.in,3000,5000,1500", "Mine,https://instagram.com/mine.page,Priya,+91 90000 00001,3000,5000,1500"].join("\n"));
+    fetchSheetCsv.mockResolvedValue(["Page Name,Page Link,Vendor Name,Vendor Contact,Entertainment Rate,Brand Rate,Reel Rate,Story Rate", "Sheet,https://instagram.com/sheet.page,Fresh Vendor,fresh@vendor.in,3000,3500,5000,1500", "Mine,https://instagram.com/mine.page,Priya,+91 90000 00001,3000,3500,5000,1500"].join("\n"));
     const preview = await previewImportFromSheetUrl("https://docs.google.com/spreadsheets/d/abc/edit", admin);
     expect(preview.rows[0]).toMatchObject({ status: "owner-unknown", reason: "New vendor: Fresh Vendor", vendor: { name: "Fresh Vendor", phone: null, email: "fresh@vendor.in" } });
     expect(preview.rows[1]).toMatchObject({ status: "ready", ownerId: "creator-1" });
@@ -546,16 +578,16 @@ describe("previewImport — vendor matching and newVendors", () => {
   });
 });
 
-describe("previewImport — required cells (17 Oct: Page Name + Entertainment, Reel and Story rates)", () => {
+describe("previewImport — required cells (17 Oct: Page Name + Entertainment, Reel and Story rates; Brand split out 20 Nov)", () => {
   const admin = { id: "admin-1", role: "ADMIN" };
-  const full = [{ format: "entertainment", amount: 2 }, { format: "reel", amount: 1 }, { format: "story", amount: 1 }];
+  const full = [{ format: "entertainment", amount: 2 }, { format: "brand", amount: 2 }, { format: "reel", amount: 1 }, { format: "story", amount: 1 }];
 
   it("a row missing any of them is 'incomplete' and names what's missing; missingRates stays empty (no approval rule)", async () => {
     const parsed = {
       hasOwnerColumn: true,
       rows: [
         row({ rowNumber: 2, handle: "full.page", ownerRef: "9000000001", rateCards: full }),
-        row({ rowNumber: 3, handle: "no.story", ownerRef: "9000000001", rateCards: [{ format: "entertainment", amount: 2 }, { format: "reel", amount: 1 }, { format: "post", amount: 1 }] }),
+        row({ rowNumber: 3, handle: "no.story", ownerRef: "9000000001", rateCards: [{ format: "entertainment", amount: 2 }, { format: "brand", amount: 2 }, { format: "reel", amount: 1 }, { format: "post", amount: 1 }] }),
         row({ rowNumber: 4, handle: "no.rates", pageName: null, ownerRef: "9000000001", rateCards: [] }),
       ],
     };
@@ -563,10 +595,30 @@ describe("previewImport — required cells (17 Oct: Page Name + Entertainment, R
     expect(result.rows.map((r) => [r.handle, r.status, r.missingRates, r.missingFields])).toEqual([
       ["full.page", "ready", [], []],
       ["no.story", "incomplete", [], ["Story Rate"]],
-      ["no.rates", "incomplete", [], ["Page Name", "Entertainment / Brand Rate", "Reel Rate", "Story Rate"]],
+      ["no.rates", "incomplete", [], ["Page Name", "Entertainment Rate", "Brand Rate", "Reel Rate", "Story Rate"]],
     ]);
-    expect(result.rows[2].reason).toBe("Missing: Page Name, Entertainment / Brand Rate, Reel Rate, Story Rate.");
+    expect(result.rows[2].reason).toBe("Missing: Page Name, Entertainment Rate, Brand Rate, Reel Rate, Story Rate.");
     expect(result.summary.incomplete).toBe(2);
+  });
+
+  it("20 Nov: Brand is required on its own; OTT is optional", async () => {
+    const noBrand = full.filter((rc) => rc.format !== "brand");
+    const result = await previewImport(
+      {
+        hasOwnerColumn: true,
+        rows: [
+          row({ rowNumber: 2, handle: "no.brand", ownerRef: "9000000001", rateCards: noBrand }),
+          row({ rowNumber: 3, handle: "no.ott", ownerRef: "9000000001", rateCards: full }),
+          row({ rowNumber: 4, handle: "with.ott", ownerRef: "9000000001", rateCards: [...full, { format: "ott", amount: 4 }] }),
+        ],
+      },
+      admin
+    );
+    expect(result.rows.map((r) => [r.handle, r.status, r.missingFields])).toEqual([
+      ["no.brand", "incomplete", ["Brand Rate"]],
+      ["no.ott", "ready", []],
+      ["with.ott", "ready", []],
+    ]);
   });
 
   it("a page already in Inventory reads 'exists', not 'incomplete'; a creator's own sheet only needs Page Name", async () => {

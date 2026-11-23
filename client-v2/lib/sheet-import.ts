@@ -17,6 +17,9 @@ export interface ParsedPlanPageRow {
   cost?: number;
   clientCost?: number;
   postsPerProfile?: number;
+  /** 23 Nov: who owns the page; the server puts a new page under a matching vendor. */
+  vendorName?: string;
+  vendorPhone?: string;
 }
 
 /** A File from an <input type="file">, or CSV text the server fetched from a pasted Google Sheet link. */
@@ -30,6 +33,40 @@ const CATEGORY_HEADERS = ["category", "type", "page type"];
 const POSTS_HEADERS = ["post per profile", "posts per profile", "posts", "post count"];
 const CLIENT_COST_HEADERS = ["client cost", "client price", "client rate", "quoted", "quote"];
 export const PAGE_URL_HEADERS = ["page link", "page url", "profile link", "profile url", "instagram link", "link", "url"];
+// Same spellings the Inventory import reads (server assets/importParser.js).
+const VENDOR_NAME_HEADERS = ["vendor", "vendor name", "vendor's name"];
+const VENDOR_PHONE_HEADERS = [
+  "vendor contact",
+  "vendor phone",
+  "vendor mobile",
+  "vendor number",
+  "vendor no",
+  "vendor phone number",
+  "vendor mobile number",
+  "vendor contact number",
+  "vendor whatsapp",
+  "whatsapp",
+  "whatsapp number",
+  "contact",
+  "contact number",
+  "contact no",
+  "phone",
+  "phone number",
+  "mobile",
+  "mobile number",
+];
+
+/** Header text as matched: lower case, single spaces, no trailing "." ":" "*" ("Vendor No." → "vendor no"). */
+const headerKey = (k: string) => k.toLowerCase().replace(/[\s.:*]+$/g, "").replace(/\bno\./g, "no").replace(/\s+/g, " ").trim();
+
+/** "Mob: +91 98765-43210" → "+919876543210" (10–15 digits), else undefined. Same rule as the server's parseContactPhone. */
+function parsePhone(raw: string | undefined): string | undefined {
+  const run = raw?.match(/\+?\d[\d\s().-]*\d/);
+  if (!run) return undefined;
+  const digits = run[0].replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) return undefined;
+  return `${run[0].startsWith("+") ? "+" : ""}${digits}`;
+}
 
 export const readText = (source: CsvSource) => (typeof source === "string" ? Promise.resolve(source) : source.text());
 
@@ -59,7 +96,7 @@ export function handleFromInstagramUrl(url: string | undefined): string | undefi
 
 export function mapPageRow(row: Record<string, string>): ParsedPlanPageRow | null {
   const keys = Object.keys(row);
-  const find = (headers: string[]) => keys.find((k) => headers.includes(k.trim().toLowerCase()));
+  const find = (headers: string[]) => keys.find((k) => headers.includes(headerKey(k)));
   const urlKey = find(PAGE_URL_HEADERS);
   const pageUrl = (urlKey ? row[urlKey]?.trim() : "") || undefined;
   const handleKey = find(HANDLE_HEADERS) ?? (urlKey ? undefined : keys[0]);
@@ -74,6 +111,8 @@ export function mapPageRow(row: Record<string, string>): ParsedPlanPageRow | nul
   const clientCostKey = find(CLIENT_COST_HEADERS);
   const postsKey = find(POSTS_HEADERS);
   const rawPosts = postsKey ? row[postsKey]?.trim().replace(/[^\d]/g, "") : "";
+  const vendorNameKey = find(VENDOR_NAME_HEADERS);
+  const vendorPhoneKey = find(VENDOR_PHONE_HEADERS);
 
   return {
     handle,
@@ -85,6 +124,8 @@ export function mapPageRow(row: Record<string, string>): ParsedPlanPageRow | nul
     cost: parseMoney(costKey ? row[costKey] : undefined),
     clientCost: parseMoney(clientCostKey ? row[clientCostKey] : undefined),
     postsPerProfile: rawPosts ? Number(rawPosts) : undefined,
+    vendorName: (vendorNameKey ? row[vendorNameKey]?.trim().slice(0, 100) : "") || undefined,
+    vendorPhone: parsePhone(vendorPhoneKey ? row[vendorPhoneKey] : undefined),
   };
 }
 

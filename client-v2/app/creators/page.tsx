@@ -9,7 +9,7 @@ import { ArrowUpDown, CircleCheck, ClipboardList, Eye, MoreHorizontal, Pencil, P
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, assets as assetsApi, hasAccess, type Asset, type AssetOwner } from "@/lib/api-client";
-import { canAddForOwner, canApprovePages, canDeletePage, canEditVendors, canImportPages, canEditPages, canProposeEdits, canViewCreators, GRADES, groupVendors, rateOf, scrapeState } from "@/lib/creators";
+import { canAddForOwner, canApprovePages, canDeletePage, canEditVendors, canImportPages, canEditPages, canProposeEdits, canViewCreators, COST_BANDS, GRADES, groupVendors, inCostBand, rateOf, scrapeState, vendorOptions } from "@/lib/creators";
 import { money, personLabel, plural } from "@/lib/format";
 import { canEditPlan } from "@/lib/plans";
 import { FORMATS, formatLabel } from "@/lib/formats";
@@ -28,9 +28,6 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,6 +38,7 @@ import { ActionBarDivider, FloatingActionBar } from "@/components/taggify/floati
 import { Money } from "@/components/taggify/money";
 import { PlatformIcon, WhatsAppIcon } from "@/components/taggify/platform-icon";
 import { SearchField } from "@/components/taggify/search-field";
+import { FilterSub } from "@/components/taggify/filter-menu";
 import { SelectMenu } from "@/components/taggify/select-menu";
 import { StatusPill } from "@/components/taggify/status-pill";
 import { UserAvatar } from "@/components/taggify/user-avatar";
@@ -60,6 +58,7 @@ const PLATFORMS = [
   { value: "all", label: "All" },
   { value: "instagram", label: "Instagram" },
   { value: "youtube", label: "YouTube" },
+  { value: "facebook", label: "Facebook" },
 ];
 const SORTS = [
   { value: "followers", label: "Most followers" },
@@ -106,6 +105,9 @@ function Creators() {
   const [platform, setPlatform] = useState("all");
   const [category, setCategory] = useState("all");
   const [grade, setGrade] = useState("all");
+  // 23 Nov: cost of page and vendor filters.
+  const [cost, setCost] = useState("all");
+  const [vendor, setVendor] = useState("all");
   const [sort, setSort] = useState("followers");
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(PER_PAGE);
@@ -127,12 +129,15 @@ function Creators() {
   const all = useMemo(() => pages.data ?? [], [pages.data]);
   const categories = useMemo(() => [...new Set(all.map((p) => p.category).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b)), [all]);
   const waiting = all.filter((p) => p.approvalStatus === "pending");
+  const vendorChoices = useMemo(() => vendorOptions(all), [all]);
 
   const needle = q.trim().toLowerCase();
   const matches = (p: Asset) =>
     (platform === "all" || p.platform.toLowerCase() === platform) &&
     (category === "all" || p.category === category) &&
     (grade === "all" || (grade === "none" ? !p.grade : p.grade === grade)) &&
+    inCostBand(p, cost) &&
+    (vendor === "all" || p.owner?.id === vendor) &&
     (!needle || `${p.handle} ${p.fullName ?? ""} ${p.category ?? ""} ${personLabel(p.owner, "")} ${p.owner?.email ?? ""}`.toLowerCase().includes(needle));
   const sortPages = (a: Asset, b: Asset) => (sort === "handle" ? a.handle.localeCompare(b.handle) : sort === "newest" ? +new Date(b.createdAt) - +new Date(a.createdAt) : (b.followers ?? 0) - (a.followers ?? 0));
 
@@ -148,7 +153,6 @@ function Creators() {
   const shownPages = slice(pageRows);
   // The selection spans every pager page of the current filter (a filter or tab change clears it).
   const selectedRows = pageRows.filter((p) => selected.has(p.id));
-  const visibleSelected = shownPages.filter((p) => selected.has(p.id));
   const selectFirst = (n: number) => setSelected(new Set(pageRows.slice(0, Math.max(0, n)).map((p) => p.id)));
   const toggleShown = (on: boolean) =>
     setSelected((s) => {
@@ -220,6 +224,8 @@ function Creators() {
     platform !== "all" && { key: "platform", label: `Platform: ${PLATFORMS.find((o) => o.value === platform)?.label ?? platform}`, clear: () => setFilter(setPlatform)("all") },
     category !== "all" && { key: "category", label: `Category: ${category}`, clear: () => setFilter(setCategory)("all") },
     grade !== "all" && { key: "grade", label: grade === "none" ? "Not graded" : `Grade ${grade}`, clear: () => setFilter(setGrade)("all") },
+    cost !== "all" && { key: "cost", label: `Cost: ${COST_BANDS.find((b) => b.value === cost)?.label ?? cost}`, clear: () => setFilter(setCost)("all") },
+    vendor !== "all" && { key: "vendor", label: `Vendor: ${vendorChoices.find((v) => v.value === vendor)?.label ?? "—"}`, clear: () => setFilter(setVendor)("all") },
   ].filter((f): f is { key: string; label: string; clear: () => void } => !!f);
   const filtering = !!needle || activeFilters.length > 0;
   const adder = canAddForOwner(user);
@@ -308,6 +314,8 @@ function Creators() {
               <FilterSub label="Platform" value={platform} onChange={setFilter(setPlatform)} options={PLATFORMS} />
               <FilterSub label="Category" value={category} onChange={setFilter(setCategory)} options={[{ value: "all", label: "All" }, ...categories.map((c) => ({ value: c, label: c }))]} />
               <FilterSub label="Grade" value={grade} onChange={setFilter(setGrade)} options={[{ value: "all", label: "All" }, ...GRADES.map((g) => ({ value: g, label: `Grade ${g}` })), { value: "none", label: "Not graded" }]} />
+              <FilterSub label="Cost" value={cost} onChange={setFilter(setCost)} options={COST_BANDS.map((b) => ({ value: b.value, label: b.label }))} />
+              <FilterSub label="Vendor" value={vendor} onChange={setFilter(setVendor)} options={vendorChoices} />
               {activeFilters.length > 0 && (
                 <>
                   <DropdownMenuSeparator />
@@ -425,7 +433,6 @@ function Creators() {
                     <SelectMenu
                       total={pageRows.length}
                       shown={shownPages.length}
-                      shownSelected={visibleSelected.length}
                       selectedCount={selectedRows.length}
                       onToggleShown={toggleShown}
                       onSelectFirst={selectFirst}
@@ -494,7 +501,7 @@ function Creators() {
                               </a>
                             )}
                           </div>
-                          <span className="inventory-identity-name">{scrape === "fetching" ? "Fetching from Instagram…" : scrape === "failed" ? "Couldn't fetch the profile" : (p.fullName ?? (p.platform.toLowerCase() === "youtube" ? "YouTube" : "Instagram"))}</span>
+                          <span className="inventory-identity-name">{scrape === "fetching" ? "Fetching from Instagram…" : scrape === "failed" ? "Couldn't fetch the profile" : (p.fullName ?? (p.platform.toLowerCase() === "youtube" ? "YouTube" : p.platform.toLowerCase() === "facebook" ? "Facebook" : "Instagram"))}</span>
                         </div>
                       </div>
                     </TableCell>
@@ -598,7 +605,7 @@ function Creators() {
       </Card>
 
       {selecting && (
-        <FloatingActionBar count={selectedRows.length} total={pageRows.length} onClear={() => setSelected(new Set())}>
+        <FloatingActionBar count={selectedRows.length} total={pageRows.length} onClear={() => setSelected(new Set())} onSelectAll={() => selectFirst(pageRows.length)}>
           {editable && (
             <Button size="sm" variant="ghost" disabled={refreshMany.isPending} onClick={() => refreshMany.mutate({ ids: selectedRows.map((p) => p.id), bulk: true })}>
               <RefreshCw />
@@ -648,24 +655,3 @@ function Creators() {
   );
 }
 
-/** One filter inside the Filters menu: "Platform · All ›" opening its choices. */
-function FilterSub({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
-  const current = options.find((o) => o.value === value)?.label ?? value;
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        {label}
-        <span className={cn("ml-auto pl-4 text-small", value === "all" ? "text-fg-muted" : "font-semibold text-brand-ink")}>{current}</span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
-        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-          {options.map((o) => (
-            <DropdownMenuRadioItem key={o.value} value={o.value}>
-              {o.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}

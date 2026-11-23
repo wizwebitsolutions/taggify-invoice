@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
-import { getAvgEngagementForAssets, createAsset } from "../assets/service.js";
+import { getAvgEngagementForAssets, createAsset, listPageOwners, resolveVendor } from "../assets/service.js";
 import {
   createSpreadsheet,
   deleteSheetTab,
@@ -12,12 +12,13 @@ import {
 } from "../../lib/googleSheetsClient.js";
 import { makeFilePublicViewable, shareFileWithEditor } from "../../lib/googleDriveClient.js";
 import { getUserAccessToken, isGoogleOAuthConfigured } from "../../lib/googleOAuthClient.js";
-import { buildPlanSheetTabs, buildFormatRequests, buildExecutionSheetTemplate, previewExecutionSheetTemplate, reconcilePlanTabRequests, tabStatusRequests } from "../../lib/planSheet.js";
+import { buildComparisonOverview, buildPlanSheetTabs, buildFormatRequests, buildExecutionSheetTemplate, comparisonOverviewTitle, previewExecutionSheetTemplate, reconcilePlanTabRequests, tabStatusRequests } from "../../lib/planSheet.js";
 import { getNumbering, advancePast } from "../../lib/clientInvoiceNumbering.js";
 import { loadEffectivePermissions } from "../../lib/effectivePermissions.js";
 import { getEffectivePermissions } from "../../lib/permissions.js";
 import { notify } from "../notifications/service.js";
-import { buildPlanInvoiceAttachmentKey, getUploadParams, objectExists, publicUrlFor } from "../../lib/cloudinaryClient.js";
+import { readFile } from "node:fs/promises";
+import { buildPlanInvoiceAttachmentKey, getUploadParams, isCloudinaryConfigured, objectExists, publicUrlFor, uploadBrandAsset } from "../../lib/cloudinaryClient.js";
 import { fetchSheetCsv } from "../campaigns/service.js";
 import { autoAttachLink } from "../links/service.js";
 import { parseExecutionSheet } from "../../lib/executionSheetParser.js";
@@ -278,8 +279,8 @@ export function postKindFromUrl(url, combos = ["reel_story"]) {
  */
 const URL_PATH_FORMATS = {
   stories: ["story", "political_story"],
-  reel: ["reel", "entertainment", "pr", "political_reel", "repost"],
-  reels: ["reel", "entertainment", "pr", "political_reel", "repost"],
+  reel: ["reel", "entertainment", "brand", "ott", "pr", "political_reel", "repost"],
+  reels: ["reel", "entertainment", "brand", "ott", "pr", "political_reel", "repost"],
   p: ["post", "repost"],
 };
 
@@ -1252,6 +1253,12 @@ export async function importPlanSheetPages(planId, requester, rows) {
   const assetByHandle = new Map(existingAssets.map((a) => [a.handle.toLowerCase(), a]));
   const onPlan = new Set((await prisma.planItem.findMany({ where: { planId }, select: { assetId: true } })).map((i) => i.assetId));
 
+  // 23 Nov: a row's Vendor Name / Number puts a NEW page under that vendor's
+  // account when one matches (phone first, then name). A vendor not in Taggify
+  // yet is reported back; the page stays under the planner until it's moved.
+  const owners = rows.some((r) => r.vendorName || r.vendorPhone) ? await listPageOwners() : [];
+  const unmatchedVendors = new Map();
+
   let matchedCount = 0;
   let createdCount = 0;
   const failures = [];
@@ -1272,8 +1279,16 @@ export async function importPlanSheetPages(planId, requester, rows) {
     if (asset) {
       matchedCount += 1;
     } else {
+      const vendor = row.vendorName || row.vendorPhone ? { name: row.vendorName || null, phone: row.vendorPhone || null, email: null } : null;
+      const { owner } = resolveVendor(vendor, owners);
+      if (vendor && !owner) {
+        const key = (vendor.phone ?? vendor.name ?? "").toLowerCase();
+        const entry = unmatchedVendors.get(key) ?? { name: vendor.name, phone: vendor.phone, handles: [] };
+        entry.handles.push(cleanHandle);
+        unmatchedVendors.set(key, entry);
+      }
       asset = await prisma.asset.create({
-        data: { ownerId: requester.id, createdById: requester.id, platform: "instagram", handle: cleanHandle, followers: row.followers ?? 0, category: row.category, approvalStatus: "pending" },
+        data: { ownerId: owner?.id ?? requester.id, createdById: requester.id, platform: "instagram", handle: cleanHandle, followers: row.followers ?? 0, category: row.category, approvalStatus: "pending" },
         include: { rateCards: true },
       });
       assetByHandle.set(cleanHandle.toLowerCase(), asset);
@@ -1294,7 +1309,7 @@ export async function importPlanSheetPages(planId, requester, rows) {
     await prisma.planItem.createMany({ data: newItems.map((i) => ({ ...i, planId })) });
   }
 
-  return { matchedCount, createdCount, addedCount: newItems.length, failures, needsCost, plan: await getPlan(planId, requester) };
+  return { matchedCount, createdCount, addedCount: newItems.length, failures, needsCost, unmatchedVendors: [...unmatchedVendors.values()], plan: await getPlan(planId, requester) };
 }
 
 // ── "Upload plan" from a Google Sheet (user request, 22 Sep) ──────────────
@@ -1343,7 +1358,7 @@ async function resolveSheetRows(rows, alreadyOn = new Set()) {
   for (const row of rows) {
     const handle = cleanHandle(row.handle);
     if (!handle) continue;
-    const base = { kind: "page", handle, pageUrl: row.pageUrl ?? null, category: row.category ?? null, followers: row.followers ?? null, format: row.format ?? null, cost: row.cost ?? null, clientCost: row.clientCost ?? null, postsPerProfile: row.postsPerProfile ?? 1 };
+    const base = { kind: "page", handle, pageUrl: row.pageUrl ?? null, category: row.category ?? null, followers: row.followers ?? null, format: row.format ?? null, cost: row.cost ?? null, clientCost: row.clientCost ?? null, postsPerProfile: row.postsPerProfile ?? 1, vendorName: row.vendorName ?? null, vendorPhone: row.vendorPhone ?? null };
     const asset = assetByHandle.get(handle.toLowerCase());
     if (!asset) {
       pending.push({ ...base, reason: "Not in Inventory yet." });
@@ -1430,13 +1445,18 @@ export async function addPendingPage(planId, requester, { handle, ownerId }) {
   if (row.cost == null) throw new ApiError(400, "PENDING_PAGE_NO_COST", `@${row.handle} has no cost in the sheet — add one there and refresh first`);
 
   const format = row.format ?? defaultFormatFor(null);
+  // 23 Nov: no owner picked → the sheet's vendor, when they already have an account.
+  let owner = ownerId;
+  if (!owner && (row.vendorName || row.vendorPhone)) {
+    owner = resolveVendor({ name: row.vendorName ?? null, phone: row.vendorPhone ?? null, email: null }, await listPageOwners()).owner?.id;
+  }
   let asset;
   try {
     asset = await createAsset(requester, {
       platform: "instagram",
       handle: cleanHandle(row.handle),
       category: row.category ?? undefined,
-      ownerId,
+      ownerId: owner,
       followers: row.followers ?? undefined,
       rateCards: requester.role === "ADMIN" ? [{ format, amount: row.cost }] : undefined,
     }, { incompleteRates: "pending" });
@@ -1541,23 +1561,60 @@ async function sheetGroup(plan, requester) {
   return visible;
 }
 
+const SHEET_LOGO_SETTING_KEY = "planSheetLogoUrl";
+
+/**
+ * The logo in the plan sheets' black band (23 Nov — the reference sheets open
+ * with it). Google Sheets shows an image only from a public link, so the file
+ * (lib/assets/taggify-sheet-logo.png) is uploaded to Cloudinary once and its
+ * link kept in AppSetting. Never fails a generation: with no link the band
+ * reads "TAGGIFY" in text instead.
+ */
+async function sheetLogoUrl() {
+  try {
+    const saved = await prisma.appSetting.findUnique({ where: { key: SHEET_LOGO_SETTING_KEY } });
+    if (saved?.value) return saved.value;
+    if (!isCloudinaryConfigured()) return null;
+    const url = await uploadBrandAsset("taggify-sheet-logo", await readFile(new URL("../../lib/assets/taggify-sheet-logo.png", import.meta.url)));
+    await prisma.appSetting.upsert({ where: { key: SHEET_LOGO_SETTING_KEY }, create: { key: SHEET_LOGO_SETTING_KEY, value: url }, update: { value: url } });
+    return url;
+  } catch (err) {
+    console.error("[plans] couldn't prepare the sheet logo:", err?.message ?? err);
+    return null;
+  }
+}
+
 export async function generatePlanSheet(planId, requester, { internal = false, sheetFormat } = {}) {
   const accessToken = await requireGoogleAccessToken();
 
   // The format picked in the generate popup (16 Oct) is saved first, so this
   // write and every later one (edits refresh the sheet) use it.
   if (sheetFormat) {
-    const current = await prisma.plan.findUnique({ where: { id: planId }, select: { sheetFormat: true, createdById: true, status: true } });
+    const current = await prisma.plan.findUnique({ where: { id: planId }, select: { sheetFormat: true, createdById: true, status: true, pitchGroupId: true } });
     if (!current) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found");
     await assertCanAccessPlan(requester, current);
-    if (current.sheetFormat !== sheetFormat) await prisma.plan.update({ where: { id: planId }, data: { sheetFormat } });
+    // "Plan comparison" (23 Nov) is one Overview tab for the whole pitch group,
+    // so turning it on or off applies to every plan in the group; the per-plan
+    // layouts stay per plan.
+    const groupWide = current.pitchGroupId && (sheetFormat === "comparison" || current.sheetFormat === "comparison");
+    if (groupWide) await prisma.plan.updateMany({ where: { pitchGroupId: current.pitchGroupId }, data: { sheetFormat } });
+    else if (current.sheetFormat !== sheetFormat) await prisma.plan.update({ where: { id: planId }, data: { sheetFormat } });
   }
 
   const plan = await getPlan(planId, requester);
   const group = await sheetGroup(plan, requester);
   const urlKey = internal ? "internalSheetUrl" : "clientSheetUrl";
-  const sheets = group.map((p) => ({ plan: p, ...buildPlanSheetTabs(internal ? p : forClientPdf(p), { internal }) }));
-  const titles = sheets.flatMap((t) => [t.overviewTitle, ...t.pageTabs.map((tab) => tab.title)]);
+  const shaped = group.map((p) => (internal ? p : forClientPdf(p)));
+  // Comparison layout (23 Nov): one shared Overview tab, no per-plan ones.
+  const comparison = plan.sheetFormat === "comparison";
+  const combinedTitle = comparison ? comparisonOverviewTitle(group, { internal }) : null;
+  const logoUrl = await sheetLogoUrl();
+  const combined = comparison ? buildComparisonOverview(shaped, { internal, logoUrl }) : null;
+  const sheets = group.map((p, n) => {
+    const tabs = buildPlanSheetTabs(shaped[n], { internal, logoUrl });
+    return { plan: p, ...tabs, overviewTitle: comparison ? null : tabs.overviewTitle };
+  });
+  const titles = [...(combinedTitle ? [combinedTitle] : []), ...sheets.flatMap((t) => [...(t.overviewTitle ? [t.overviewTitle] : []), ...t.pageTabs.map((tab) => tab.title)])];
 
   let spreadsheetId = spreadsheetIdFromUrl(plan[urlKey]) ?? group.map((p) => spreadsheetIdFromUrl(p[urlKey])).find(Boolean) ?? null;
   if (!spreadsheetId) {
@@ -1577,7 +1634,11 @@ export async function generatePlanSheet(planId, requester, { internal = false, s
     // the new titles would be created alongside the old tabs, and the client's
     // sheet would keep the stale pair forever.
     const existingTabs = await getExistingSheetTabs({ accessToken, spreadsheetId });
-    await batchUpdateSpreadsheet({ accessToken, spreadsheetId, requests: reconcilePlanTabRequests(existingTabs, sheets, { internal }) });
+    await batchUpdateSpreadsheet({
+      accessToken,
+      spreadsheetId,
+      requests: reconcilePlanTabRequests(existingTabs, sheets, { internal, combinedTitle, combinedPattern: comparisonOverviewTitle(group, { internal }) }),
+    });
     await ensureSheetTabsExist({ accessToken, spreadsheetId, titles });
   }
 
@@ -1587,8 +1648,9 @@ export async function generatePlanSheet(planId, requester, { internal = false, s
 
   // RAW (the default): links are plain URL text (22 Sep), so a handle or
   // URL can never be re-read by Sheets as a formula or number.
+  if (combined) await writeSheetTab({ accessToken, spreadsheetId, title: combinedTitle, rows: combined.rows });
   for (const t of sheets) {
-    await writeSheetTab({ accessToken, spreadsheetId, title: t.overviewTitle, rows: t.overviewRows });
+    if (t.overviewTitle) await writeSheetTab({ accessToken, spreadsheetId, title: t.overviewTitle, rows: t.overviewRows });
     for (const tab of t.pageTabs) await writeSheetTab({ accessToken, spreadsheetId, title: tab.title, rows: tab.rows });
   }
 
@@ -1597,10 +1659,13 @@ export async function generatePlanSheet(planId, requester, { internal = false, s
   await batchUpdateSpreadsheet({
     accessToken,
     spreadsheetId,
-    requests: sheets.flatMap((t) => [
-      ...(gids[t.overviewTitle] != null ? [...buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols), ...tabStatusRequests(gids[t.overviewTitle], t.plan, { internal })] : []),
+    requests: [
+      ...(combined && gids[combinedTitle] != null ? buildFormatRequests(gids[combinedTitle], combined.rowSpecs, combined.numCols) : []),
+      ...sheets.flatMap((t) => [
+      ...(t.overviewTitle && gids[t.overviewTitle] != null ? [...buildFormatRequests(gids[t.overviewTitle], t.overviewRowSpecs, t.overviewNumCols), ...tabStatusRequests(gids[t.overviewTitle], t.plan, { internal })] : []),
       ...t.pageTabs.flatMap((tab) => (gids[tab.title] != null ? [...buildFormatRequests(gids[tab.title], tab.rowSpecs, tab.numCols), ...tabStatusRequests(gids[tab.title], t.plan, { internal })] : [])),
-    ]),
+      ]),
+    ],
   });
 
   // Edit access for whoever generated it (8 Oct) and for the plan's maker (16
@@ -1612,7 +1677,8 @@ export async function generatePlanSheet(planId, requester, { internal = false, s
   const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
   let spreadsheetUrl = base;
   for (const t of sheets) {
-    const gid = gids[t.overviewTitle];
+    // Comparison layout: every plan's link opens the one shared Overview tab.
+    const gid = gids[t.overviewTitle ?? combinedTitle];
     const url = gid != null ? `${base}?gid=${gid}#gid=${gid}` : base;
     if (t.plan.id === plan.id) spreadsheetUrl = url;
     await prisma.plan.update({ where: { id: t.plan.id }, data: { [urlKey]: url } });

@@ -63,6 +63,12 @@ export async function refreshLinkMetrics(linkId) {
 export async function refreshAssetMetrics(assetId) {
   const asset = await prisma.asset.findUnique({ where: { id: assetId } });
   if (!asset) throw new Error(`Asset ${assetId} not found`);
+  // 23 Nov: YouTube / Facebook pages can't be fetched (the scraper is Instagram-only);
+  // their followers are typed by hand, so there's nothing to refresh.
+  if (asset.platform && asset.platform !== "instagram") {
+    if (asset.scrapeQueuedAt) await prisma.asset.update({ where: { id: assetId }, data: { scrapeQueuedAt: null } }).catch(() => {});
+    return asset;
+  }
 
   let metrics;
   try {

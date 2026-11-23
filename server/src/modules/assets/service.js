@@ -3,7 +3,7 @@ import { prisma } from "../../lib/prisma.js";
 import { ApiError } from "../../middleware/errorHandler.js";
 import { refreshAssetMetrics, applyProfileMetrics } from "../scraping/service.js";
 import { ApifyInstagramProvider } from "../../lib/apifyClient.js";
-import { normalizeHandle, isValidHandle, parseImportSheet, ImportParseError } from "./importParser.js";
+import { normalizeHandle, isValidHandle, isValidPlatformHandle, parseImportSheet, ImportParseError } from "./importParser.js";
 import { fetchSheetCsv } from "../campaigns/service.js";
 import { uploadProfilePic, isCloudinaryConfigured } from "../../lib/cloudinaryClient.js";
 import { downloadImage } from "../../lib/downloadImage.js";
@@ -266,6 +266,8 @@ export async function createAsset(user, { platform, handle, category, ownerId, r
   // shouldn't block the "Add page" request; a bad handle or transient
   // failure here just means the page shows blank until it's approved
   // (see setApprovalStatus) or the next cron tick.
+  // Only Instagram pages can be fetched (23 Nov: YouTube / Facebook pages are added by hand).
+  if (platform !== "instagram") return asset;
   const queuedAt = await markScrapeQueued([asset.id]);
   void scrapeSequentially([asset.id]);
 
@@ -723,7 +725,7 @@ export async function listPageOwners({ includeDeactivated = false } = {}) {
     // A deactivated vendor (21 Oct) isn't offered for new pages. The import preview still
     // matches against them, so a sheet naming one says so instead of offering a "new" vendor.
     where: { role: "CREATOR", ...(includeDeactivated ? {} : { deactivatedAt: null }) },
-    select: { id: true, name: true, phoneNumber: true, email: true, ...(includeDeactivated ? { deactivatedAt: true } : {}) },
+    select: { id: true, name: true, phoneNumber: true, secondaryPhone: true, email: true, ...(includeDeactivated ? { deactivatedAt: true } : {}) },
     orderBy: [{ name: "asc" }, { createdAt: "asc" }],
   });
 }
@@ -785,7 +787,8 @@ export function resolveVendor(vendor, owners) {
   if (!vendor) return { owner: null, reason: null, isNew: false, ambiguous: false };
   if (vendor.phone) {
     const key = phoneKey(vendor.phone);
-    const byPhone = key.length >= 10 ? owners.find((o) => phoneKey(o.phoneNumber) === key) : null;
+    // 23 Nov: the vendor's second number (Users → secondaryPhone) matches too.
+    const byPhone = key.length >= 10 ? (owners.find((o) => phoneKey(o.phoneNumber) === key) ?? owners.find((o) => o.secondaryPhone && phoneKey(o.secondaryPhone) === key)) : null;
     if (byPhone) return { owner: byPhone, reason: null, isNew: false, ambiguous: false };
   }
   if (vendor.email) {
@@ -846,7 +849,8 @@ function vendorKey(vendor) {
  * and a new vendor needs a contact to be created); this names the rest.
  * Creators' own sheets carry no rates or vendor, so only Page Name applies.
  */
-export const IMPORT_REQUIRED_RATES = ["entertainment", "reel", "story"];
+// 20 Nov: Entertainment and Brand are separate rates, both required; OTT is optional.
+export const IMPORT_REQUIRED_RATES = ["entertainment", "brand", "reel", "story"];
 export function missingImportFields(row, { isCreator = false } = {}) {
   const missing = [];
   if (!row.pageName?.trim()) missing.push("Page Name");
@@ -866,8 +870,8 @@ export async function previewImport(parsed, user) {
   const handles = [...new Set(parsed.rows.map((r) => r.handle).filter(Boolean))];
   const existing = handles.length
     ? await prisma.asset.findMany({
-        where: { platform: "instagram", handle: { in: handles, mode: "insensitive" } },
-        select: { id: true, handle: true, ownerId: true, category: true, grade: true, groupLink: true, pendingEdit: true, rateCards: { select: { format: true, amount: true } }, owner: { select: { id: true, name: true, phoneNumber: true, email: true } } },
+        where: { handle: { in: handles, mode: "insensitive" } },
+        select: { id: true, platform: true, handle: true, ownerId: true, category: true, grade: true, groupLink: true, pendingEdit: true, rateCards: { select: { format: true, amount: true } }, owner: { select: { id: true, name: true, phoneNumber: true, email: true } } },
       })
     : [];
   // A page already in Inventory under the row's own account (1 Nov): "update"
@@ -889,8 +893,10 @@ export async function previewImport(parsed, user) {
     return { ...base, owner, ownerId: owner.id, status: "update", changes, current, replacesPendingEdit, reason };
   };
   const existingByHandle = new Map();
+  // Keyed by platform + handle (23 Nov): an Instagram page and a YouTube channel can share a name.
+  const pageKey = (platform, handle) => `${platform ?? "instagram"}:${handle.toLowerCase()}`;
   for (const a of existing) {
-    const k = a.handle.toLowerCase();
+    const k = pageKey(a.platform, a.handle);
     existingByHandle.set(k, [...(existingByHandle.get(k) ?? []), a]);
   }
 
@@ -903,9 +909,9 @@ export async function previewImport(parsed, user) {
     // still imports, but lands pending until those rates are set.
     // Empty for anyone else — their pages land pending, without rates, anyway.
     const missingRates = isAdmin ? missingRequiredRates(row.rateCards) : [];
-    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, handle: row.handle, pageName: row.pageName ?? null, category: row.category, grade: row.grade ?? null, groupLink: row.groupLink ?? null, followers: row.followers, rateCards: row.rateCards, missingRates, missingFields: [], ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null, changes: null, current: null, replacesPendingEdit: false };
+    const base = { rowNumber: row.rowNumber, rawHandle: row.rawHandle, platform: row.platform ?? "instagram", handle: row.handle, pageName: row.pageName ?? null, category: row.category, grade: row.grade ?? null, groupLink: row.groupLink ?? null, followers: row.followers, rateCards: row.rateCards, missingRates, missingFields: [], ownerRef: row.ownerRef, vendor, owner: null, ownerId: null, status: "ready", reason: null, changes: null, current: null, replacesPendingEdit: false };
     if (row.problem) return { ...base, status: "invalid", reason: row.problem };
-    const key = row.handle.toLowerCase();
+    const key = pageKey(row.platform, row.handle);
     if (seen.has(key)) return { ...base, status: "duplicate", reason: "Same handle appears earlier in this sheet." };
     seen.add(key);
 
@@ -1068,12 +1074,13 @@ export async function importAssets(user, rows) {
 
   // Pass 1 — everything checkable without Instagram.
   for (const input of rows) {
-    const handle = normalizeHandle(input.handle);
-    if (!handle || !isValidHandle(handle)) {
-      skipped.push({ handle: input.handle, reason: "Not a valid Instagram handle." });
+    const platform = input.platform ?? "instagram";
+    const handle = platform === "instagram" ? normalizeHandle(input.handle) : String(input.handle ?? "").trim().replace(/^@+/, "");
+    if (!handle || !isValidPlatformHandle(platform, handle)) {
+      skipped.push({ handle: input.handle, reason: platform === "instagram" ? "Not a valid Instagram handle." : `Not a valid ${platform === "youtube" ? "YouTube" : "Facebook"} page name.` });
       continue;
     }
-    const key = handle.toLowerCase();
+    const key = `${platform}:${handle.toLowerCase()}`;
     if (seen.has(key)) {
       skipped.push({ handle, reason: "Duplicate handle in this import." });
       continue;
@@ -1087,7 +1094,7 @@ export async function importAssets(user, rows) {
       continue;
     }
     const clash = await prisma.asset.findFirst({
-      where: { platform: "instagram", handle: { equals: handle, mode: "insensitive" } },
+      where: { platform, handle: { equals: handle, mode: "insensitive" } },
       select: { id: true, handle: true, ownerId: true, category: true, grade: true, groupLink: true, pendingEdit: true, rateCards: { select: { format: true, amount: true } }, owner: { select: { name: true, phoneNumber: true } } },
     });
     if (clash) {
@@ -1096,7 +1103,7 @@ export async function importAssets(user, rows) {
       else skipped.push({ handle, reason: clashReason(clash, owner, isCreator) });
       continue;
     }
-    candidates.push({ input, handle, owner });
+    candidates.push({ input, handle, owner, platform });
   }
 
   // Edits to pages already in Inventory (1 Nov). No Instagram check — the
@@ -1130,8 +1137,10 @@ export async function importAssets(user, rows) {
   // now in one batch. The client's word that a row is fine isn't trusted.
   // Snapshotted once, so an entry that expires while the lookup below runs
   // isn't then refused as "couldn't verify".
-  const checked = new Map(candidates.map((c) => [c.handle, peekPreviewScrape(c.handle)]));
-  const unchecked = candidates.filter((c) => checked.get(c.handle) === undefined).map((c) => c.handle);
+  // YouTube / Facebook pages (23 Nov) can't be looked up: they're stored with the sheet's own numbers.
+  const instagramCandidates = candidates.filter((c) => c.platform === "instagram");
+  const checked = new Map(instagramCandidates.map((c) => [c.handle, peekPreviewScrape(c.handle)]));
+  const unchecked = instagramCandidates.filter((c) => checked.get(c.handle) === undefined).map((c) => c.handle);
   // A big stale batch would hold this request open for minutes; past the cap
   // the admin re-runs the check in the popup (one preview-sized chunk at a time).
   if (unchecked.length > 0 && unchecked.length <= MAX_IMPORT_VERIFY_HANDLES) {
@@ -1149,8 +1158,9 @@ export async function importAssets(user, rows) {
   }
 
   const toStorePic = [];
-  for (const { input, handle, owner } of candidates) {
-    const metrics = checked.get(handle);
+  for (const { input, handle, owner, platform } of candidates) {
+    const manual = platform !== "instagram";
+    const metrics = manual ? { followers: input.followers ?? 0 } : checked.get(handle);
     if (metrics === null) {
       skipped.push({ handle, reason: "Link broken or page not found on Instagram." });
       continue;
@@ -1164,7 +1174,7 @@ export async function importAssets(user, rows) {
     // the creator) registering the same page meanwhile would otherwise put
     // it under two accounts.
     const lateClash = await prisma.asset.findFirst({
-      where: { platform: "instagram", handle: { equals: handle, mode: "insensitive" } },
+      where: { platform, handle: { equals: handle, mode: "insensitive" } },
       select: { ownerId: true, owner: { select: { name: true, phoneNumber: true } } },
     });
     if (lateClash) {
@@ -1181,7 +1191,7 @@ export async function importAssets(user, rows) {
         data: {
           ownerId: owner.id,
           createdById: user.id,
-          platform: "instagram",
+          platform,
           handle,
           category: input.category || null,
           // Grade + group link (16 Oct), optional sheet columns.
@@ -1208,6 +1218,7 @@ export async function importAssets(user, rows) {
     }
     previewScrapeCache.delete(handle.toLowerCase());
     created.push({ ...asset, owner: { id: owner.id, name: owner.name, phoneNumber: owner.phoneNumber } });
+    if (manual) continue;
     try {
       await applyProfileMetrics(asset.id, metrics);
       toStorePic.push(asset.id);

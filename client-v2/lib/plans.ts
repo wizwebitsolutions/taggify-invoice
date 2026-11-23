@@ -20,12 +20,14 @@ export const isDecidable = (p: Pick<Plan, "status">) => p.status === "DRAFT";
 /** A rejected plan can still be approved later (8 Oct); only a draft can be rejected. */
 export const canBeApproved = (p: Pick<Plan, "status">) => p.status === "DRAFT" || p.status === "REJECTED";
 
-/** The plan sheet's two layouts (8 Oct), modelled on the two sample plans. */
+/** The plan sheet's layouts (8 Oct), modelled on the sample plans; "comparison" (23 Nov) is sample 3. */
 export const SHEET_FORMAT_INFO = {
   breakdown: { label: "Category breakdown", description: "A row per page category with followers, items, cost and expected views, then GST and the total." },
   summary: { label: "Campaign summary", description: "One overview block: total followers, deliverables, expected views, cost and cost per view." },
+  comparison: { label: "Plan comparison", description: "One Overview tab for all plans (Plan A, Plan B, …) side by side: followers, posts, views, cost and CPV. Applies to every plan in this pitch." },
 } as const;
-export const sheetFormatOf = (p: { sheetFormat?: string | null }) => (p.sheetFormat === "summary" ? "summary" : "breakdown");
+export const sheetFormatOf = (p: { sheetFormat?: string | null }): "breakdown" | "summary" | "comparison" =>
+  p.sheetFormat === "summary" || p.sheetFormat === "comparison" ? p.sheetFormat : "breakdown";
 
 /** Drafts and rejected plans reopen in the plan form; an approved plan already made its campaign. */
 export const isEditablePlan = (p: Pick<Plan, "status">) => isDraft(p) || p.status === "REJECTED";

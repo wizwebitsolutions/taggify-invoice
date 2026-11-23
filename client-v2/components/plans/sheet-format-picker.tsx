@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  */
 export function SheetFormatPicker({ value, onChange, disabled }: { value: SheetFormat; onChange: (v: SheetFormat) => void; disabled?: boolean }) {
   return (
-    <div role="radiogroup" aria-label="Google Sheet format" className="grid gap-3 sm:grid-cols-2">
+    <div role="radiogroup" aria-label="Google Sheet format" className="grid gap-3 sm:grid-cols-3">
       {(Object.keys(SHEET_FORMAT_INFO) as SheetFormat[]).map((key) => {
         const on = value === key;
         const info = SHEET_FORMAT_INFO[key];
@@ -34,7 +34,7 @@ export function SheetFormatPicker({ value, onChange, disabled }: { value: SheetF
             <span className={cn("absolute right-3 top-3 grid h-5 w-5 place-items-center rounded-full border", on ? "border-brand bg-brand text-brand-foreground" : "border-input bg-card")} aria-hidden>
               {on && <Check className="h-3 w-3" strokeWidth={3} />}
             </span>
-            {key === "breakdown" ? <BreakdownPreview /> : <SummaryPreview />}
+            {key === "breakdown" ? <BreakdownPreview /> : key === "summary" ? <SummaryPreview /> : <ComparisonPreview />}
             <span>
               <span className="block text-body-strong">{info.label}</span>
               <span className="block text-small text-muted-foreground">{info.description}</span>
@@ -68,6 +68,28 @@ function BreakdownPreview() {
           <span key={i} className="h-2 rounded-pill bg-fg-muted/50" />
         ))}
       </span>
+    </span>
+  );
+}
+
+/** Labels down the side, one column per plan (23 Nov). */
+function ComparisonPreview() {
+  return (
+    <span className="flex h-24 flex-col gap-1.5 rounded-md bg-muted p-2.5" aria-hidden>
+      <span className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-1">
+        <span />
+        {[0, 1, 2].map((i) => (
+          <span key={i} className="h-2 rounded-pill bg-brand/60" />
+        ))}
+      </span>
+      {[0, 1, 2, 3].map((r) => (
+        <span key={r} className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-1">
+          <span className="h-2 rounded-pill bg-fg-muted/40" />
+          {[0, 1, 2].map((i) => (
+            <span key={i} className="h-2 rounded-pill bg-fg-muted/25" />
+          ))}
+        </span>
+      ))}
     </span>
   );
 }

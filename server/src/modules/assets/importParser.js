@@ -49,8 +49,27 @@ export function parseCategory(text) {
 // "phone" column still means the owner's phone, exactly as before.
 const VENDOR_NAME_HEADERS = ["vendor", "vendor name", "vendor's name"];
 // One cell holding a phone number OR an email — classified per row.
-const VENDOR_CONTACT_HEADERS = ["contact", "vendor contact", "contact number", "contact no", "contact details"];
-const VENDOR_PHONE_HEADERS = ["vendor phone", "vendor mobile", "contact phone"];
+// 23 Nov ("sheet se vendor ka number pick nahi kar raha"): the spellings people
+// actually use for the vendor's number, e.g. "Vendor Number", "Vendor No.", "WhatsApp".
+const VENDOR_CONTACT_HEADERS = ["contact", "vendor contact", "contact number", "contact no", "contact details", "vendor contact number", "vendor contact no", "vendor details"];
+const VENDOR_PHONE_HEADERS = [
+  "vendor phone",
+  "vendor mobile",
+  "contact phone",
+  "vendor number",
+  "vendor no",
+  "vendor phone number",
+  "vendor mobile number",
+  "vendor mobile no",
+  "vendor phone no",
+  "vendor whatsapp",
+  "vendor whatsapp number",
+  "whatsapp",
+  "whatsapp number",
+  "whatsapp no",
+  "mobile no",
+  "phone no",
+];
 const VENDOR_EMAIL_HEADERS = ["vendor email", "contact email"];
 const MAX_VENDOR_NAME_LENGTH = 100;
 const MAX_EMAIL_LENGTH = 254;
@@ -80,7 +99,7 @@ const RATE_HEADER_SUFFIX = /\s(rate|cost|price|amount)$/;
 // are as likely a count, a link or a yes/no column as a price, so they need
 // the suffix too ("Static & Carousel", "Reel + Story" and other exact
 // multi-word names still count bare).
-const BARE_NON_RATE_HEADERS = new Set(["image", "brand", "post", "static", "carousel", "pr", "combo"]);
+const BARE_NON_RATE_HEADERS = new Set(["image", "brand", "ott", "post", "static", "carousel", "pr", "combo"]);
 
 /** The format a header names as a rate column, or null. Exported for tests. */
 export function rateFormatFromHeader(header) {
@@ -125,6 +144,53 @@ const NON_PROFILE_PATHS = ["p", "reel", "reels", "tv", "explore", "accounts", "d
 
 export function isValidHandle(handle) {
   return typeof handle === "string" && HANDLE_PATTERN.test(handle);
+}
+
+/**
+ * Pages on other platforms (23 Nov — "YouTube and Facebook inventory add nahi
+ * ho rahi"). Only Instagram pages are looked up automatically; these are added
+ * with the sheet's own numbers. Handles keep their case-insensitive match.
+ */
+export const PLATFORMS = ["instagram", "youtube", "facebook"];
+const OTHER_HANDLE_PATTERN = /^[a-z0-9._-]{1,100}$/i;
+
+/** Whether `handle` is a valid handle for `platform`. */
+export function isValidPlatformHandle(platform, handle) {
+  if (!platform || platform === "instagram") return isValidHandle(handle);
+  return typeof handle === "string" && OTHER_HANDLE_PATTERN.test(handle);
+}
+
+/**
+ * A YouTube or Facebook profile link → { platform, handle }, else null.
+ *   youtube.com/@name, /c/name, /user/name, /channel/UC…  → youtube
+ *   facebook.com/name, fb.com/name, facebook.com/profile.php?id=123 → facebook
+ * Video, post and watch links aren't a page and give null.
+ */
+export function otherPlatformRef(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  const yt = value.match(/^(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/(@[^/?#\s]+|c\/[^/?#\s]+|user\/[^/?#\s]+|channel\/[^/?#\s]+)/i);
+  if (yt) {
+    const handle = yt[1].replace(/^@/, "").replace(/^(c|user|channel)\//i, "");
+    return handle ? { platform: "youtube", handle } : null;
+  }
+  const fb = value.match(/^(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)\/([^?#\s]+)(\?[^#\s]*)?/i);
+  if (fb) {
+    const path = fb[1].replace(/\/+$/, "");
+    if (/^profile\.php$/i.test(path)) {
+      const id = /[?&]id=(\d+)/.exec(fb[2] ?? "")?.[1];
+      return id ? { platform: "facebook", handle: id } : null;
+    }
+    const first = path.split("/")[0];
+    if (!first || ["watch", "reel", "reels", "share", "groups", "events", "photo", "photos", "story.php", "permalink.php", "login", "pages"].includes(first.toLowerCase())) return null;
+    return { platform: "facebook", handle: first };
+  }
+  return null;
+}
+
+/** Any supported page link or handle → { platform, handle } (a bare handle is Instagram), else null. */
+export function pageRefFromText(raw) {
+  return otherPlatformRef(raw) ?? (normalizeHandle(raw) ? { platform: "instagram", handle: normalizeHandle(raw) } : null);
 }
 
 /** "1.2M" / "850K" / "1.5L" / "2Cr" / "12,500" / 12500 → an integer, else null. */
@@ -306,7 +372,17 @@ export async function parseImportSheet(buffer, fileName = "") {
   // for the header, and its cells don't get imported as pages.
   const nonEmpty = (cells) => (cells ?? []).some((c) => String(c ?? "").trim() !== "");
   if (!grid.some(nonEmpty)) throw new ImportParseError("That file is empty — it needs a header row (e.g. handle, owner phone) and one row per page.");
-  const lowerRow = (cells) => (cells ?? []).map((h) => cellText(h).trim().toLowerCase().replace(/[‘’]/g, "'"));
+  const lowerRow = (cells) =>
+    (cells ?? []).map((h) =>
+      cellText(h)
+        .toLowerCase()
+        .replace(/[‘’]/g, "'")
+        .replace(/\(required\)/g, "")
+        .replace(/[\s.:*]+$/g, "")
+        .replace(/\bno\./g, "no")
+        .replace(/\s+/g, " ")
+        .trim()
+    );
   const namesAPage = (cells) => [PAGE_LINK_HEADERS, HANDLE_HEADERS, PAGE_NAME_HEADERS].some((h) => findColumn(lowerRow(cells), h) !== null);
   const headerIdx = grid.slice(0, HEADER_SEARCH_ROWS).findIndex(namesAPage);
   if (headerIdx === -1) {
@@ -340,6 +416,10 @@ export async function parseImportSheet(buffer, fileName = "") {
   // the same rate card, which is unique per (asset, format)).
   const rateCols = [];
   const seenFormats = new Set();
+  // 20 Nov: Entertainment and Brand became two rates. A sheet with the old
+  // combined "Entertainment / Brand" column gives that price to both, unless
+  // the sheet also has its own Brand column.
+  let combinedBrandCol = null;
   headers.forEach((h, i) => {
     if (i === linkCol || i === handleOnlyCol || i === namedCol || i === ownerCol || i === categoryCol || i === followersCol || i === gradeCol || i === groupLinkCol || vendorCols.includes(i)) return;
     if (rateCols.length >= MAX_RATE_COLUMNS) return;
@@ -347,7 +427,12 @@ export async function parseImportSheet(buffer, fileName = "") {
     if (!format || seenFormats.has(format)) return;
     seenFormats.add(format);
     rateCols.push({ col: i, format });
+    if (format === "entertainment" && /brand/i.test(String(h))) combinedBrandCol = i;
   });
+  if (combinedBrandCol !== null && !seenFormats.has("brand")) {
+    seenFormats.add("brand");
+    rateCols.push({ col: combinedBrandCol, format: "brand" });
+  }
 
   const dataRows = grid.slice(headerIdx + 1).map((cells, i) => ({ cells, rowNumber: headerIdx + 2 + i })).filter(({ cells }) => nonEmpty(cells));
   if (dataRows.length === 0) throw new ImportParseError("No pages found below the header row.");
@@ -357,7 +442,10 @@ export async function parseImportSheet(buffer, fileName = "") {
 
   const rows = dataRows.map(({ cells, rowNumber }) => {
     let rawHandle = cellText(cells[handleCol]).trim();
-    let handle = normalizeHandle(rawHandle);
+    // YouTube / Facebook links (23 Nov) are read before the Instagram rules.
+    const other = otherPlatformRef(rawHandle);
+    const platform = other?.platform ?? "instagram";
+    let handle = other?.handle ?? normalizeHandle(rawHandle);
     // A sheet with both columns: a row whose "link" isn't an Instagram profile
     // (an old sheet's website column, say) falls back to its handle cell.
     if (!handle && linkCol !== null && handleOnlyCol !== null) {
@@ -368,8 +456,10 @@ export async function parseImportSheet(buffer, fileName = "") {
       }
     }
     let problem = null;
-    if (!handle) problem = rawHandle ? "Link broken or not an Instagram profile link." : "Missing page link.";
-    else if (!isValidHandle(handle)) problem = `"${handle}" isn't a valid Instagram handle (letters, digits, dots and underscores only, up to 30 characters).`;
+    if (!handle) problem = rawHandle ? "Link broken or not an Instagram, YouTube or Facebook page link." : "Missing page link.";
+    else if (platform !== "instagram") {
+      if (!isValidPlatformHandle(platform, handle)) problem = `"${handle}" isn't a valid ${platform === "youtube" ? "YouTube" : "Facebook"} page name.`;
+    } else if (!isValidHandle(handle)) problem = `"${handle}" isn't a valid Instagram handle (letters, digits, dots and underscores only, up to 30 characters).`;
 
     const rateCards = [];
     for (const { col, format } of rateCols) {
@@ -394,6 +484,7 @@ export async function parseImportSheet(buffer, fileName = "") {
     return {
       rowNumber,
       rawHandle,
+      platform,
       handle,
       pageName: pageNameCol === null ? null : cellText(cells[pageNameCol]).trim().slice(0, 100) || null,
       ownerRef,

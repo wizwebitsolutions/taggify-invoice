@@ -129,6 +129,19 @@ export function uploadTrackedPostImage(postId, name, buffer) {
   });
 }
 
+/**
+ * A fixed brand image (23 Nov: the logo in the plan sheets' black band, which
+ * Google Sheets can only show from a public link). One public_id per name,
+ * overwritten on re-upload. Returns the delivery URL.
+ */
+export function uploadBrandAsset(name, buffer) {
+  if (!process.env.CLOUDINARY_CLOUD_NAME) return Promise.reject(new Error("Cloudinary isn't configured"));
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({ public_id: `brand/${name}`, overwrite: true, resource_type: "image" }, (err, result) => (err ? reject(err) : resolve(result.secure_url)));
+    stream.end(buffer);
+  });
+}
+
 export function isCloudinaryConfigured() {
   return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
 }

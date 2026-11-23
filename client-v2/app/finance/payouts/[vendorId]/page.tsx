@@ -27,6 +27,7 @@ import { EmptyState, Illustration } from "@/components/taggify/illustration";
 import { MetricTile } from "@/components/taggify/metric-tile";
 import { Money } from "@/components/taggify/money";
 import { PlatformIcon } from "@/components/taggify/platform-icon";
+import { pageProfileUrl } from "@/lib/creators";
 import { SearchField } from "@/components/taggify/search-field";
 import { StatusPill } from "@/components/taggify/status-pill";
 import { UserAvatar } from "@/components/taggify/user-avatar";
@@ -298,7 +299,7 @@ function VendorPayout() {
                       {p.category && <Badge variant="tag">{p.category}</Badge>}
                     </div>
                     <a
-                      href={p.platform.toLowerCase() === "youtube" ? `https://www.youtube.com/@${p.handle.replace(/^@/, "")}` : `https://www.instagram.com/${p.handle.replace(/^@/, "")}/`}
+                      href={pageProfileUrl(p.handle, p.platform)}
                       target="_blank"
                       rel="noreferrer"
                       className="absolute right-3 top-3 z-10 grid h-7 w-7 place-items-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"

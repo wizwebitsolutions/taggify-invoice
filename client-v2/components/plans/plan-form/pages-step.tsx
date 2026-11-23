@@ -8,6 +8,7 @@ import { ExternalLink, FileSpreadsheet, Sparkles, Upload, X } from "lucide-react
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, plans as plansApi, type Asset, type Plan } from "@/lib/api-client";
 import { formatName } from "@/lib/plans";
+import { COST_BANDS, GRADES, inCostBand, pageProfileUrl, PLATFORM_LABEL, vendorOptions, type PagePlatform } from "@/lib/creators";
 import { comboParts, FORMATS, formatLabel, isFormat } from "@/lib/formats";
 import { parsePlanPageSheet, type CsvSource } from "@/lib/sheet-import";
 import { cn } from "@/lib/utils";
@@ -19,13 +20,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FilterSelect } from "@/components/taggify/filter-select";
+import { FilterChips, FilterMenu, type FilterDef } from "@/components/taggify/filter-menu";
 import { Money } from "@/components/taggify/money";
 import { SearchField } from "@/components/taggify/search-field";
 import { audienceLabel, displayHandle, PageAvatar } from "@/components/finance/identity";
 import { BudgetMeter } from "./budget-meter";
 import { PageCheck } from "./page-check";
-import { comboSplitOf, type DraftItem, instagramUrl, itemCost, itemPostCount, lineCost, lineNeedsCost, newItem, rateFor, toDraft } from "./draft";
+import { comboSplitOf, type DraftItem, itemCost, itemPostCount, lineCost, lineNeedsCost, newItem, rateFor, toDraft } from "./draft";
+
+/** "Amplification Pages", "amplification page " → "amplification" (23 Nov: one filter choice per category). */
+const categoryKey = (c: string | null | undefined) =>
+  (c ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s*(pages?|handles?)$/, "")
+    .trim() || null;
 
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 
@@ -61,8 +71,12 @@ export function PagesStep({
   onSheetImported: (plan: Plan) => void;
 }) {
   const [q, setQ] = useState("");
-  const [category, setCategory] = useState("All");
+  const [category, setCategory] = useState("all");
   const [platform, setPlatform] = useState("all");
+  // 23 Nov: filter by vendor, grade and cost of page.
+  const [vendor, setVendor] = useState("all");
+  const [grade, setGrade] = useState("all");
+  const [cost, setCost] = useState("all");
   const [topN, setTopN] = useState("10");
   const [message, setMessage] = useState("");
 
@@ -75,21 +89,54 @@ export function PagesStep({
   const over = budgetNumber ? used - budgetNumber : 0;
   const unpriced = items.filter((i) => lineNeedsCost(i, byId.get(i.assetId))).length;
 
+  // Categories typed different ways ("Amplification page", "amplification Pages") are one
+  // choice (23 Nov), shown under its most used spelling, with its page count.
   const categories = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const a of assets) if (a.category) counts.set(a.category, (counts.get(a.category) ?? 0) + 1);
-    return [{ label: "All", count: assets.length }, ...[...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, count]) => ({ label, count }))];
+    const groups = new Map<string, { count: number; spellings: Map<string, number> }>();
+    for (const a of assets) {
+      const key = categoryKey(a.category);
+      if (!key) continue;
+      const g = groups.get(key) ?? { count: 0, spellings: new Map() };
+      g.count += 1;
+      g.spellings.set(a.category!.trim(), (g.spellings.get(a.category!.trim()) ?? 0) + 1);
+      groups.set(key, g);
+    }
+    return [...groups.entries()]
+      .map(([key, g]) => ({ key, label: [...g.spellings.entries()].sort((x, y) => y[1] - x[1])[0][0], count: g.count }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, [assets]);
   const needle = q.trim().toLowerCase();
   const visible = useMemo(
     () =>
       assets
-        .filter((a) => category === "All" || a.category === category)
+        .filter((a) => category === "all" || categoryKey(a.category) === category)
         .filter((a) => platform === "all" || a.platform.toLowerCase() === platform)
-        .filter((a) => !needle || `${a.handle} ${a.fullName ?? ""} ${a.category ?? ""}`.toLowerCase().includes(needle))
+        .filter((a) => vendor === "all" || a.owner?.id === vendor)
+        .filter((a) => grade === "all" || (grade === "none" ? !a.grade : a.grade === grade))
+        .filter((a) => inCostBand(a, cost))
+        .filter((a) => !needle || `${a.handle} ${a.fullName ?? ""} ${a.category ?? ""} ${a.owner?.name ?? ""}`.toLowerCase().includes(needle))
         .sort((a, b) => b.followers - a.followers),
-    [assets, category, platform, needle]
+    [assets, category, platform, vendor, grade, cost, needle]
   );
+  const vendorChoices = useMemo(() => vendorOptions(assets), [assets]);
+  const filters: FilterDef[] = [
+    {
+      key: "platform",
+      label: "Platform",
+      value: platform,
+      onChange: setPlatform,
+      options: [
+        { value: "all", label: "All" },
+        { value: "instagram", label: "Instagram" },
+        { value: "youtube", label: "YouTube" },
+        { value: "facebook", label: "Facebook" },
+      ],
+    },
+    { key: "category", label: "Category", value: category, onChange: setCategory, options: [{ value: "all", label: `All (${assets.length})` }, ...categories.map((c) => ({ value: c.key, label: `${c.label} (${c.count})` }))] },
+    { key: "vendor", label: "Vendor", value: vendor, onChange: setVendor, options: vendorChoices },
+    { key: "grade", label: "Grade", value: grade, onChange: setGrade, options: [{ value: "all", label: "All" }, ...GRADES.map((g) => ({ value: g, label: `Grade ${g}` })), { value: "none", label: "Not graded" }] },
+    { key: "cost", label: "Cost", value: cost, onChange: setCost, options: COST_BANDS.map((b) => ({ value: b.value, label: b.label })) },
+  ];
 
   const costToAdd = (a: Asset) => rateFor(a, newItem(a).format);
   /** Why a page can't be added right now, or null if it can. Only the budget gates picking (16 Oct). */
@@ -149,42 +196,28 @@ export function PagesStep({
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Card className="ledger-panel">
-          <div className="flex flex-wrap items-center gap-2 px-5 pt-5">
-            <SearchField label="Search pages" placeholder="Search page or category..." className="w-full sm:w-64" value={q} onChange={(e) => setQ(e.target.value)} />
-            <FilterSelect
-              label="Platform"
-              value={platform}
-              onValueChange={setPlatform}
-              options={[
-                { value: "all", label: "All" },
-                { value: "instagram", label: "Instagram" },
-                { value: "youtube", label: "YouTube" },
-              ]}
-            />
-            <div className="flex items-center gap-2 sm:ml-auto">
-              <Label htmlFor="pl-topn" className="whitespace-nowrap text-small font-normal text-muted-foreground">
-                Add top
-              </Label>
-              <Input id="pl-topn" type="number" inputMode="numeric" min={1} max={500} className="w-20" value={topN} onChange={(e) => setTopN(e.target.value)} />
-              <Button variant="outline" onClick={addTop} disabled={!budgetNumber}>
-                <Sparkles />
-                by followers
-              </Button>
+          {/* 23 Nov: search + one Filters menu, active filters as chips, Add top on its own line (was a wrapping row of dropdowns and ~20 category pills). */}
+          <div className="flex flex-col gap-3 px-5 pb-4 pt-5">
+            <div className="flex items-center gap-2">
+              <SearchField label="Search pages" placeholder="Search page, vendor or category..." className="min-w-0 flex-1" value={q} onChange={(e) => setQ(e.target.value)} />
+              <FilterMenu filters={filters} align="end" />
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2 px-5 pb-4 pt-3" role="group" aria-label="Category">
-            {categories.map((c) => (
-              <button
-                key={c.label}
-                type="button"
-                aria-pressed={category === c.label}
-                onClick={() => setCategory(c.label)}
-                className={cn("inline-flex h-8 items-center gap-1.5 rounded-pill border px-3 text-small transition-colors", category === c.label ? "border-brand bg-brand-soft font-semibold text-brand-ink" : "bg-card text-fg-strong hover:bg-muted")}
-              >
-                {c.label}
-                <span className={cn("text-caption", category === c.label ? "text-brand-ink" : "text-muted-foreground")}>{c.count}</span>
-              </button>
-            ))}
+            <div className="flex flex-wrap items-center gap-2">
+              <FilterChips filters={filters} />
+              <span className="text-small text-muted-foreground">
+                {visible.length === assets.length ? `${assets.length} pages` : `${visible.length} of ${assets.length} pages`}
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <Label htmlFor="pl-topn" className="whitespace-nowrap text-small font-normal text-muted-foreground">
+                  Add top
+                </Label>
+                <Input id="pl-topn" type="number" inputMode="numeric" min={1} max={500} className="w-20" value={topN} onChange={(e) => setTopN(e.target.value)} />
+                <Button variant="outline" onClick={addTop} disabled={!budgetNumber}>
+                  <Sparkles />
+                  by followers
+                </Button>
+              </div>
+            </div>
           </div>
           {message && (
             <div className="px-5 pb-3">
@@ -207,7 +240,7 @@ export function PagesStep({
               ))}
             </div>
           ) : visible.length === 0 ? (
-            <p className="px-5 py-10 text-center text-small text-muted-foreground">{assets.length === 0 ? "No approved pages yet. Add pages in Inventory first." : "No pages match. Try another search or category."}</p>
+            <p className="px-5 py-10 text-center text-small text-muted-foreground">{assets.length === 0 ? "No approved pages yet. Add pages in Inventory first." : "No pages match. Try another search or clear a filter."}</p>
           ) : (
             <ul className="max-h-[640px] divide-y overflow-y-auto thin-scroll">
               {visible.map((a) => {
@@ -222,11 +255,9 @@ export function PagesStep({
                       <span className="min-w-0">
                         <span className="flex items-center gap-1.5">
                           <span className="truncate text-body-strong">{displayHandle(a.handle, a.platform)}</span>
-                          {a.platform.toLowerCase() === "instagram" && (
-                            <a href={instagramUrl(a.handle)} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-brand-ink" aria-label={`Open ${displayHandle(a.handle)} on Instagram`}>
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </a>
-                          )}
+                          <a href={pageProfileUrl(a.handle, a.platform)} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-brand-ink" aria-label={`Open ${displayHandle(a.handle)} on ${PLATFORM_LABEL[a.platform.toLowerCase() as PagePlatform] ?? "Instagram"}`}>
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
                         </span>
                         <span className="flex items-center gap-2 text-small text-muted-foreground">
                           {a.category && <Badge variant="tag">{a.category}</Badge>}
@@ -441,7 +472,10 @@ function SheetImport({ planId, onImported }: { planId: string | null; onImported
     },
     onSuccess: async (r) => {
       setResult(`${r.matchedCount} matched, ${r.createdCount} new page${r.createdCount === 1 ? "" : "s"} created.`);
-      if (r.failures.length) setError(r.failures.map((f) => `${f.handle}: ${f.reason}`).join(" "));
+      const notes = r.failures.map((f) => `${f.handle}: ${f.reason}`);
+      // Vendors the sheet names who aren't in Taggify yet (23 Nov).
+      for (const v of r.unmatchedVendors ?? []) notes.push(`Vendor ${[v.name, v.phone].filter(Boolean).join(" · ")} isn't in Taggify yet, so ${v.handles.map((h) => `@${h}`).join(", ")} stayed under your account. Add the vendor in Inventory, then move the page.`);
+      if (notes.length) setError(notes.join(" "));
       onImported(r.plan);
       await qc.invalidateQueries({ queryKey: ["assets"] });
     },
@@ -458,7 +492,7 @@ function SheetImport({ planId, onImported }: { planId: string | null; onImported
         <p className="text-small text-muted-foreground">Save this step once (Next), then come back to attach a sheet.</p>
       ) : (
         <>
-          <p className="text-small text-muted-foreground">Columns by name: handle or page link, and optionally category, followers, format, cost, posts. New handles become pages.</p>
+          <p className="text-small text-muted-foreground">Columns by name: handle or page link, and optionally category, followers, format, cost, posts, vendor name and vendor number. New handles become pages, under their vendor when the vendor is already in Taggify.</p>
           <div className="flex gap-2">
             <Input aria-label="Google Sheet link" placeholder="Paste the Google Sheet link" value={url} onChange={(e) => setUrl(e.target.value)} />
             <Button variant="outline" disabled={!url.trim() || attach.isPending} onClick={() => attach.mutate({ url: url.trim() })}>

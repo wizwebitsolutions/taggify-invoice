@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -72,17 +72,42 @@ function PlanDetail() {
   });
   // "Client sheet" first asks which of the two layouts to use (16 Oct); the pick travels with the generate call.
   const [clientSheetOpen, setClientSheetOpen] = useState(false);
+  // 23 Nov ("not redirecting to generated sheet"): writing the sheet takes several seconds, and by
+  // then the browser no longer counts the click, so a window.open() afterwards was blocked. The tab is
+  // opened on the click itself (blank), then sent to the sheet; it closes again if generating fails.
+  const sheetTab = useRef<Window | null>(null);
   const sheet = useMutation({
     mutationFn: ({ kind, sheetFormat }: { kind: "client" | "internal"; sheetFormat?: SheetFormat }) => plansApi.generateSheet(accessToken!, id, kind, sheetFormat),
-    onSuccess: async (r) => {
-      // Open first: after the awaited refetch the browser no longer counts this as the click, and may block the tab.
-      window.open(r.spreadsheetUrl, "_blank", "noopener");
-      await invalidateAfterPlanChange(qc);
-      setClientSheetOpen(false);
-      if (r.shareError) toast.warning(r.shareError);
-      else if (r.sharedWith) toast.success(`Sheet ready. ${r.sharedWith} can edit it.`);
+    onMutate: () => {
+      const tab = window.open("about:blank", "_blank");
+      if (tab) {
+        tab.opener = null;
+        try {
+          tab.document.title = "Preparing your sheet…";
+          tab.document.body.textContent = "Preparing your Google Sheet…";
+        } catch {
+          // A blank tab is fine without the note.
+        }
+      }
+      sheetTab.current = tab;
     },
-    onError: (e) => toast.error(errText(e, "Couldn't create the sheet. Try again.")),
+    onSuccess: async (r) => {
+      const tab = sheetTab.current;
+      sheetTab.current = null;
+      if (tab && !tab.closed) tab.location.href = r.spreadsheetUrl;
+      else window.open(r.spreadsheetUrl, "_blank", "noopener");
+      setClientSheetOpen(false);
+      // Always offer the link too, in case the browser blocked the tab.
+      const open = { label: "Open sheet", onClick: () => window.open(r.spreadsheetUrl, "_blank", "noopener") };
+      if (r.shareError) toast.warning(r.shareError, { action: open });
+      else toast.success(r.sharedWith ? `Sheet ready. ${r.sharedWith} can edit it.` : "Sheet ready.", { action: open });
+      await invalidateAfterPlanChange(qc);
+    },
+    onError: (e) => {
+      sheetTab.current?.close();
+      sheetTab.current = null;
+      toast.error(errText(e, "Couldn't create the sheet. Try again."));
+    },
   });
 
   if (!canViewPlans(user)) return <NoAccess what="plans" />;
